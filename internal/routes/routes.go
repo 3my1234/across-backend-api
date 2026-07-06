@@ -17,6 +17,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
 
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
+
 	v1 := app.Group("/api/v1")
 	v1.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
 	v1.Get("/products", catalog.ListProducts)
