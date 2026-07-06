@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+api.err.log
+api.out.log
+*.log
+
+bin/
+tmp/
+dist/
+build/
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,213 @@
+package controllers
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"across/backend/internal/config"
+	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type PaymentController struct {
+	db         *pgxpool.Pool
+	cfg        config.Config
+	httpClient *http.Client
+}
+
+func NewPaymentController(db *pgxpool.Pool, cfg config.Config) *PaymentController {
+	return &PaymentController{
+		db:  db,
+		cfg: cfg,
+		httpClient: &http.Client{
+			Timeout: 12 * time.Second,
+		},
+	}
+}
+
+type tokenizedChargeRequest struct {
+	OrderID  string `json:"order_id"`
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	var req tokenizedChargeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+
+	var email, token string
+	err := p.db.QueryRow(c.Context(), `
+		SELECT email, flutterwave_token
+		FROM users
+		WHERE id = $1 AND is_active = true
+	`, userID).Scan(&email, &token)
+	if err != nil || token == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "saved payment token unavailable")
+	}
+
+	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
+	if p.mockPaymentsEnabled() {
+		if err := p.initializeEscrow(c.Context(), req.OrderID, txRef, "local-dev"); err != nil {
+			return fiber.NewError(fiber.StatusConflict, err.Error())
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"tx_ref":  txRef,
+			"gateway": "flutterwave",
+			"mocked":  true,
+		})
+	}
+	payload := map[string]any{
+		"token":    token,
+		"currency": req.Currency,
+		"amount":   req.Amount,
+		"email":    email,
+		"tx_ref":   txRef,
+	}
+	body, _ := json.Marshal(payload)
+	httpReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, "https://api.flutterwave.com/v3/tokenized-charges", bytes.NewReader(body))
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "charge request failed")
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.FlutterwaveSecretKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "payment gateway unavailable")
+	}
+	defer resp.Body.Close()
+
+	var gatewayResp map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&gatewayResp); err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
+	}
+	if resp.StatusCode >= 300 {
+		return c.Status(fiber.StatusBadGateway).JSON(gatewayResp)
+	}
+
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"tx_ref":   txRef,
+		"gateway":  "flutterwave",
+		"response": gatewayResp,
+	})
+}
+
+func (p *PaymentController) mockPaymentsEnabled() bool {
+	return p.cfg.AppEnv != "production" && (p.cfg.FlutterwaveSecretKey == "" || p.cfg.FlutterwaveSecretKey == "FLWSECK_TEST_xxx")
+}
+
+type flutterwaveWebhook struct {
+	Event string `json:"event"`
+	Data  struct {
+		ID       any    `json:"id"`
+		TxRef    string `json:"tx_ref"`
+		Status   string `json:"status"`
+		Amount   any    `json:"amount"`
+		Currency string `json:"currency"`
+	} `json:"data"`
+}
+
+func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
+	raw := c.BodyRaw()
+	if !p.validWebhook(raw, c.Get("verif-hash")) {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid webhook signature")
+	}
+
+	var event flutterwaveWebhook
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid webhook")
+	}
+	if event.Event != "charge.completed" || event.Data.Status != "successful" {
+		return c.SendStatus(fiber.StatusAccepted)
+	}
+
+	orderID, err := parseOrderID(event.Data.TxRef)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid tx_ref")
+	}
+
+	if err := p.initializeEscrow(c.Context(), orderID, event.Data.TxRef, stringify(event.Data.ID)); err != nil {
+		return fiber.NewError(fiber.StatusConflict, err.Error())
+	}
+	return c.SendStatus(fiber.StatusOK)
+}
+
+func (p *PaymentController) validWebhook(raw []byte, signature string) bool {
+	if p.cfg.FlutterwaveWebhookSecret == "" {
+		return false
+	}
+	if signature == p.cfg.FlutterwaveWebhookSecret {
+		return true
+	}
+	mac := hmac.New(sha256.New, []byte(p.cfg.FlutterwaveWebhookSecret))
+	_, _ = mac.Write(raw)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(signature))
+}
+
+func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef, gatewayID string) error {
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE orders
+		SET order_status = 'Paid', updated_at = now()
+		WHERE id = $1 AND order_status = 'Pending'
+	`, orderID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("order is not payable")
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO escrow_ledger (
+			order_id, amount, currency_code, escrow_status, escrow_lock_expiry,
+			dispute_status, flutterwave_tx_ref, flutterwave_transaction_id
+		)
+		SELECT id, total_amount, currency_code, 'held_in_escrow',
+			COALESCE(delivery_promised_at, now() + interval '14 days') + interval '3 days',
+			'none', $2, $3
+		FROM orders
+		WHERE id = $1
+		ON CONFLICT (order_id) DO NOTHING
+	`, orderID, txRef, gatewayID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func parseOrderID(txRef string) (string, error) {
+	const prefix = "ACROSS-"
+	if len(txRef) <= len(prefix) || txRef[:len(prefix)] != prefix {
+		return "", errors.New("missing prefix")
+	}
+	rest := txRef[len(prefix):]
+	for i := range rest {
+		if rest[i] == '-' {
+			return rest[:i], nil
+		}
+	}
+	return "", errors.New("missing timestamp")
+}
+
+func stringify(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}

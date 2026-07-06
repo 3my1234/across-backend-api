@@ -1,0 +1,169 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
+
+CREATE TYPE order_status AS ENUM (
+  'Pending',
+  'Paid',
+  'Shipped',
+  'Delivered',
+  'Completed',
+  'Disputed',
+  'Cancelled'
+);
+
+CREATE TYPE escrow_status AS ENUM ('held_in_escrow', 'released', 'frozen');
+CREATE TYPE dispute_status AS ENUM ('none', 'active', 'resolved');
+CREATE TYPE tracking_stage AS ENUM (
+  'Order Placed',
+  'Arrived at China Hub',
+  'In Transit Internationally',
+  'Arrived at Local Hub',
+  'Out for Delivery',
+  'Delivered'
+);
+
+CREATE TABLE countries_config (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  country_code CHAR(2) NOT NULL UNIQUE,
+  currency_code CHAR(3) NOT NULL,
+  base_escrow_days INTEGER NOT NULL DEFAULT 14 CHECK (base_escrow_days > 0),
+  active_payment_gateways TEXT[] NOT NULL DEFAULT ARRAY['flutterwave'],
+  vat_rate_bps INTEGER NOT NULL DEFAULT 0 CHECK (vat_rate_bps >= 0),
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  country_id UUID NOT NULL REFERENCES countries_config(id),
+  email CITEXT UNIQUE,
+  phone TEXT UNIQUE,
+  password_hash TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  default_shipping_address JSONB NOT NULL DEFAULT '{}'::jsonb,
+  default_billing_address JSONB NOT NULL DEFAULT '{}'::jsonb,
+  flutterwave_token TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (email IS NOT NULL OR phone IS NOT NULL)
+);
+
+CREATE TABLE logistics_hubs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  country_id UUID REFERENCES countries_config(id),
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  hub_type TEXT NOT NULL CHECK (hub_type IN ('supplier_warehouse', 'sorting', 'clearance', 'last_mile')),
+  city TEXT NOT NULL,
+  address TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  supplier_id UUID,
+  origin_hub_id UUID REFERENCES logistics_hubs(id),
+  sku TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category_path TEXT[] NOT NULL DEFAULT '{}',
+  variants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  image_urls TEXT[] NOT NULL DEFAULT '{}',
+  cost_price_rmb NUMERIC(14,2) NOT NULL CHECK (cost_price_rmb >= 0),
+  local_currency_code CHAR(3) NOT NULL DEFAULT 'NGN',
+  local_selling_price NUMERIC(14,2) NOT NULL CHECK (local_selling_price >= 0),
+  exchange_rate_snapshot NUMERIC(18,6) NOT NULL CHECK (exchange_rate_snapshot > 0),
+  inventory_count INTEGER NOT NULL DEFAULT 0 CHECK (inventory_count >= 0),
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  country_id UUID NOT NULL REFERENCES countries_config(id),
+  currency_code CHAR(3) NOT NULL,
+  total_amount NUMERIC(14,2) NOT NULL CHECK (total_amount >= 0),
+  shipping_fee NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (shipping_fee >= 0),
+  order_status order_status NOT NULL DEFAULT 'Pending',
+  current_tracking_stage tracking_stage NOT NULL DEFAULT 'Order Placed',
+  ready_for_manual_settlement BOOLEAN NOT NULL DEFAULT false,
+  delivery_promised_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id),
+  origin_hub_id UUID REFERENCES logistics_hubs(id),
+  sku TEXT NOT NULL,
+  title TEXT NOT NULL,
+  variant JSONB NOT NULL DEFAULT '{}'::jsonb,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit_price NUMERIC(14,2) NOT NULL CHECK (unit_price >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE escrow_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+  amount NUMERIC(14,2) NOT NULL CHECK (amount >= 0),
+  currency_code CHAR(3) NOT NULL,
+  escrow_status escrow_status NOT NULL DEFAULT 'held_in_escrow',
+  escrow_lock_expiry TIMESTAMPTZ NOT NULL,
+  dispute_status dispute_status NOT NULL DEFAULT 'none',
+  flutterwave_tx_ref TEXT NOT NULL UNIQUE,
+  flutterwave_transaction_id TEXT,
+  released_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE reviews (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+  rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  review_text TEXT NOT NULL DEFAULT '',
+  media_urls TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(product_id, user_id, order_id)
+);
+
+CREATE TABLE tracking_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  hub_id UUID REFERENCES logistics_hubs(id),
+  stage tracking_stage NOT NULL,
+  barcode TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE admin_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id UUID,
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id UUID,
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'high', 'critical')),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_products_category_path ON products USING gin(category_path);
+CREATE INDEX idx_products_active_price ON products(is_active, local_selling_price);
+CREATE INDEX idx_orders_user_created ON orders(user_id, created_at DESC);
+CREATE INDEX idx_orders_status ON orders(order_status);
+CREATE INDEX idx_escrow_worker_due ON escrow_ledger(escrow_lock_expiry)
+  WHERE dispute_status = 'none' AND escrow_status = 'held_in_escrow';
+CREATE INDEX idx_tracking_order_time ON tracking_events(order_id, occurred_at);
