@@ -12,6 +12,7 @@ type Config struct {
 	AppEnv                   string
 	HTTPAddr                 string
 	DatabaseURL              string
+	RedisURL                 string
 	RedisAddr                string
 	RedisPassword            string
 	RedisDB                  int
@@ -31,6 +32,7 @@ func Load() Config {
 		AppEnv:                   env("APP_ENV", "development"),
 		HTTPAddr:                 env("HTTP_ADDR", ":8080"),
 		DatabaseURL:              databaseURL(),
+		RedisURL:                 env("REDIS_URL", ""),
 		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:            env("REDIS_PASSWORD", ""),
 		RedisDB:                  envInt("REDIS_DB", 0),

@@ -34,15 +34,12 @@ func New(ctx context.Context, cfg config.Config) (*Store, error) {
 		return nil, err
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		MinIdleConns: 16,
-		PoolSize:     256,
-		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
-	})
+	redisOptions, err := redisOptions(cfg)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	rdb := redis.NewClient(redisOptions)
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		_ = rdb.Close()
 		if !cfg.RedisOptional {
@@ -53,6 +50,32 @@ func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	}
 
 	return &Store{PG: pool, Redis: rdb}, nil
+}
+
+func redisOptions(cfg config.Config) (*redis.Options, error) {
+	var (
+		options *redis.Options
+		err     error
+	)
+
+	if cfg.RedisURL != "" {
+		options, err = redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		options = &redis.Options{
+			Addr:     cfg.RedisAddr,
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
+		}
+	}
+
+	options.MinIdleConns = 16
+	options.PoolSize = 256
+	options.ReadTimeout = 2 * time.Second
+	options.WriteTimeout = 2 * time.Second
+	return options, nil
 }
 
 func (s *Store) Close() {

@@ -32,6 +32,7 @@ Set these in Coolify, not in GitHub:
 APP_ENV=production
 HTTP_ADDR=:8080
 DATABASE_URL=postgres://USER:PASSWORD:HOST:5432/across_db?sslmode=disable
+REDIS_URL=redis://default:PASSWORD@HOST:6379/0
 REDIS_ADDR=HOST:6379
 REDIS_PASSWORD=
 REDIS_DB=0
