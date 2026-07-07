@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -168,11 +170,14 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	}
 	req.SKU = strings.TrimSpace(req.SKU)
 	req.Title = strings.TrimSpace(req.Title)
-	if req.SKU == "" || req.Title == "" || req.LocalSellingPrice <= 0 || req.ExchangeRateSnapshot <= 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "sku, title, price, and exchange rate are required")
+	if req.Title == "" || req.LocalSellingPrice <= 0 || req.ExchangeRateSnapshot <= 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "title, price, and exchange rate are required")
 	}
 	if req.CategoryPath == nil {
 		req.CategoryPath = []string{}
+	}
+	if req.SKU == "" {
+		req.SKU = generateProductSKU(req.CategoryPath, req.Title)
 	}
 	if req.ImageURLs == nil {
 		req.ImageURLs = []string{}
@@ -205,7 +210,42 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusConflict, "product could not be created")
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "sku": req.SKU})
+}
+
+var skuCleaner = regexp.MustCompile(`[^A-Z0-9]+`)
+
+func generateProductSKU(categories []string, title string) string {
+	category := "PRD"
+	if len(categories) > 0 && strings.TrimSpace(categories[0]) != "" {
+		category = categories[0]
+	}
+	prefix := abbreviateSKU(category, 3)
+	body := abbreviateSKU(title, 8)
+	suffix := time.Now().UTC().Format("060102150405")
+	return fmt.Sprintf("%s-%s-%s", prefix, body, suffix)
+}
+
+func abbreviateSKU(value string, max int) string {
+	clean := strings.Trim(skuCleaner.ReplaceAllString(strings.ToUpper(value), "-"), "-")
+	if clean == "" {
+		return "ITEM"
+	}
+	parts := strings.Split(clean, "-")
+	out := ""
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		out += part[:1]
+		if len(out) >= max {
+			return out[:max]
+		}
+	}
+	if len(clean) <= max {
+		return clean
+	}
+	return clean[:max]
 }
 
 func (a *AdminController) PendingManifest(c *fiber.Ctx) error {
