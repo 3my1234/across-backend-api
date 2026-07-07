@@ -29,15 +29,6 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Post("/auth/privy/verify", authController.VerifyPrivy)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
-	authed := v1.Group("", middleware.RequireAuth(cfg))
-	authed.Get("/auth/session", authController.Session)
-	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
-	authed.Post("/checkout/quote", orders.QuoteCheckout)
-	authed.Get("/orders/:order_id/tracking", orders.Tracking)
-	authed.Post("/payments/tokenized-charge", payments.TokenizedCharge)
-	authed.Post("/orders/:order_id/escrow/confirm-receipt", escrow.ConfirmReceipt)
-	authed.Post("/orders/:order_id/disputes", escrow.OpenDispute)
-
 	v1.Post("/admin/login", admin.Login)
 
 	adminGroup := v1.Group("/admin", middleware.RequireAdmin(cfg))
@@ -49,4 +40,13 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
 	adminGroup.Post("/escrow/settle", admin.SettleEscrow)
 	adminGroup.Post("/orders/:order_id/dispute-freeze", admin.FreezeDispute)
+
+	authed := v1.Group("", middleware.RequireAuth(cfg))
+	authed.Get("/auth/session", authController.Session)
+	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
+	authed.Post("/checkout/quote", orders.QuoteCheckout)
+	authed.Get("/orders/:order_id/tracking", orders.Tracking)
+	authed.Post("/payments/tokenized-charge", payments.TokenizedCharge)
+	authed.Post("/orders/:order_id/escrow/confirm-receipt", escrow.ConfirmReceipt)
+	authed.Post("/orders/:order_id/disputes", escrow.OpenDispute)
 }
