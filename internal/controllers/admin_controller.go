@@ -213,6 +213,116 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "sku": req.SKU})
 }
 
+func (a *AdminController) ListProducts(c *fiber.Ctx) error {
+	rows, err := a.db.Query(c.Context(), `
+		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
+			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0),
+			p.inventory_count, p.is_active, p.created_at, p.updated_at
+		FROM products p
+		ORDER BY p.created_at DESC
+		LIMIT 500
+	`)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "products unavailable")
+	}
+	defer rows.Close()
+
+	products := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, sku, title, description, currency string
+		var categories, images []string
+		var price, compareAtPrice float64
+		var inventory int
+		var isActive bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &isActive, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		products = append(products, fiber.Map{
+			"id":                    id,
+			"sku":                   sku,
+			"title":                 title,
+			"description":           description,
+			"category_path":         categories,
+			"image_urls":            images,
+			"currency":              currency,
+			"local_selling_price":   price,
+			"compare_at_price":      compareAtPrice,
+			"inventory_count":       inventory,
+			"is_active":             isActive,
+			"created_at":            createdAt,
+			"updated_at":            updatedAt,
+		})
+	}
+	return c.JSON(fiber.Map{"products": products})
+}
+
+func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
+	productID := c.Params("product_id")
+	var req struct {
+		Title             *string  `json:"title"`
+		Description       *string  `json:"description"`
+		LocalSellingPrice *float64 `json:"local_selling_price"`
+		CompareAtPrice    *float64 `json:"compare_at_price"`
+		InventoryCount    *int     `json:"inventory_count"`
+		IsActive          *bool    `json:"is_active"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	if req.Title == nil && req.Description == nil && req.LocalSellingPrice == nil && req.CompareAtPrice == nil && req.InventoryCount == nil && req.IsActive == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "no fields to update")
+	}
+	if req.LocalSellingPrice != nil && *req.LocalSellingPrice <= 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "price must be greater than zero")
+	}
+	if req.InventoryCount != nil && *req.InventoryCount < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "inventory cannot be negative")
+	}
+	if req.Title != nil {
+		trimmed := strings.TrimSpace(*req.Title)
+		if trimmed == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "title cannot be empty")
+		}
+		req.Title = &trimmed
+	}
+
+	tag, err := a.db.Exec(c.Context(), `
+		UPDATE products
+		SET title = COALESCE($2, title),
+			description = COALESCE($3, description),
+			local_selling_price = COALESCE($4, local_selling_price),
+			compare_at_price = CASE WHEN $5::numeric IS NULL THEN compare_at_price ELSE NULLIF($5, 0) END,
+			inventory_count = COALESCE($6, inventory_count),
+			is_active = COALESCE($7, is_active),
+			updated_at = now()
+		WHERE id = $1
+	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+	return c.JSON(fiber.Map{"id": productID, "updated": true})
+}
+
+func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
+	productID := c.Params("product_id")
+	tag, err := a.db.Exec(c.Context(), `
+		UPDATE products
+		SET is_active = false, updated_at = now()
+		WHERE id = $1 AND is_active = true
+	`, productID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+	return c.JSON(fiber.Map{"id": productID, "deleted": true})
+}
+
 var skuCleaner = regexp.MustCompile(`[^A-Z0-9]+`)
 
 func generateProductSKU(categories []string, title string) string {
