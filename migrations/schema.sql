@@ -76,8 +76,10 @@ CREATE TABLE products (
   cost_price_rmb NUMERIC(14,2) NOT NULL CHECK (cost_price_rmb >= 0),
   local_currency_code CHAR(3) NOT NULL DEFAULT 'NGN',
   local_selling_price NUMERIC(14,2) NOT NULL CHECK (local_selling_price >= 0),
+  compare_at_price NUMERIC(14,2),
   exchange_rate_snapshot NUMERIC(18,6) NOT NULL CHECK (exchange_rate_snapshot > 0),
   inventory_count INTEGER NOT NULL DEFAULT 0 CHECK (inventory_count >= 0),
+  factory_details JSONB NOT NULL DEFAULT '{}'::jsonb,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -90,6 +92,8 @@ CREATE TABLE orders (
   currency_code CHAR(3) NOT NULL,
   total_amount NUMERIC(14,2) NOT NULL CHECK (total_amount >= 0),
   shipping_fee NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (shipping_fee >= 0),
+  customs_fee NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (customs_fee >= 0),
+  vat_fee NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (vat_fee >= 0),
   order_status order_status NOT NULL DEFAULT 'Pending',
   current_tracking_stage tracking_stage NOT NULL DEFAULT 'Order Placed',
   ready_for_manual_settlement BOOLEAN NOT NULL DEFAULT false,
@@ -160,10 +164,23 @@ CREATE TABLE admin_audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE admins (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email CITEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin')),
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX idx_products_category_path ON products USING gin(category_path);
 CREATE INDEX idx_products_active_price ON products(is_active, local_selling_price);
 CREATE INDEX idx_orders_user_created ON orders(user_id, created_at DESC);
 CREATE INDEX idx_orders_status ON orders(order_status);
+CREATE INDEX idx_orders_created_desc ON orders(created_at DESC);
+CREATE INDEX idx_admins_role_active ON admins(role, is_active);
 CREATE INDEX idx_escrow_worker_due ON escrow_ledger(escrow_lock_expiry)
   WHERE dispute_status = 'none' AND escrow_status = 'held_in_escrow';
 CREATE INDEX idx_tracking_order_time ON tracking_events(order_id, occurred_at);

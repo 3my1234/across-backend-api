@@ -11,7 +11,7 @@ import (
 func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
 	escrow := controllers.NewEscrowController(db)
-	admin := controllers.NewAdminController(db)
+	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db)
 	catalog := controllers.NewCatalogController(db)
 	dev := controllers.NewDevController(db, cfg)
@@ -38,7 +38,13 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/orders/:order_id/escrow/confirm-receipt", escrow.ConfirmReceipt)
 	authed.Post("/orders/:order_id/disputes", escrow.OpenDispute)
 
-	adminGroup := v1.Group("/admin", middleware.RequireAdmin)
+	v1.Post("/admin/login", admin.Login)
+
+	adminGroup := v1.Group("/admin", middleware.RequireAdmin(cfg))
+	adminGroup.Post("/admins", admin.CreateAdmin)
+	adminGroup.Get("/orders", admin.ListOrders)
+	adminGroup.Get("/transactions", admin.ListTransactions)
+	adminGroup.Post("/products", admin.CreateProduct)
 	adminGroup.Get("/manifest/pending", admin.PendingManifest)
 	adminGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
 	adminGroup.Post("/escrow/settle", admin.SettleEscrow)

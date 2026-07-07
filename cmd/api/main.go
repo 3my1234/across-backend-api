@@ -25,8 +25,8 @@ func main() {
 		ServerHeader: "Across",
 	})
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "http://localhost:5173,http://127.0.0.1:5173",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowOrigins: cfg.AllowedOrigins,
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Admin-Token",
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	routes.Register(app, store.PG, cfg)

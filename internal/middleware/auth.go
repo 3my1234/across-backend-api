@@ -24,9 +24,23 @@ func RequireAuth(cfg config.Config) fiber.Handler {
 	}
 }
 
-func RequireAdmin(c *fiber.Ctx) error {
-	if c.Get("X-Admin-Token") == "" {
+func RequireAdmin(cfg config.Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		header := c.Get("Authorization")
+		if strings.HasPrefix(header, "Bearer ") {
+			token := strings.TrimPrefix(header, "Bearer ")
+			claims, err := auth.Verify(token, cfg.JWTSecret)
+			if err == nil {
+				c.Locals("admin_id", claims.UserID)
+				return c.Next()
+			}
+		}
+
+		adminToken := strings.TrimSpace(c.Get("X-Admin-Token"))
+		if adminToken != "" && cfg.AdminBootstrapToken != "" && adminToken == cfg.AdminBootstrapToken {
+			c.Locals("admin_id", "bootstrap")
+			return c.Next()
+		}
 		return fiber.NewError(fiber.StatusUnauthorized, "missing admin token")
 	}
-	return c.Next()
 }

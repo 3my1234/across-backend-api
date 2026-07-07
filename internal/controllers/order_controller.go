@@ -88,16 +88,18 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		itemsTotal += unitPrice * float64(item.Quantity)
 	}
 
+	customsFee := roundMoney(itemsTotal * 0.20)
 	shippingFee := estimateShipping(req.Items)
-	grandTotal := itemsTotal + shippingFee
+	vatFee := 100.0
+	grandTotal := roundMoney(itemsTotal + customsFee + shippingFee + vatFee)
 	deliveryPromise := time.Now().UTC().Add(21 * 24 * time.Hour)
 
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, delivery_promised_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, delivery_promised_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, shippingFee, deliveryPromise).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, shippingFee, customsFee, vatFee, deliveryPromise).Scan(&orderID); err != nil {
 		return err
 	}
 
@@ -130,7 +132,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"order_id":     orderID,
 		"items_total":  itemsTotal,
+		"customs_fee":  customsFee,
 		"shipping_fee": shippingFee,
+		"vat_fee":      vatFee,
 		"grand_total":  grandTotal,
 		"currency":     currency,
 	})
@@ -185,4 +189,8 @@ func estimateShipping(items []struct {
 		warehouses[item.OriginHubID] = struct{}{}
 	}
 	return 2500 + float64(totalItems*900) + float64(len(warehouses))*1200
+}
+
+func roundMoney(value float64) float64 {
+	return float64(int(value*100+0.5)) / 100
 }

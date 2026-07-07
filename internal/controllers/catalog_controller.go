@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"encoding/json"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,7 +18,8 @@ func NewCatalogController(db *pgxpool.Pool) *CatalogController {
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
-			p.local_currency_code, p.local_selling_price, p.inventory_count,
+			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0), p.inventory_count,
+			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, '')
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
@@ -33,21 +36,26 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
-		var price float64
+		var price, compareAtPrice float64
 		var inventory int
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &inventory, &hubID, &hubName, &hubCity); err != nil {
+		var factoryRaw []byte
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity); err != nil {
 			return err
 		}
+		factory := map[string]any{}
+		_ = json.Unmarshal(factoryRaw, &factory)
 		products = append(products, fiber.Map{
-			"id":              id,
-			"sku":             sku,
-			"title":           title,
-			"description":     description,
-			"category_path":   categories,
-			"image_urls":      images,
-			"currency":        currency,
-			"price":           price,
-			"inventory_count": inventory,
+			"id":               id,
+			"sku":              sku,
+			"title":            title,
+			"description":      description,
+			"category_path":    categories,
+			"image_urls":       images,
+			"currency":         currency,
+			"price":            price,
+			"compare_at_price": compareAtPrice,
+			"inventory_count":  inventory,
+			"factory_details":  factory,
 			"origin_hub": fiber.Map{
 				"id":   hubID,
 				"name": hubName,

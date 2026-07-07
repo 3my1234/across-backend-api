@@ -11,6 +11,7 @@ import (
 type Config struct {
 	AppEnv                   string
 	HTTPAddr                 string
+	AllowedOrigins           string
 	DatabaseURL              string
 	RedisURL                 string
 	RedisAddr                string
@@ -23,6 +24,7 @@ type Config struct {
 	PrivyAppID               string
 	PrivyVerificationMode    string
 	DefaultCountry           string
+	AdminBootstrapToken      string
 }
 
 func Load() Config {
@@ -31,6 +33,7 @@ func Load() Config {
 	return Config{
 		AppEnv:                   env("APP_ENV", "development"),
 		HTTPAddr:                 env("HTTP_ADDR", ":8080"),
+		AllowedOrigins:           env("ALLOWED_ORIGINS", "*"),
 		DatabaseURL:              databaseURL(),
 		RedisURL:                 env("REDIS_URL", ""),
 		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
@@ -43,6 +46,7 @@ func Load() Config {
 		PrivyAppID:               env("PRIVY_APP_ID", ""),
 		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "local"),
 		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
+		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),
 	}
 }
 
