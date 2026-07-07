@@ -90,20 +90,6 @@ func (s *S3) PresignPut(key, contentType string, expires time.Duration) (string,
 	return u.String(), nil
 }
 
-func (s *S3) ObjectURL(key string) string {
-	normalized := strings.TrimLeft(key, "/")
-	if s.cdnBase != "" {
-		return s.cdnBase + "/" + encodeKeyPath(normalized)
-	}
-	if s.publicURL != "" {
-		return s.publicURL + "/api/v1/public/images/view/" + encodeKeyPath(normalized)
-	}
-	if s.bucket != "" && s.region != "" {
-		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", s.bucket, s.region, encodeKeyPath(normalized))
-	}
-	return normalized
-}
-
 func (s *S3) ObjectGetURL(key string, expires time.Duration) (string, error) {
 	if !s.Configured() {
 		return "", errors.New("s3 is not configured")
@@ -129,6 +115,118 @@ func (s *S3) ObjectGetURL(key string, expires time.Duration) (string, error) {
 	q.Set("X-Amz-Signature", hex.EncodeToString(hmacSHA256(signingKey(s.secretKey, dateStamp, s.region, "s3"), stringToSign)))
 	u.RawQuery = canonicalQuery(q)
 	return u.String(), nil
+}
+
+func (s *S3) ObjectURL(key string) string {
+	normalized := strings.TrimLeft(key, "/")
+	if s.cdnBase != "" {
+		return s.cdnBase + "/" + encodeKeyPath(normalized)
+	}
+	if s.publicURL != "" {
+		return s.publicURL + "/api/v1/public/images/view/" + encodeKeyPath(normalized)
+	}
+	if s.bucket != "" && s.region != "" {
+		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", s.bucket, s.region, encodeKeyPath(normalized))
+	}
+	return normalized
+}
+
+func (s *S3) DeleteObject(key string) error {
+	if !s.Configured() {
+		return errors.New("s3 is not configured")
+	}
+	key = strings.TrimLeft(strings.TrimSpace(key), "/")
+	if key == "" {
+		return nil
+	}
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	dateStamp := now.Format("20060102")
+	credentialScope := fmt.Sprintf("%s/%s/s3/aws4_request", dateStamp, s.region)
+	credential := fmt.Sprintf("%s/%s", s.accessKey, credentialScope)
+	u := &url.URL{
+		Scheme: "https",
+		Host:   fmt.Sprintf("%s.s3.%s.amazonaws.com", s.bucket, s.region),
+		Path:   "/" + encodeKeyPath(key),
+	}
+	q := u.Query()
+	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	q.Set("X-Amz-Credential", credential)
+	q.Set("X-Amz-Date", amzDate)
+	q.Set("X-Amz-Expires", "60")
+	q.Set("X-Amz-SignedHeaders", "host")
+	u.RawQuery = canonicalQuery(q)
+	canonicalRequest := strings.Join([]string{
+		http.MethodDelete,
+		u.EscapedPath(),
+		u.RawQuery,
+		"host:" + u.Host + "\n",
+		"host",
+		"UNSIGNED-PAYLOAD",
+	}, "\n")
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		credentialScope,
+		hexSHA256(canonicalRequest),
+	}, "\n")
+	q.Set("X-Amz-Signature", hex.EncodeToString(hmacSHA256(signingKey(s.secretKey, dateStamp, s.region, "s3"), stringToSign)))
+	u.RawQuery = canonicalQuery(q)
+	req, err := http.NewRequest(http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("s3 delete failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func (s *S3) KeyFromURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	if s.cdnBase != "" && strings.HasPrefix(rawURL, s.cdnBase+"/") {
+		return strings.TrimPrefix(rawURL, s.cdnBase+"/")
+	}
+	if s.publicURL != "" {
+		prefix := s.publicURL + "/api/v1/public/images/view/"
+		if strings.HasPrefix(rawURL, prefix) {
+			return strings.TrimPrefix(rawURL, prefix)
+		}
+	}
+	if s.bucket != "" && s.region != "" {
+		direct := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/", s.bucket, s.region)
+		if strings.HasPrefix(rawURL, direct) {
+			return strings.TrimPrefix(rawURL, direct)
+		}
+	}
+	return ""
+}
+
+func (s *S3) DeleteObjectsForURLs(urls []string) []string {
+	failures := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, raw := range urls {
+		key := s.KeyFromURL(raw)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := s.DeleteObject(key); err != nil {
+			failures = append(failures, key)
+		}
+	}
+	return failures
 }
 
 func SafeKey(prefix, filename string) string {

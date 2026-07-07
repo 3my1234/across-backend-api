@@ -9,6 +9,7 @@ import (
 
 	"across/backend/internal/auth"
 	"across/backend/internal/config"
+	"across/backend/internal/storage"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -17,10 +18,11 @@ import (
 type AdminController struct {
 	db  *pgxpool.Pool
 	cfg config.Config
+	s3  *storage.S3
 }
 
 func NewAdminController(db *pgxpool.Pool, cfg config.Config) *AdminController {
-	return &AdminController{db: db, cfg: cfg}
+	return &AdminController{db: db, cfg: cfg, s3: storage.NewS3(cfg)}
 }
 
 func (a *AdminController) Login(c *fiber.Ctx) error {
@@ -309,18 +311,52 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 
 func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 	productID := c.Params("product_id")
-	tag, err := a.db.Exec(c.Context(), `
-		UPDATE products
-		SET is_active = false, updated_at = now()
-		WHERE id = $1 AND is_active = true
-	`, productID)
+	var imageURLs []string
+	var orderItemCount int
+	err := a.db.QueryRow(c.Context(), `
+		SELECT COALESCE(p.image_urls, '{}'), (
+			SELECT COUNT(*)::int FROM order_items oi WHERE oi.product_id = p.id
+		)
+		FROM products p
+		WHERE p.id = $1
+	`, productID).Scan(&imageURLs, &orderItemCount)
 	if err != nil {
-		return err
+		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+	if orderItemCount > 0 {
+		return fiber.NewError(fiber.StatusConflict, "product has order history and cannot be permanently deleted")
+	}
+
+	mediaURLs := append([]string{}, imageURLs...)
+	rows, err := a.db.Query(c.Context(), `SELECT media_urls FROM reviews WHERE product_id = $1`, productID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var reviewMedia []string
+			if err := rows.Scan(&reviewMedia); err == nil {
+				mediaURLs = append(mediaURLs, reviewMedia...)
+			}
+		}
+	}
+
+	tag, err := a.db.Exec(c.Context(), `DELETE FROM products WHERE id = $1`, productID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusConflict, "product could not be deleted")
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
-	return c.JSON(fiber.Map{"id": productID, "deleted": true})
+
+	s3Failures := []string{}
+	if a.s3.Configured() {
+		s3Failures = a.s3.DeleteObjectsForURLs(mediaURLs)
+	}
+
+	return c.JSON(fiber.Map{
+		"id":          productID,
+		"deleted":     true,
+		"s3_failures": s3Failures,
+	})
 }
 
 var skuCleaner = regexp.MustCompile(`[^A-Z0-9]+`)

@@ -65,6 +65,46 @@ func (u *UploadController) AdminPresign(c *fiber.Ctx) error {
 	})
 }
 
+func (u *UploadController) UserPresign(c *fiber.Ctx) error {
+	var req struct {
+		Filename string `json:"filename"`
+		MimeType string `json:"mimeType"`
+		Kind     string `json:"kind"`
+		Scope    string `json:"scope"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	req.Filename = strings.TrimSpace(req.Filename)
+	mime := strings.ToLower(strings.TrimSpace(req.MimeType))
+	if req.Filename == "" || mime == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "filename and mimeType are required")
+	}
+	if !strings.HasPrefix(mime, "image/") {
+		return fiber.NewError(fiber.StatusBadRequest, "mimeType must be image/*")
+	}
+	if !u.s3.Configured() {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "s3 upload is not configured")
+	}
+	scope := strings.ToLower(strings.TrimSpace(req.Scope))
+	if scope == "" {
+		scope = "reviews"
+	}
+	key := storage.SafeKey("user-uploads/buyer/"+scope+"/image", req.Filename)
+	uploadURL, err := u.s3.PresignPut(key, mime, 15*time.Minute)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to generate upload URL")
+	}
+	viewURL := u.s3.ObjectURL(key)
+	return c.JSON(fiber.Map{
+		"success":   true,
+		"uploadUrl": uploadURL,
+		"key":       key,
+		"viewUrl":   viewURL,
+		"publicUrl": viewURL,
+	})
+}
+
 func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	rawKey := c.Params("*")
 	key, err := normalizeS3ViewKey(rawKey)
