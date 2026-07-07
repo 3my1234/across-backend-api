@@ -25,6 +25,12 @@ type Config struct {
 	PrivyVerificationMode    string
 	DefaultCountry           string
 	AdminBootstrapToken      string
+	AWSRegion                string
+	AWSAccessKeyID           string
+	AWSSecretAccessKey       string
+	S3BucketName             string
+	AssetsCDNBase            string
+	PublicBaseURL            string
 }
 
 func Load() Config {
@@ -47,6 +53,12 @@ func Load() Config {
 		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "local"),
 		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
 		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),
+		AWSRegion:                env("AWS_REGION", "eu-north-1"),
+		AWSAccessKeyID:           env("AWS_ACCESS_KEY_ID", ""),
+		AWSSecretAccessKey:       env("AWS_SECRET_ACCESS_KEY", ""),
+		S3BucketName:             firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
+		AssetsCDNBase:            env("ASSETS_CDN_BASE", ""),
+		PublicBaseURL:            env("PUBLIC_BASE_URL", ""),
 	}
 }
 
@@ -103,6 +115,15 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func envInt(key string, fallback int) int {

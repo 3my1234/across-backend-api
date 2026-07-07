@@ -14,6 +14,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db)
 	catalog := controllers.NewCatalogController(db)
+	uploads := controllers.NewUploadController(cfg)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
 
@@ -22,6 +23,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1 := app.Group("/api/v1")
 	v1.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
 	v1.Get("/products", catalog.ListProducts)
+	v1.Get("/public/images/view/*", uploads.PublicImageView)
 	v1.Post("/dev/login", dev.Login)
 	v1.Post("/auth/signup", authController.Signup)
 	v1.Post("/auth/login", authController.Login)
@@ -36,6 +38,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminGroup.Get("/orders", admin.ListOrders)
 	adminGroup.Get("/transactions", admin.ListTransactions)
 	adminGroup.Post("/products", admin.CreateProduct)
+	adminGroup.Post("/uploads/presign", uploads.AdminPresign)
 	adminGroup.Get("/manifest/pending", admin.PendingManifest)
 	adminGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
 	adminGroup.Post("/escrow/settle", admin.SettleEscrow)

@@ -11,6 +11,7 @@ tmp/
 dist/
 build/
 .gocache/
+.gomodcache/
 
 .DS_Store
 Thumbs.db
