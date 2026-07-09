@@ -6,6 +6,7 @@ import (
 
 	"across/backend/internal/config"
 	"across/backend/internal/db"
+	"across/backend/internal/migrations"
 	"across/backend/internal/routes"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -19,6 +20,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
+
+	if err := migrations.Run(ctx, store.PG); err != nil {
+		log.Fatal(err)
+	}
 
 	app := fiber.New(fiber.Config{
 		AppName:      "Across API",

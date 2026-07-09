@@ -19,6 +19,7 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates curl tzdata && adduser -D -H -u 10001 across
 
 COPY --from=builder /out/across-api /app/across-api
+COPY --from=builder /src/migrations /app/migrations
 
 USER across
 EXPOSE 8080

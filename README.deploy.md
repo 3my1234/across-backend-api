@@ -57,4 +57,6 @@ It must share the same PostgreSQL and Redis environment variables as the API.
 
 ## Database
 
-Run `migrations/schema.sql` once against the production PostgreSQL database before using the API.
+The API runs SQL migrations on startup from the bundled `migrations/` directory.
+The first boot on an already-initialized database will mark `schema.sql` as applied
+and then apply any later migration files in order.
