@@ -241,19 +241,19 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 			return err
 		}
 		products = append(products, fiber.Map{
-			"id":                    id,
-			"sku":                   sku,
-			"title":                 title,
-			"description":           description,
-			"category_path":         categories,
-			"image_urls":            images,
-			"currency":              currency,
-			"local_selling_price":   price,
-			"compare_at_price":      compareAtPrice,
-			"inventory_count":       inventory,
-			"is_active":             isActive,
-			"created_at":            createdAt,
-			"updated_at":            updatedAt,
+			"id":                  id,
+			"sku":                 sku,
+			"title":               title,
+			"description":         description,
+			"category_path":       categories,
+			"image_urls":          images,
+			"currency":            currency,
+			"local_selling_price": price,
+			"compare_at_price":    compareAtPrice,
+			"inventory_count":     inventory,
+			"is_active":           isActive,
+			"created_at":          createdAt,
+			"updated_at":          updatedAt,
 		})
 	}
 	return c.JSON(fiber.Map{"products": products})
@@ -268,11 +268,12 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 		CompareAtPrice    *float64 `json:"compare_at_price"`
 		InventoryCount    *int     `json:"inventory_count"`
 		IsActive          *bool    `json:"is_active"`
+		ImageURLs         []string `json:"image_urls"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
-	if req.Title == nil && req.Description == nil && req.LocalSellingPrice == nil && req.CompareAtPrice == nil && req.InventoryCount == nil && req.IsActive == nil {
+	if req.Title == nil && req.Description == nil && req.LocalSellingPrice == nil && req.CompareAtPrice == nil && req.InventoryCount == nil && req.IsActive == nil && req.ImageURLs == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "no fields to update")
 	}
 	if req.LocalSellingPrice != nil && *req.LocalSellingPrice <= 0 {
@@ -288,6 +289,16 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 		}
 		req.Title = &trimmed
 	}
+	if req.ImageURLs != nil {
+		req.ImageURLs = cleanStringList(req.ImageURLs)
+	}
+
+	var oldImageURLs []string
+	if req.ImageURLs != nil {
+		if err := a.db.QueryRow(c.Context(), `SELECT COALESCE(image_urls, '{}') FROM products WHERE id = $1`, productID).Scan(&oldImageURLs); err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "product not found")
+		}
+	}
 
 	tag, err := a.db.Exec(c.Context(), `
 		UPDATE products
@@ -297,16 +308,21 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 			compare_at_price = CASE WHEN $5::numeric IS NULL THEN compare_at_price ELSE NULLIF($5, 0) END,
 			inventory_count = COALESCE($6, inventory_count),
 			is_active = COALESCE($7, is_active),
+			image_urls = COALESCE($8, image_urls),
 			updated_at = now()
 		WHERE id = $1
-	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive)
+	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
-	return c.JSON(fiber.Map{"id": productID, "updated": true})
+	s3Failures := []string{}
+	if req.ImageURLs != nil && a.s3.Configured() {
+		s3Failures = a.s3.DeleteObjectsForURLs(removedStrings(oldImageURLs, req.ImageURLs))
+	}
+	return c.JSON(fiber.Map{"id": productID, "updated": true, "s3_failures": s3Failures})
 }
 
 func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
@@ -392,6 +408,41 @@ func abbreviateSKU(value string, max int) string {
 		return clean
 	}
 	return clean[:max]
+}
+
+func cleanStringList(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		cleaned = append(cleaned, item)
+	}
+	return cleaned
+}
+
+func removedStrings(before, after []string) []string {
+	kept := make(map[string]struct{}, len(after))
+	for _, value := range after {
+		kept[strings.TrimSpace(value)] = struct{}{}
+	}
+	removed := make([]string, 0)
+	for _, value := range before {
+		item := strings.TrimSpace(value)
+		if item == "" {
+			continue
+		}
+		if _, ok := kept[item]; !ok {
+			removed = append(removed, item)
+		}
+	}
+	return removed
 }
 
 func (a *AdminController) PendingManifest(c *fiber.Ctx) error {
