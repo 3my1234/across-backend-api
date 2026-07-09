@@ -108,6 +108,14 @@ func loadMigrationNames() ([]string, error) {
 		names = append(names, entry.Name())
 	}
 	sort.Strings(names)
+	for i, name := range names {
+		if name == "schema.sql" {
+			if i > 0 {
+				names = append([]string{name}, append(names[:i], names[i+1:]...)...)
+			}
+			break
+		}
+	}
 	return names, nil
 }
 
