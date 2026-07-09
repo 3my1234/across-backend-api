@@ -1,7 +1,11 @@
 package controllers
 
 import (
+	"across/backend/internal/config"
+	"across/backend/internal/storage"
 	"encoding/json"
+	"net/url"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -9,10 +13,11 @@ import (
 
 type CatalogController struct {
 	db *pgxpool.Pool
+	s3 *storage.S3
 }
 
-func NewCatalogController(db *pgxpool.Pool) *CatalogController {
-	return &CatalogController{db: db}
+func NewCatalogController(db *pgxpool.Pool, cfg config.Config) *CatalogController {
+	return &CatalogController{db: db, s3: storage.NewS3(cfg)}
 }
 
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
@@ -50,7 +55,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			"title":            title,
 			"description":      description,
 			"category_path":    categories,
-			"image_urls":       images,
+			"image_urls":       cc.normalizeImageURLs(images),
 			"currency":         currency,
 			"price":            price,
 			"compare_at_price": compareAtPrice,
@@ -94,7 +99,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			"title":            title,
 			"description":      description,
 			"category_path":    categories,
-			"image_urls":       images,
+			"image_urls":       cc.normalizeImageURLs(images),
 			"currency":         currency,
 			"price":            price,
 			"compare_at_price": compareAtPrice,
@@ -107,4 +112,33 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			},
 		},
 	})
+}
+
+func (cc *CatalogController) normalizeImageURLs(images []string) []string {
+	normalized := make([]string, 0, len(images))
+	for _, image := range images {
+		item := strings.TrimSpace(image)
+		if item == "" {
+			continue
+		}
+		if strings.HasPrefix(item, "user-uploads/") {
+			normalized = append(normalized, cc.s3.ObjectURL(item))
+			continue
+		}
+		const marker = "/api/v1/public/images/view/"
+		if markerIndex := strings.Index(item, marker); markerIndex >= 0 {
+			key := strings.TrimLeft(item[markerIndex+len(marker):], "/")
+			if decoded, err := url.PathUnescape(key); err == nil {
+				key = decoded
+			}
+			normalized = append(normalized, cc.s3.ObjectURL(key))
+			continue
+		}
+		if key := cc.s3.KeyFromURL(item); key != "" {
+			normalized = append(normalized, cc.s3.ObjectURL(key))
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized
 }

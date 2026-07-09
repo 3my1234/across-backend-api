@@ -13,7 +13,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	escrow := controllers.NewEscrowController(db)
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db)
-	catalog := controllers.NewCatalogController(db)
+	catalog := controllers.NewCatalogController(db, cfg)
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
 	dev := controllers.NewDevController(db, cfg)
