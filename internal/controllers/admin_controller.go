@@ -217,7 +217,7 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	if err != nil {
 		log.Printf("create product failed: sku=%s title=%q category=%v price=%.2f compare_at=%.2f cost_rmb=%.2f exchange_rate=%.2f inventory=%d err=%v",
 			req.SKU, req.Title, req.CategoryPath, req.LocalSellingPrice, req.CompareAtPrice, req.CostPriceRMB, req.ExchangeRateSnapshot, req.InventoryCount, err)
-		return fiber.NewError(fiber.StatusConflict, "product could not be created")
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	log.Printf("create product succeeded: id=%s sku=%s title=%q", id, req.SKU, req.Title)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "sku": req.SKU})
@@ -322,7 +322,7 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs)
 	if err != nil {
 		log.Printf("update product failed: id=%s err=%v", productID, err)
-		return err
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
