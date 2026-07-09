@@ -179,7 +179,11 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 		req.CategoryPath = []string{}
 	}
 	if req.SKU == "" {
-		req.SKU = generateProductSKU(req.CategoryPath, req.Title)
+		sku, err := a.generateSequentialSKU(c, req.CategoryPath)
+		if err != nil {
+			return err
+		}
+		req.SKU = sku
 	}
 	if req.ImageURLs == nil {
 		req.ImageURLs = []string{}
@@ -377,15 +381,65 @@ func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 
 var skuCleaner = regexp.MustCompile(`[^A-Z0-9]+`)
 
-func generateProductSKU(categories []string, title string) string {
-	category := "PRD"
-	if len(categories) > 0 && strings.TrimSpace(categories[0]) != "" {
-		category = categories[0]
+func categoryCodeForSKU(categories []string) string {
+	// Keep codes stable and explicit (matches admin panel category list).
+	if len(categories) > 0 {
+		switch strings.TrimSpace(strings.ToLower(categories[0])) {
+		case "male clothes":
+			return "MCL"
+		case "female clothes":
+			return "FCL"
+		case "mobile devices":
+			return "MOB"
+		case "laptops":
+			return "LAP"
+		case "accessories":
+			return "ACC"
+		case "shoes":
+			return "SHO"
+		case "beauty":
+			return "BEA"
+		case "home":
+			return "HOM"
+		case "electronics":
+			return "ELC"
+		case "kids":
+			return "KID"
+		}
 	}
-	prefix := abbreviateSKU(category, 3)
-	body := abbreviateSKU(title, 8)
-	suffix := time.Now().UTC().Format("060102150405")
-	return fmt.Sprintf("%s-%s-%s", prefix, body, suffix)
+	return "PRD"
+}
+
+func (a *AdminController) generateSequentialSKU(c *fiber.Ctx, categories []string) (string, error) {
+	code := categoryCodeForSKU(categories)
+
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(c.Context())
+
+	var nextValue int
+	// Atomic counter allocation:
+	// - first time: next_value becomes 2 (we allocate 1)
+	// - subsequent: increments by 1 and returns the new next_value
+	if err := tx.QueryRow(c.Context(), `
+		INSERT INTO sku_counters(category_code, next_value)
+		VALUES ($1, 2)
+		ON CONFLICT (category_code)
+		DO UPDATE SET next_value = sku_counters.next_value + 1, updated_at = now()
+		RETURNING next_value
+	`, code).Scan(&nextValue); err != nil {
+		return "", fiber.NewError(fiber.StatusInternalServerError, "sku counter unavailable")
+	}
+
+	allocated := nextValue - 1
+	sku := fmt.Sprintf("%s-%06d", code, allocated)
+
+	if err := tx.Commit(c.Context()); err != nil {
+		return "", err
+	}
+	return sku, nil
 }
 
 func abbreviateSKU(value string, max int) string {

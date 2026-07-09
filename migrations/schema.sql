@@ -63,6 +63,13 @@ CREATE TABLE logistics_hubs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-category SKU counters for sequential SKUs like MCL-000001
+CREATE TABLE sku_counters (
+  category_code TEXT PRIMARY KEY,
+  next_value INTEGER NOT NULL CHECK (next_value > 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE products (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   supplier_id UUID,
