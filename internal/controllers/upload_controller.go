@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ func (u *UploadController) AdminPresign(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "mimeType must be image/* or video/*")
 	}
 	if !u.s3.Configured() {
+		log.Printf("admin presign rejected: s3 not configured region=%q bucket=%q access_key_set=%t secret_set=%t", u.s3.Region(), u.s3.Bucket(), u.s3.AccessKeySet(), u.s3.SecretKeySet())
 		return fiber.NewError(fiber.StatusServiceUnavailable, "s3 upload is not configured")
 	}
 	kind := "image"
@@ -53,6 +55,7 @@ func (u *UploadController) AdminPresign(c *fiber.Ctx) error {
 	key := storage.SafeKey("user-uploads/admin/"+scope+"/"+kind, req.Filename)
 	uploadURL, err := u.s3.PresignPut(key, mime, 15*time.Minute)
 	if err != nil {
+		log.Printf("admin presign failed: key=%s mime=%s err=%v", key, mime, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to generate upload URL")
 	}
 	viewURL := u.s3.ObjectURL(key)
@@ -84,6 +87,7 @@ func (u *UploadController) UserPresign(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "mimeType must be image/*")
 	}
 	if !u.s3.Configured() {
+		log.Printf("user presign rejected: s3 not configured region=%q bucket=%q access_key_set=%t secret_set=%t", u.s3.Region(), u.s3.Bucket(), u.s3.AccessKeySet(), u.s3.SecretKeySet())
 		return fiber.NewError(fiber.StatusServiceUnavailable, "s3 upload is not configured")
 	}
 	scope := strings.ToLower(strings.TrimSpace(req.Scope))
@@ -93,6 +97,7 @@ func (u *UploadController) UserPresign(c *fiber.Ctx) error {
 	key := storage.SafeKey("user-uploads/buyer/"+scope+"/image", req.Filename)
 	uploadURL, err := u.s3.PresignPut(key, mime, 15*time.Minute)
 	if err != nil {
+		log.Printf("user presign failed: key=%s mime=%s err=%v", key, mime, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to generate upload URL")
 	}
 	viewURL := u.s3.ObjectURL(key)
@@ -124,6 +129,7 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Printf("public image view failed: key=%s err=%v", key, err)
 		return fiber.NewError(fiber.StatusBadGateway, "media unavailable")
 	}
 	defer resp.Body.Close()

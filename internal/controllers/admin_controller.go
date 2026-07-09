@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -214,8 +215,11 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 		req.CostPriceRMB, req.LocalSellingPrice, req.CompareAtPrice, req.ExchangeRateSnapshot,
 		req.InventoryCount, factoryJSON).Scan(&id)
 	if err != nil {
+		log.Printf("create product failed: sku=%s title=%q category=%v price=%.2f compare_at=%.2f cost_rmb=%.2f exchange_rate=%.2f inventory=%d err=%v",
+			req.SKU, req.Title, req.CategoryPath, req.LocalSellingPrice, req.CompareAtPrice, req.CostPriceRMB, req.ExchangeRateSnapshot, req.InventoryCount, err)
 		return fiber.NewError(fiber.StatusConflict, "product could not be created")
 	}
+	log.Printf("create product succeeded: id=%s sku=%s title=%q", id, req.SKU, req.Title)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "sku": req.SKU})
 }
 
@@ -317,6 +321,7 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 		WHERE id = $1
 	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs)
 	if err != nil {
+		log.Printf("update product failed: id=%s err=%v", productID, err)
 		return err
 	}
 	if tag.RowsAffected() == 0 {
@@ -326,6 +331,7 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	if req.ImageURLs != nil && a.s3.Configured() {
 		s3Failures = a.s3.DeleteObjectsForURLs(removedStrings(oldImageURLs, req.ImageURLs))
 	}
+	log.Printf("update product succeeded: id=%s s3_failures=%v", productID, s3Failures)
 	return c.JSON(fiber.Map{"id": productID, "updated": true, "s3_failures": s3Failures})
 }
 

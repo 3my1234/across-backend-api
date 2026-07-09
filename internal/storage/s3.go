@@ -36,6 +36,11 @@ func NewS3(cfg config.Config) *S3 {
 	}
 }
 
+func (s *S3) Region() string     { return s.region }
+func (s *S3) Bucket() string     { return s.bucket }
+func (s *S3) AccessKeySet() bool { return s.accessKey != "" }
+func (s *S3) SecretKeySet() bool { return s.secretKey != "" }
+
 func (s *S3) Configured() bool {
 	return s.region != "" && s.accessKey != "" && s.secretKey != "" && s.bucket != ""
 }
