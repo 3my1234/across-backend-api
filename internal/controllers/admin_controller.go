@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -86,6 +87,83 @@ func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "admin already exists")
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "email": req.Email, "role": req.Role})
+}
+
+func (a *AdminController) ListAdmins(c *fiber.Ctx) error {
+	rows, err := a.db.Query(c.Context(), `
+		SELECT id, email, full_name, role, is_active, created_at, updated_at
+		FROM admins
+		ORDER BY created_at DESC
+		LIMIT 500
+	`)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "admins unavailable")
+	}
+	defer rows.Close()
+
+	admins := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, email, fullName, role string
+		var isActive bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &email, &fullName, &role, &isActive, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		admins = append(admins, fiber.Map{
+			"id":         id,
+			"email":      email,
+			"full_name":  fullName,
+			"role":       role,
+			"is_active":  isActive,
+			"created_at": createdAt,
+			"updated_at": updatedAt,
+		})
+	}
+	return c.JSON(fiber.Map{"admins": admins})
+}
+
+func (a *AdminController) ListUsers(c *fiber.Ctx) error {
+	rows, err := a.db.Query(c.Context(), `
+		SELECT u.id, u.full_name, u.email, u.phone, cc.country_code, cc.currency_code, u.is_active, u.created_at, u.updated_at
+		FROM users u
+		JOIN countries_config cc ON cc.id = u.country_id
+		ORDER BY u.created_at DESC
+		LIMIT 1000
+	`)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "users unavailable")
+	}
+	defer rows.Close()
+
+	users := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, fullName, countryCode, currencyCode string
+		var email, phone sql.NullString
+		var isActive bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &fullName, &email, &phone, &countryCode, &currencyCode, &isActive, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		users = append(users, fiber.Map{
+			"id":            id,
+			"full_name":     fullName,
+			"email":         nullableString(email),
+			"phone":         nullableString(phone),
+			"country_code":  countryCode,
+			"currency_code": currencyCode,
+			"is_active":     isActive,
+			"created_at":    createdAt,
+			"updated_at":    updatedAt,
+		})
+	}
+	return c.JSON(fiber.Map{"users": users})
+}
+
+func nullableString(value sql.NullString) any {
+	if value.Valid {
+		return value.String
+	}
+	return nil
 }
 
 func (a *AdminController) ListOrders(c *fiber.Ctx) error {

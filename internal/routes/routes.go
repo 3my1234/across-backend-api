@@ -39,9 +39,12 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminGroup := v1.Group("/admin", middleware.RequireAdmin(cfg, db))
 	superAdminGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin"))
 	catalogGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin"))
+	managementGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin"))
 	opsGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin", "courier_admin"))
 
 	superAdminGroup.Post("/admins", admin.CreateAdmin)
+	managementGroup.Get("/admins", admin.ListAdmins)
+	managementGroup.Get("/users", admin.ListUsers)
 	adminGroup.Get("/orders", admin.ListOrders)
 	adminGroup.Get("/transactions", admin.ListTransactions)
 	adminGroup.Get("/batches", admin.ListBatches)
