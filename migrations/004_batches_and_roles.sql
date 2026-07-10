@@ -40,17 +40,8 @@ ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS batch_id UUID,
   ADD COLUMN IF NOT EXISTS package_label TEXT;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'orders_batch_id_fkey'
-  ) THEN
-    ALTER TABLE orders
-      ADD CONSTRAINT orders_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES order_batches(id);
-  END IF;
-END $$;
+ALTER TABLE orders
+  ADD CONSTRAINT orders_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES order_batches(id);
 
 ALTER TABLE admins
   DROP CONSTRAINT IF EXISTS admins_role_check;
