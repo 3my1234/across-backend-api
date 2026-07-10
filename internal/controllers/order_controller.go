@@ -144,6 +144,27 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	orderID := c.Params("order_id")
 
+	var batchSummary struct {
+		BatchID       *string
+		BatchCode     *string
+		BatchStatus   *string
+		BatchLocation *string
+		TransportMode *string
+		PackageLabel  *string
+		CurrentStatus string
+		CurrentStage  string
+	}
+	if err := o.db.QueryRow(c.Context(), `
+		SELECT o.order_status, o.current_tracking_stage, o.package_label,
+			ob.id, ob.batch_code, ob.status::text, ob.current_location, ob.transport_mode
+		FROM orders o
+		LEFT JOIN order_batches ob ON ob.id = o.batch_id
+		WHERE o.id = $1 AND o.user_id = $2
+	`, orderID, userID).Scan(&batchSummary.CurrentStatus, &batchSummary.CurrentStage, &batchSummary.PackageLabel,
+		&batchSummary.BatchID, &batchSummary.BatchCode, &batchSummary.BatchStatus, &batchSummary.BatchLocation, &batchSummary.TransportMode); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "tracking unavailable")
+	}
+
 	rows, err := o.db.Query(c.Context(), `
 		SELECT te.stage, true AS completed, COALESCE(lh.name, ''), te.occurred_at
 		FROM tracking_events te
@@ -172,7 +193,46 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 			"occurred_at": occurredAt,
 		})
 	}
-	return c.JSON(fiber.Map{"events": events})
+
+	batchEvents := make([]fiber.Map, 0)
+	if batchSummary.BatchID != nil {
+		rows, err := o.db.Query(c.Context(), `
+			SELECT event_type, COALESCE(status::text, ''), location, notes, created_at
+			FROM batch_events
+			WHERE batch_id = $1
+			ORDER BY created_at ASC
+		`, *batchSummary.BatchID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var eventType, status, location, notes string
+			var occurredAt time.Time
+			if err := rows.Scan(&eventType, &status, &location, &notes, &occurredAt); err != nil {
+				return err
+			}
+			batchEvents = append(batchEvents, fiber.Map{
+				"event_type":  eventType,
+				"status":      status,
+				"location":    location,
+				"notes":       notes,
+				"occurred_at": occurredAt,
+			})
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"batch": fiber.Map{
+			"batch_code":       batchSummary.BatchCode,
+			"status":           batchSummary.BatchStatus,
+			"current_location": batchSummary.BatchLocation,
+			"transport_mode":   batchSummary.TransportMode,
+			"package_label":    batchSummary.PackageLabel,
+		},
+		"events":       events,
+		"batch_events": batchEvents,
+	})
 }
 
 func estimateShipping(items []struct {

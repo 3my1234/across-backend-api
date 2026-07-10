@@ -8,11 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"across/backend/internal/config"
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -162,11 +165,31 @@ func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef
 	}
 	defer tx.Rollback(ctx)
 
+	var countryID, currencyCode string
+	var orderAmount float64
+	var promisedAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT country_id, currency_code, total_amount, COALESCE(delivery_promised_at, now() + interval '14 days')
+		FROM orders
+		WHERE id = $1
+	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt); err != nil {
+		return err
+	}
+
+	batchID, batchCode, err := p.ensureDailyBatch(ctx, tx, countryID, promisedAt, orderAmount)
+	if err != nil {
+		return err
+	}
+	packageLabel := fmt.Sprintf("%s-%s", batchCode, shortOrderLabel(orderID))
+
 	tag, err := tx.Exec(ctx, `
 		UPDATE orders
-		SET order_status = 'Paid', updated_at = now()
+		SET order_status = 'Paid',
+			batch_id = $2,
+			package_label = COALESCE(NULLIF(package_label, ''), $3),
+			updated_at = now()
 		WHERE id = $1 AND order_status = 'Pending'
-	`, orderID)
+	`, orderID, batchID, packageLabel)
 	if err != nil {
 		return err
 	}
@@ -191,6 +214,41 @@ func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (p *PaymentController) ensureDailyBatch(ctx context.Context, tx pgx.Tx, countryID string, promisedAt time.Time, orderAmount float64) (string, string, error) {
+	batchDate := time.Now().UTC().Format("2006-01-02")
+	batchCode := fmt.Sprintf("BATCH-%s", strings.ReplaceAll(batchDate, "-", ""))
+
+	var batchID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO order_batches(batch_code, country_id, batch_date, status, total_ngn_collected, current_location, notes)
+		VALUES ($1, $2, $3::date, 'collecting_funds', $4, 'Payment settlement', '')
+		ON CONFLICT (country_id, batch_date)
+		DO UPDATE SET total_ngn_collected = order_batches.total_ngn_collected + EXCLUDED.total_ngn_collected,
+			updated_at = now()
+		RETURNING id
+	`, batchCode, countryID, batchDate, orderAmount).Scan(&batchID); err != nil {
+		return "", "", err
+	}
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO batch_events(batch_id, event_type, status, location, notes)
+		VALUES ($1, 'payment_confirmed', 'collecting_funds', 'Payment settlement', $2)
+	`, batchID, promisedAt.Format(time.RFC3339))
+	if err != nil {
+		return "", "", err
+	}
+
+	return batchID, batchCode, nil
+}
+
+func shortOrderLabel(orderID string) string {
+	clean := strings.ReplaceAll(strings.ToUpper(orderID), "-", "")
+	if len(clean) > 8 {
+		return clean[:8]
+	}
+	return clean
 }
 
 func parseOrderID(txRef string) (string, error) {

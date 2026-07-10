@@ -63,6 +63,33 @@ CREATE TABLE logistics_hubs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TYPE batch_status AS ENUM (
+  'collecting_funds',
+  'settled',
+  'funds_sent_to_china',
+  'purchasing',
+  'enroute_nigeria',
+  'arrived_local',
+  'sorted',
+  'completed'
+);
+
+CREATE TABLE order_batches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_code TEXT NOT NULL UNIQUE,
+  country_id UUID NOT NULL REFERENCES countries_config(id),
+  batch_date DATE NOT NULL,
+  status batch_status NOT NULL DEFAULT 'collecting_funds',
+  transport_mode TEXT NOT NULL DEFAULT 'air' CHECK (transport_mode IN ('air', 'sea')),
+  total_ngn_collected NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_ngn_collected >= 0),
+  total_cny_sent NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_cny_sent >= 0),
+  current_location TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(country_id, batch_date)
+);
+
 -- Per-category SKU counters for sequential SKUs like MCL-000001
 CREATE TABLE sku_counters (
   category_code TEXT PRIMARY KEY,
@@ -96,6 +123,7 @@ CREATE TABLE orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
   country_id UUID NOT NULL REFERENCES countries_config(id),
+  batch_id UUID REFERENCES order_batches(id),
   currency_code CHAR(3) NOT NULL,
   total_amount NUMERIC(14,2) NOT NULL CHECK (total_amount >= 0),
   shipping_fee NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (shipping_fee >= 0),
@@ -104,6 +132,7 @@ CREATE TABLE orders (
   order_status order_status NOT NULL DEFAULT 'Pending',
   current_tracking_stage tracking_stage NOT NULL DEFAULT 'Order Placed',
   ready_for_manual_settlement BOOLEAN NOT NULL DEFAULT false,
+  package_label TEXT,
   delivery_promised_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -160,6 +189,17 @@ CREATE TABLE tracking_events (
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE batch_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id UUID NOT NULL REFERENCES order_batches(id) ON DELETE CASCADE,
+  actor_id UUID,
+  event_type TEXT NOT NULL,
+  status batch_status,
+  location TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE admin_audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_id UUID,
@@ -176,7 +216,7 @@ CREATE TABLE admins (
   email CITEXT NOT NULL UNIQUE,
   full_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin')),
+  role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin', 'catalog_admin', 'procurement_admin', 'courier_admin')),
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -188,6 +228,8 @@ CREATE INDEX idx_orders_user_created ON orders(user_id, created_at DESC);
 CREATE INDEX idx_orders_status ON orders(order_status);
 CREATE INDEX idx_orders_created_desc ON orders(created_at DESC);
 CREATE INDEX idx_admins_role_active ON admins(role, is_active);
+CREATE INDEX idx_batches_date_status ON order_batches(batch_date, status);
 CREATE INDEX idx_escrow_worker_due ON escrow_ledger(escrow_lock_expiry)
   WHERE dispute_status = 'none' AND escrow_status = 'held_in_escrow';
 CREATE INDEX idx_tracking_order_time ON tracking_events(order_id, occurred_at);
+CREATE INDEX idx_batch_events_batch_time ON batch_events(batch_id, created_at);

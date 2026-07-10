@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/storage"
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -63,11 +65,11 @@ func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.FullName = strings.TrimSpace(req.FullName)
-	req.Role = strings.TrimSpace(req.Role)
+	req.Role = normalizeAdminRole(req.Role)
 	if req.Role == "" {
-		req.Role = "admin"
+		req.Role = "catalog_admin"
 	}
-	if req.Email == "" || req.FullName == "" || len(req.Password) < 10 || (req.Role != "admin" && req.Role != "super_admin") {
+	if req.Email == "" || req.FullName == "" || len(req.Password) < 10 || !isValidAdminRole(req.Role) {
 		return fiber.NewError(fiber.StatusBadRequest, "email, name, 10+ character password, and valid role are required")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -385,6 +387,161 @@ func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 	})
 }
 
+func (a *AdminController) ListBatches(c *fiber.Ctx) error {
+	rows, err := a.db.Query(c.Context(), `
+		SELECT b.id, b.batch_code, b.batch_date, b.status::text, b.transport_mode,
+			b.total_ngn_collected, b.total_cny_sent, b.current_location, b.notes,
+			COUNT(o.id)::int AS order_count
+		FROM order_batches b
+		LEFT JOIN orders o ON o.batch_id = b.id
+		GROUP BY b.id
+		ORDER BY b.batch_date DESC, b.created_at DESC
+		LIMIT 200
+	`)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "batches unavailable")
+	}
+	defer rows.Close()
+
+	batches := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, code, status, transport, location, notes string
+		var batchDate time.Time
+		var totalNgn, totalCny float64
+		var orderCount int
+		if err := rows.Scan(&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny, &location, &notes, &orderCount); err != nil {
+			return err
+		}
+		batches = append(batches, fiber.Map{
+			"id":                  id,
+			"batch_code":          code,
+			"batch_date":          batchDate,
+			"status":              status,
+			"transport_mode":      transport,
+			"total_ngn_collected": totalNgn,
+			"total_cny_sent":      totalCny,
+			"current_location":    location,
+			"notes":               notes,
+			"order_count":         orderCount,
+		})
+	}
+	return c.JSON(fiber.Map{"batches": batches})
+}
+
+func (a *AdminController) ListBatchOrders(c *fiber.Ctx) error {
+	batchID := c.Params("batch_id")
+	rows, err := a.db.Query(c.Context(), `
+		SELECT o.id, u.email, o.package_label, o.order_status, o.current_tracking_stage,
+			o.currency_code, o.total_amount, o.customs_fee, o.vat_fee, o.created_at
+		FROM orders o
+		JOIN users u ON u.id = o.user_id
+		WHERE o.batch_id = $1
+		ORDER BY o.created_at ASC
+	`, batchID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "batch orders unavailable")
+	}
+	defer rows.Close()
+
+	orders := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, email, packageLabel, status, stage, currency string
+		var total, customs, vat float64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &email, &packageLabel, &status, &stage, &currency, &total, &customs, &vat, &createdAt); err != nil {
+			return err
+		}
+		orders = append(orders, fiber.Map{
+			"id":            id,
+			"email":         email,
+			"package_label": packageLabel,
+			"status":        status,
+			"stage":         stage,
+			"currency":      currency,
+			"total_amount":  total,
+			"customs_fee":   customs,
+			"vat_fee":       vat,
+			"created_at":    createdAt,
+		})
+	}
+	return c.JSON(fiber.Map{"orders": orders})
+}
+
+func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
+	batchID := c.Params("batch_id")
+	var req struct {
+		Status          *string `json:"status"`
+		TransportMode   *string `json:"transport_mode"`
+		CurrentLocation *string `json:"current_location"`
+		Notes           *string `json:"notes"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	if req.Status == nil && req.TransportMode == nil && req.CurrentLocation == nil && req.Notes == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "no fields to update")
+	}
+
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(c.Context())
+
+	var statusValue, transportValue, locationValue, notesValue *string
+	if req.Status != nil {
+		normalized := normalizeBatchStatus(*req.Status)
+		if normalized == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid batch status")
+		}
+		statusValue = &normalized
+	}
+	if req.TransportMode != nil {
+		normalized := strings.ToLower(strings.TrimSpace(*req.TransportMode))
+		if normalized != "air" && normalized != "sea" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid transport mode")
+		}
+		transportValue = &normalized
+	}
+	if req.CurrentLocation != nil {
+		trimmed := strings.TrimSpace(*req.CurrentLocation)
+		locationValue = &trimmed
+	}
+	if req.Notes != nil {
+		trimmed := strings.TrimSpace(*req.Notes)
+		notesValue = &trimmed
+	}
+
+	var updatedStatus string
+	if err := tx.QueryRow(c.Context(), `
+		UPDATE order_batches
+		SET status = COALESCE($2, status)::batch_status,
+			transport_mode = COALESCE($3, transport_mode),
+			current_location = COALESCE($4, current_location),
+			notes = COALESCE($5, notes),
+			updated_at = now()
+		WHERE id = $1
+		RETURNING status::text
+	`, batchID, statusValue, transportValue, locationValue, notesValue).Scan(&updatedStatus); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "batch not found")
+	}
+
+	if err := syncBatchOrders(c.Context(), tx, batchID, updatedStatus); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(c.Context(), `
+		INSERT INTO batch_events(batch_id, event_type, status, location, notes)
+		VALUES ($1, 'status_update', $2::batch_status, COALESCE($3, ''), COALESCE($4, ''))
+	`, batchID, updatedStatus, req.CurrentLocation, req.Notes); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(c.Context()); err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"batch_id": batchID, "status": updatedStatus, "updated": true})
+}
+
 var skuCleaner = regexp.MustCompile(`[^A-Z0-9]+`)
 
 func categoryCodeForSKU(categories []string) string {
@@ -503,6 +660,99 @@ func removedStrings(before, after []string) []string {
 		}
 	}
 	return removed
+}
+
+func syncBatchOrders(ctx context.Context, tx pgx.Tx, batchID, status string) error {
+	trackingStage := ""
+	orderStatus := ""
+	deliveryComplete := false
+	switch status {
+	case "funds_sent_to_china":
+		trackingStage = "Arrived at China Hub"
+	case "purchasing":
+		trackingStage = "Arrived at China Hub"
+	case "enroute_nigeria":
+		trackingStage = "In Transit Internationally"
+	case "arrived_local":
+		trackingStage = "Arrived at Local Hub"
+	case "sorted":
+		trackingStage = "Out for Delivery"
+	case "completed":
+		trackingStage = "Delivered"
+		orderStatus = "Completed"
+		deliveryComplete = true
+	default:
+		return nil
+	}
+
+	if orderStatus != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE orders
+			SET current_tracking_stage = $2::tracking_stage,
+				order_status = CASE WHEN $3 = '' THEN order_status ELSE $3::order_status END,
+				delivered_at = CASE WHEN $4 THEN now() ELSE delivered_at END,
+				updated_at = now()
+			WHERE batch_id = $1
+		`, batchID, trackingStage, orderStatus, deliveryComplete); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	_, err := tx.Exec(ctx, `
+		UPDATE orders
+		SET current_tracking_stage = $2::tracking_stage,
+			updated_at = now()
+		WHERE batch_id = $1
+	`, batchID, trackingStage)
+	return err
+}
+
+func normalizeAdminRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", "admin", "catalog_admin":
+		return "catalog_admin"
+	case "super_admin":
+		return "super_admin"
+	case "procurement_admin":
+		return "procurement_admin"
+	case "courier_admin":
+		return "courier_admin"
+	default:
+		return ""
+	}
+}
+
+func isValidAdminRole(role string) bool {
+	switch role {
+	case "super_admin", "catalog_admin", "procurement_admin", "courier_admin":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeBatchStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "collecting_funds":
+		return "collecting_funds"
+	case "settled":
+		return "settled"
+	case "funds_sent_to_china":
+		return "funds_sent_to_china"
+	case "purchasing":
+		return "purchasing"
+	case "enroute_nigeria":
+		return "enroute_nigeria"
+	case "arrived_local":
+		return "arrived_local"
+	case "sorted":
+		return "sorted"
+	case "completed":
+		return "completed"
+	default:
+		return ""
+	}
 }
 
 func (a *AdminController) PendingManifest(c *fiber.Ctx) error {
