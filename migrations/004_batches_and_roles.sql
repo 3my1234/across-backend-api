@@ -1,3 +1,19 @@
+DO $$
+BEGIN
+  IF to_regtype('public.batch_status') IS NULL THEN
+    CREATE TYPE batch_status AS ENUM (
+      'collecting_funds',
+      'settled',
+      'funds_sent_to_china',
+      'purchasing',
+      'enroute_nigeria',
+      'arrived_local',
+      'sorted',
+      'completed'
+    );
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS order_batches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_code TEXT NOT NULL UNIQUE,
