@@ -38,12 +38,12 @@ func (a *AdminController) Login(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	var adminID, passwordHash, role string
+	var adminID, fullName, passwordHash, role string
 	err := a.db.QueryRow(c.Context(), `
-		SELECT id, password_hash, role
+		SELECT id, full_name, password_hash, role
 		FROM admins
 		WHERE email = $1 AND is_active = true
-	`, email).Scan(&adminID, &passwordHash, &role)
+	`, email).Scan(&adminID, &fullName, &passwordHash, &role)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid admin credentials")
 	}
@@ -51,7 +51,7 @@ func (a *AdminController) Login(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"access_token": token, "expires_at": expiresAt, "admin_id": adminID, "role": role})
+	return c.JSON(fiber.Map{"access_token": token, "expires_at": expiresAt, "admin_id": adminID, "full_name": fullName, "role": role})
 }
 
 func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
@@ -209,6 +209,42 @@ func (a *AdminController) ResetAdminPassword(c *fiber.Ctx) error {
 	`, adminID, string(hash))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to reset password")
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "admin not found")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (a *AdminController) DeleteAdmin(c *fiber.Ctx) error {
+	adminID := c.Params("admin_id")
+	currentAdminID, _ := c.Locals("admin_id").(string)
+	if currentAdminID != "" && currentAdminID == adminID {
+		return fiber.NewError(fiber.StatusBadRequest, "you cannot delete your own account")
+	}
+
+	var targetRole string
+	if err := a.db.QueryRow(c.Context(), `SELECT role FROM admins WHERE id = $1`, adminID).Scan(&targetRole); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "admin not found")
+	}
+
+	if targetRole == "super_admin" {
+		var activeSuperAdmins int
+		if err := a.db.QueryRow(c.Context(), `
+			SELECT COUNT(*)::int
+			FROM admins
+			WHERE role = 'super_admin' AND is_active = true
+		`).Scan(&activeSuperAdmins); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "unable to verify super admin count")
+		}
+		if activeSuperAdmins <= 1 {
+			return fiber.NewError(fiber.StatusConflict, "at least one super admin must remain active")
+		}
+	}
+
+	tag, err := a.db.Exec(c.Context(), `DELETE FROM admins WHERE id = $1`, adminID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete admin")
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "admin not found")
@@ -845,13 +881,13 @@ func syncBatchOrders(ctx context.Context, tx pgx.Tx, batchID, status string) err
 
 func normalizeAdminRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "", "admin", "catalog_admin":
+	case "", "admin", "admin_i", "catalog_admin":
 		return "catalog_admin"
 	case "super_admin":
 		return "super_admin"
-	case "procurement_admin":
+	case "admin_ii", "procurement_admin":
 		return "procurement_admin"
-	case "courier_admin":
+	case "admin_iii", "courier_admin":
 		return "courier_admin"
 	default:
 		return ""
