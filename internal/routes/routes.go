@@ -43,6 +43,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	opsGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin", "courier_admin"))
 
 	superAdminGroup.Post("/admins", admin.CreateAdmin)
+	superAdminGroup.Patch("/admins/:admin_id/password", admin.ResetAdminPassword)
+	superAdminGroup.Delete("/users/:user_id", admin.DeleteUser)
 	managementGroup.Get("/admins", admin.ListAdmins)
 	managementGroup.Get("/users", admin.ListUsers)
 	adminGroup.Get("/orders", admin.ListOrders)

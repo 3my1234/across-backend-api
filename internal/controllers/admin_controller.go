@@ -159,6 +159,63 @@ func (a *AdminController) ListUsers(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"users": users})
 }
 
+func (a *AdminController) DeleteUser(c *fiber.Ctx) error {
+	userID := c.Params("user_id")
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(c.Context())
+
+	if _, err := tx.Exec(c.Context(), `DELETE FROM orders WHERE user_id = $1`, userID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user orders")
+	}
+	if _, err := tx.Exec(c.Context(), `DELETE FROM reviews WHERE user_id = $1`, userID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user reviews")
+	}
+	tag, err := tx.Exec(c.Context(), `DELETE FROM users WHERE id = $1`, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user")
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "user not found")
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (a *AdminController) ResetAdminPassword(c *fiber.Ctx) error {
+	adminID := c.Params("admin_id")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	req.Password = strings.TrimSpace(req.Password)
+	if len(req.Password) < 10 {
+		return fiber.NewError(fiber.StatusBadRequest, "password must be at least 10 characters")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	tag, err := a.db.Exec(c.Context(), `
+		UPDATE admins
+		SET password_hash = $2, updated_at = now()
+		WHERE id = $1
+	`, adminID, string(hash))
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to reset password")
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "admin not found")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 func nullableString(value sql.NullString) any {
 	if value.Valid {
 		return value.String
