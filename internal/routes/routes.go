@@ -35,6 +35,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
 	v1.Post("/admin/login", admin.Login)
+	v1.Post("/admin/pricing/calculate", controllers.PriceBreakdown)
 
 	superAdminGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin"))
 	catalogGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin"))
