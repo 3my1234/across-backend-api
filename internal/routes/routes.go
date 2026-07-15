@@ -4,6 +4,7 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,6 +17,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	catalog := controllers.NewCatalogController(db, cfg)
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
+	notifications := controllers.NewNotificationsController(db)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
 
@@ -73,4 +75,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Put("/products/:product_id/reviews", reviews.UpsertProductReview)
 	authed.Post("/orders/:order_id/escrow/confirm-receipt", escrow.ConfirmReceipt)
 	authed.Post("/orders/:order_id/disputes", escrow.OpenDispute)
+	authed.Get("/notifications", notifications.List)
+	authed.Get("/notifications/unread-count", notifications.UnreadCount)
+	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
+	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
 }

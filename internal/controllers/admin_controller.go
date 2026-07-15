@@ -13,6 +13,7 @@ import (
 	"across/backend/internal/auth"
 	"across/backend/internal/config"
 	"across/backend/internal/storage"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -710,6 +711,10 @@ func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
 	if err := tx.Commit(c.Context()); err != nil {
 		return err
 	}
+
+	// Send notifications to buyers based on new batch status
+	go a.sendBatchNotifications(batchID, updatedStatus, req.CurrentLocation)
+
 	return c.JSON(fiber.Map{"batch_id": batchID, "status": updatedStatus, "updated": true})
 }
 
@@ -1031,6 +1036,53 @@ func (a *AdminController) SettleEscrow(c *fiber.Ctx) error {
 		return err
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (a *AdminController) sendBatchNotifications(batchID, status string, location *string) {
+	loc := ""
+	if location != nil {
+		loc = *location
+	}
+	ctx := context.Background()
+
+	var notifyType, title, body string
+	switch status {
+	case "funds_sent_to_china":
+		notifyType = "enroute_international"
+		title = "Your package is on its way!"
+		body = "Your order has been shipped from China. It's heading to Nigeria now!"
+	case "purchasing":
+		notifyType = "product_purchased"
+		title = "Your order has been secured"
+		body = "Your items have been purchased from the supplier. They're being prepared for shipping."
+	case "enroute_nigeria":
+		notifyType = "enroute_international"
+		title = "In transit to Nigeria"
+		body = "Your package is on a flight/ship heading to Nigeria. Estimated arrival in 7-14 days."
+	case "arrived_local":
+		notifyType = "arrived_local"
+		title = "Package arrived in Nigeria"
+		body = "Your order has arrived at our local hub. We're clearing it for delivery."
+		if loc != "" {
+			body = "Your order has arrived at " + loc + ". We're preparing it for delivery."
+		}
+	case "sorted":
+		notifyType = "out_for_delivery"
+		title = "Out for delivery"
+		body = "Your package is with our courier and will be delivered soon."
+		if loc != "" {
+			body = "Your package is out for delivery from " + loc + "."
+		}
+	case "completed":
+		notifyType = "delivered"
+		title = "Package delivered"
+		body = "Your order has been marked as delivered. Please check and confirm receipt in the app."
+	}
+
+	if notifyType != "" {
+		data := map[string]any{"location": loc}
+		_ = notifyBatchUsers(ctx, a.db, batchID, notifyType, title, body, data)
+	}
 }
 
 func (a *AdminController) FreezeDispute(c *fiber.Ctx) error {
