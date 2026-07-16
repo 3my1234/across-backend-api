@@ -25,7 +25,8 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0), p.inventory_count,
 			p.factory_details,
-			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, '')
+			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true
@@ -41,15 +42,16 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
-		var price, compareAtPrice float64
+		var price, compareAtPrice, flashSalePrice float64
 		var inventory int
 		var factoryRaw []byte
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity); err != nil {
+		var isFlashSale bool
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice); err != nil {
 			return err
 		}
 		factory := map[string]any{}
 		_ = json.Unmarshal(factoryRaw, &factory)
-		products = append(products, fiber.Map{
+		productMap := fiber.Map{
 			"id":               id,
 			"sku":              sku,
 			"title":            title,
@@ -66,7 +68,12 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 				"name": hubName,
 				"city": hubCity,
 			},
-		})
+		}
+		if isFlashSale {
+			productMap["is_flash_sale"] = true
+			productMap["flash_sale_price"] = flashSalePrice
+		}
+		products = append(products, productMap)
 	}
 	return c.JSON(fiber.Map{"products": products})
 }
