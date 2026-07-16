@@ -18,6 +18,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
 	notifications := controllers.NewNotificationsController(db)
+	ops := controllers.NewOpsController(db)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
 
@@ -63,6 +64,14 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	opsGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
 	opsGroup.Post("/escrow/settle", admin.SettleEscrow)
 	opsGroup.Post("/orders/:order_id/dispute-freeze", admin.FreezeDispute)
+	// Admin II: Purchase management
+	opsGroup.Get("/batches/:batch_id/purchase-manifest", ops.GetPurchaseManifest)
+	opsGroup.Post("/batches/:batch_id/purchase-confirm", ops.ConfirmPurchase)
+	// Admin III: Delivery management
+	opsGroup.Post("/batches/:batch_id/confirm-arrival", ops.ConfirmArrival)
+	opsGroup.Post("/batches/confirm-delivered", ops.ConfirmDelivered)
+	// Auto-confirm expired deliveries (can be called by cron)
+	opsGroup.Post("/deliveries/auto-confirm", ops.AutoConfirmDeliveries)
 
 	authed := v1.Group("", middleware.RequireAuth(cfg))
 	authed.Get("/auth/session", authController.Session)
