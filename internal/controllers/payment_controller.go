@@ -41,6 +41,13 @@ type tokenizedChargeRequest struct {
 	Currency string `json:"currency"`
 }
 
+type flutterwaveCheckoutRequest struct {
+	OrderID     string `json:"order_id"`
+	Amount      string `json:"amount"`
+	Currency    string `json:"currency"`
+	RedirectURL string `json:"redirect_url"`
+}
+
 func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req tokenizedChargeRequest
@@ -102,6 +109,93 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		"tx_ref":   txRef,
 		"gateway":  "flutterwave",
 		"response": gatewayResp,
+	})
+}
+
+func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	var req flutterwaveCheckoutRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	if strings.TrimSpace(req.OrderID) == "" || strings.TrimSpace(req.Amount) == "" || strings.TrimSpace(req.Currency) == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "order_id, amount, and currency are required")
+	}
+
+	var email, fullName string
+	err := p.db.QueryRow(c.Context(), `
+		SELECT email, full_name
+		FROM users
+		WHERE id = $1 AND is_active = true
+	`, userID).Scan(&email, &fullName)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
+	}
+
+	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
+	redirectURL := strings.TrimSpace(req.RedirectURL)
+	if redirectURL == "" {
+		redirectURL = "across-test://payments/flutterwave"
+	}
+	if p.mockPaymentsEnabled() {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"tx_ref":        txRef,
+			"gateway":       "flutterwave",
+			"mocked":        true,
+			"redirect_url":  redirectURL,
+			"checkout_link": "https://www.flutterwave.com",
+		})
+	}
+
+	payload := map[string]any{
+		"tx_ref":          txRef,
+		"amount":          req.Amount,
+		"currency":        strings.ToUpper(req.Currency),
+		"redirect_url":    redirectURL,
+		"payment_options": "card,banktransfer,ussd",
+		"customer": map[string]any{
+			"email": email,
+			"name":  strings.TrimSpace(fullName),
+		},
+		"customizations": map[string]any{
+			"title":       "Atlantic Express Checkout",
+			"description": "Pay securely with Flutterwave",
+		},
+	}
+	body, _ := json.Marshal(payload)
+	httpReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, "https://api.flutterwave.com/v3/payments", bytes.NewReader(body))
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "checkout request failed")
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.FlutterwaveSecretKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "payment gateway unavailable")
+	}
+	defer resp.Body.Close()
+
+	var gatewayResp map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&gatewayResp); err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
+	}
+	if resp.StatusCode >= 300 {
+		return c.Status(fiber.StatusBadGateway).JSON(gatewayResp)
+	}
+
+	link := ""
+	if data, ok := gatewayResp["data"].(map[string]any); ok {
+		if rawLink, ok := data["link"].(string); ok {
+			link = rawLink
+		}
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"tx_ref":        txRef,
+		"gateway":       "flutterwave",
+		"checkout_link": link,
+		"redirect_url":  redirectURL,
+		"response":      gatewayResp,
 	})
 }
 

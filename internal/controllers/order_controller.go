@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -131,14 +132,14 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"order_id":      orderID,
-		"items_total":   itemsTotal,
-		"customs_fee":   customsFee,
-		"shipping_fee":  shippingFee,
-		"vat_fee":       vatFee,
+		"order_id":       orderID,
+		"items_total":    itemsTotal,
+		"customs_fee":    customsFee,
+		"shipping_fee":   shippingFee,
+		"vat_fee":        vatFee,
 		"stamp_duty_fee": stampDutyFee,
-		"grand_total":   grandTotal,
-		"currency":      currency,
+		"grand_total":    grandTotal,
+		"currency":       currency,
 	})
 }
 
@@ -234,6 +235,67 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 		},
 		"events":       events,
 		"batch_events": batchEvents,
+	})
+}
+
+func (o *OrderController) PaymentStatus(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	orderID := c.Params("order_id")
+
+	var status struct {
+		OrderStatus              string
+		CurrentStage             string
+		EscrowStatus             sql.NullString
+		DisputeStatus            sql.NullString
+		FlutterwaveTxRef         sql.NullString
+		FlutterwaveTransactionID sql.NullString
+		ReleasedAt               sql.NullTime
+	}
+	if err := o.db.QueryRow(c.Context(), `
+		SELECT o.order_status, o.current_tracking_stage,
+			el.escrow_status::text,
+			el.dispute_status::text,
+			el.flutterwave_tx_ref, el.flutterwave_transaction_id, el.released_at
+		FROM orders o
+		LEFT JOIN escrow_ledger el ON el.order_id = o.id
+		WHERE o.id = $1 AND o.user_id = $2
+	`, orderID, userID).Scan(
+		&status.OrderStatus,
+		&status.CurrentStage,
+		&status.EscrowStatus,
+		&status.DisputeStatus,
+		&status.FlutterwaveTxRef,
+		&status.FlutterwaveTransactionID,
+		&status.ReleasedAt,
+	); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payment status unavailable")
+	}
+
+	paymentState := "pending"
+	switch {
+	case status.EscrowStatus.Valid && status.EscrowStatus.String == "released":
+		paymentState = "released"
+	case status.EscrowStatus.Valid && status.EscrowStatus.String == "held_in_escrow":
+		paymentState = "settled"
+	case status.OrderStatus == "Paid":
+		paymentState = "processing"
+	}
+
+	return c.JSON(fiber.Map{
+		"order_id":                   orderID,
+		"order_status":               status.OrderStatus,
+		"current_tracking_stage":     status.CurrentStage,
+		"escrow_status":              status.EscrowStatus.String,
+		"dispute_status":             status.DisputeStatus.String,
+		"flutterwave_tx_ref":         status.FlutterwaveTxRef.String,
+		"flutterwave_transaction_id": status.FlutterwaveTransactionID.String,
+		"released_at": func() any {
+			if status.ReleasedAt.Valid {
+				return status.ReleasedAt.Time
+			}
+			return nil
+		}(),
+		"payment_state": paymentState,
 	})
 }
 

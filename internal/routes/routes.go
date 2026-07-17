@@ -78,6 +78,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
 	authed.Post("/checkout/quote", orders.QuoteCheckout)
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
+	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
+	authed.Post("/payments/flutterwave/checkout", payments.FlutterwaveCheckout)
 	authed.Post("/payments/tokenized-charge", payments.TokenizedCharge)
 	authed.Post("/uploads/presign", uploads.UserPresign)
 	authed.Get("/products/:product_id/reviews/mine", reviews.MyProductReview)
