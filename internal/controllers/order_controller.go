@@ -119,10 +119,19 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid variant")
 		}
+		// Use NULL for empty origin_hub_id to avoid FK violation
+		hubID := item.OriginHubID
+		if hubID == "" || hubID == "00000000-0000-0000-0000-000000000000" {
+			hubID = ""
+		}
+		var originHubID *string
+		if hubID != "" {
+			originHubID = &hubID
+		}
 		_, err = tx.Exec(c.Context(), `
-			INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, orderID, item.ProductID, item.OriginHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice)
+		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice)
 		if err != nil {
 			return err
 		}
