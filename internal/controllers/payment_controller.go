@@ -189,7 +189,16 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
 	}
 	if resp.StatusCode >= 300 {
-		return c.Status(fiber.StatusBadGateway).JSON(gatewayResp)
+		// Extract actual Flutterwave error message
+		errMsg := "payment declined by gateway"
+		if msg, ok := gatewayResp["message"].(string); ok && msg != "" {
+			errMsg = msg
+		} else if data, ok := gatewayResp["data"].(map[string]any); ok {
+			if msg, ok := data["message"].(string); ok && msg != "" {
+				errMsg = msg
+			}
+		}
+		return fiber.NewError(fiber.StatusBadGateway, errMsg)
 	}
 
 	link := ""
