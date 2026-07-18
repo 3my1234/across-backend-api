@@ -21,6 +21,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	ops := controllers.NewOpsController(db)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
+	xpController := controllers.NewXPController(db)
+	supportController := controllers.NewSupportController(db)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -90,4 +92,20 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/notifications/unread-count", notifications.UnreadCount)
 	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
+
+	// XP System
+	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)
+	authed.Get("/xp/balance", xpController.GetBalance)
+	authed.Get("/xp/history", xpController.GetHistory)
+	authed.Post("/orders/:order_id/xp-award", xpController.AwardPurchaseXP)
+
+	// Support Tickets
+	authed.Post("/support/tickets", supportController.CreateTicket)
+	authed.Get("/support/tickets", supportController.ListMyTickets)
+	authed.Get("/support/tickets/:ticket_id/messages", supportController.GetTicketMessages)
+
+	// Admin Support Tickets
+	catalogGroup.Get("/support/tickets", supportController.AdminListTickets)
+	catalogGroup.Post("/support/tickets/:ticket_id/reply", supportController.AdminReply)
+	catalogGroup.Post("/support/tickets/:ticket_id/close", supportController.AdminCloseTicket)
 }
