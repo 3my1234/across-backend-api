@@ -23,6 +23,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authController := controllers.NewAuthController(db, cfg)
 	xpController := controllers.NewXPController(db)
 	supportController := controllers.NewSupportController(db)
+	analyticsController := controllers.NewAnalyticsController(db)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -108,4 +109,13 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	catalogGroup.Get("/support/tickets", supportController.AdminListTickets)
 	catalogGroup.Post("/support/tickets/:ticket_id/reply", supportController.AdminReply)
 	catalogGroup.Post("/support/tickets/:ticket_id/close", supportController.AdminCloseTicket)
+
+	// Analytics (Admin I and Super Admin)
+	catalogGroup.Get("/analytics/daily-sales", analyticsController.GetDailySales)
+	catalogGroup.Get("/analytics/complaints", analyticsController.ListComplaints)
+	catalogGroup.Post("/analytics/complaints", analyticsController.CreateComplaint)
+	catalogGroup.Post("/analytics/complaints/:complaint_id/resolve", analyticsController.ResolveComplaint)
+
+	// Profit/Loss (Super Admin only)
+	superAdminGroup.Get("/analytics/profit-loss", analyticsController.GetProfitLoss)
 }
