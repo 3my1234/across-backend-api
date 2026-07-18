@@ -1,4 +1,4 @@
--- Per-order purchase tracking for Admin II
+me-- Per-order purchase tracking for Admin II
 ALTER TABLE order_items
   ADD COLUMN IF NOT EXISTS purchase_status TEXT NOT NULL DEFAULT 'pending'
     CHECK (purchase_status IN ('pending', 'purchased', 'failed')),

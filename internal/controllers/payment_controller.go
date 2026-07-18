@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"across/backend/internal/config"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -147,9 +149,15 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		})
 	}
 
+	// Parse amount as float64 - Flutterwave API requires numeric amount, not string
+	amountFloat, parseErr := parseAmount(req.Amount)
+	if parseErr != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid amount")
+	}
+
 	payload := map[string]any{
 		"tx_ref":          txRef,
-		"amount":          req.Amount,
+		"amount":          amountFloat,
 		"currency":        strings.ToUpper(req.Currency),
 		"redirect_url":    redirectURL,
 		"payment_options": "card,banktransfer,ussd",
@@ -200,7 +208,12 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 }
 
 func (p *PaymentController) mockPaymentsEnabled() bool {
-	return p.cfg.AppEnv != "production" && (p.cfg.FlutterwaveSecretKey == "" || p.cfg.FlutterwaveSecretKey == "FLWSECK_TEST_xxx")
+	// Mock payments only when we have NO live key configured
+	// Live keys start with "FLWSECK-" followed by the actual hash, not "FLWSECK_TEST_xxx"
+	hasLiveKey := p.cfg.FlutterwaveSecretKey != "" &&
+		!strings.HasPrefix(p.cfg.FlutterwaveSecretKey, "FLWSECK_TEST") &&
+		p.cfg.FlutterwaveSecretKey != "your-key"
+	return !hasLiveKey
 }
 
 type flutterwaveWebhook struct {
@@ -362,4 +375,8 @@ func parseOrderID(txRef string) (string, error) {
 func stringify(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func parseAmount(amount string) (float64, error) {
+	return strconv.ParseFloat(amount, 64)
 }
