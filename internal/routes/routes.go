@@ -24,6 +24,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	xpController := controllers.NewXPController(db)
 	supportController := controllers.NewSupportController(db)
 	analyticsController := controllers.NewAnalyticsController(db)
+	profileController := controllers.NewProfileController(db)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -118,4 +119,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	// Profit/Loss (Super Admin only)
 	superAdminGroup.Get("/analytics/profit-loss", analyticsController.GetProfitLoss)
+
+	// Profile
+	authed.Get("/profile", profileController.GetProfile)
+	authed.Put("/profile", profileController.UpdateProfile)
 }
