@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS notifications (
     'review_request',
     'dispute_opened',
     'dispute_resolved',
-    'escrow_released'
+    'escrow_released',
+    'xp_earned',
+    'ticket_reply'
   )),
   title TEXT NOT NULL,
   body TEXT NOT NULL,

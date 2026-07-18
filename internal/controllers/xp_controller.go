@@ -47,6 +47,9 @@ func (x *XPController) ClaimDailyLogin(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "transaction failed")
 	}
 
+	// Create notification
+	CreateNotification(c.Context(), x.db, userID, "", nil, "xp_earned", "Daily Login XP", "You earned 1 XP for logging in today!", nil)
+
 	return c.JSON(fiber.Map{"claimed": true, "message": "1 XP earned for daily login!", "xp": 1})
 }
 

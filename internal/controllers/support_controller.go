@@ -175,8 +175,17 @@ func (s *SupportController) AdminReply(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "message required")
 	}
 
+	// Get the user_id for this ticket
+	var userID string
+	err := s.db.QueryRow(c.Context(), `
+		SELECT user_id FROM support_tickets WHERE id = $1
+	`, ticketID).Scan(&userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "ticket not found")
+	}
+
 	// Add admin message
-	_, err := s.db.Exec(c.Context(), `
+	_, err = s.db.Exec(c.Context(), `
 		INSERT INTO support_messages(ticket_id, sender_type, sender_id, message)
 		VALUES ($1, 'admin', $2, $3)
 	`, ticketID, adminID, req.Message)
@@ -192,6 +201,9 @@ func (s *SupportController) AdminReply(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to update ticket")
 	}
+
+	// Notify the user
+	CreateNotification(c.Context(), s.db, userID, "", nil, "ticket_reply", "Support Ticket Updated", "An admin has replied to your support ticket.", nil)
 
 	return c.JSON(fiber.Map{"message": "Reply sent"})
 }
