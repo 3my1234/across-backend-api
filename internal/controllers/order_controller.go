@@ -90,18 +90,16 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 
 	customsFee := roundMoney(itemsTotal * 0.20)
-	shippingFee := estimateShipping(req.Items)
 	vatFee := 100.0
-	stampDutyFee := 170.0 // ₦170 ≈ $0.11 electronic stamp duty
-	grandTotal := roundMoney(itemsTotal + customsFee + shippingFee + vatFee + stampDutyFee)
+	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
 	deliveryPromise := time.Now().UTC().Add(21 * 24 * time.Hour)
 
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
 		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, shippingFee, customsFee, vatFee, stampDutyFee, deliveryPromise).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise).Scan(&orderID); err != nil {
 		return err
 	}
 
@@ -141,14 +139,12 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"order_id":       orderID,
-		"items_total":    itemsTotal,
-		"customs_fee":    customsFee,
-		"shipping_fee":   shippingFee,
-		"vat_fee":        vatFee,
-		"stamp_duty_fee": stampDutyFee,
-		"grand_total":    grandTotal,
-		"currency":       currency,
+		"order_id":    orderID,
+		"items_total": itemsTotal,
+		"customs_fee": customsFee,
+		"vat_fee":     vatFee,
+		"grand_total": grandTotal,
+		"currency":    currency,
 	})
 }
 
