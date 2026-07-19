@@ -31,6 +31,12 @@ type Config struct {
 	S3BucketName             string
 	AssetsCDNBase            string
 	PublicBaseURL            string
+	SMTPHost                 string
+	SMTPPort                 string
+	SMTPUsername             string
+	SMTPPassword             string
+	SMTPFromEmail            string
+	SMTPFromName             string
 }
 
 func Load() Config {
@@ -59,6 +65,12 @@ func Load() Config {
 		S3BucketName:             firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
 		AssetsCDNBase:            env("ASSETS_CDN_BASE", ""),
 		PublicBaseURL:            env("PUBLIC_BASE_URL", ""),
+		SMTPHost:                 env("SMTP_HOST", ""),
+		SMTPPort:                 env("SMTP_PORT", "587"),
+		SMTPUsername:             env("SMTP_USERNAME", ""),
+		SMTPPassword:             env("SMTP_PASSWORD", ""),
+		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@sportbanter.online"),
+		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
 	}
 }
 

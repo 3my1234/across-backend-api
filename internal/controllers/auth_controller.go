@@ -6,6 +6,7 @@ import (
 
 	"across/backend/internal/auth"
 	"across/backend/internal/config"
+	"across/backend/internal/services"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,6 +59,13 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	// Create welcome notification
 	CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
 		"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
+	// Send welcome email in background goroutine
+	go func(email, name string) {
+		svc := services.NewEmailService(a.cfg)
+		if err := svc.SendWelcomeEmail(email, name); err != nil {
+			// Log error but don't block signup
+		}
+	}(req.Email, req.FullName)
 	return a.respondSession(c, userID)
 }
 
