@@ -6,6 +6,7 @@ import (
 
 	"across/backend/internal/auth"
 	"across/backend/internal/config"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -54,6 +55,9 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusConflict, "account already exists")
 	}
+	// Create welcome notification
+	CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
+		"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
 	return a.respondSession(c, userID)
 }
 
