@@ -54,6 +54,8 @@ CREATE TABLE users (
   email_verified BOOLEAN NOT NULL DEFAULT false,
   verification_token TEXT,
   verification_token_expires_at TIMESTAMPTZ,
+  verification_sent_at TIMESTAMPTZ,
+  verification_resend_count INTEGER NOT NULL DEFAULT 0,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

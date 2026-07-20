@@ -40,6 +40,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Post("/auth/login", countryGuard, authController.Login)
 	v1.Post("/auth/gmail", countryGuard, authController.Gmail)
 	v1.Post("/auth/privy/verify", countryGuard, authController.VerifyPrivy)
+	v1.Post("/auth/resend-verification", countryGuard, authController.ResendVerification)
 	v1.Get("/auth/verify-email", authController.VerifyEmail)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 

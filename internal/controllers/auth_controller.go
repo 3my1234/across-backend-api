@@ -57,8 +57,8 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 
 	var userID string
 	err = a.db.QueryRow(c.Context(), `
-		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, false, false, $6, $7)
+		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at, verification_sent_at, verification_resend_count)
+		VALUES ($1, $2, NULLIF($3, ''), $4, $5, false, false, $6, $7, now(), 0)
 		RETURNING id
 	`, countryID, req.Email, strings.TrimSpace(req.Phone), string(hash), req.FullName, verificationToken, expiresAt).Scan(&userID)
 	if err != nil {
@@ -220,6 +220,8 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 			is_active = true,
 			verification_token = NULL,
 			verification_token_expires_at = NULL,
+			verification_sent_at = NULL,
+			verification_resend_count = 0,
 			updated_at = now()
 		WHERE verification_token = $1
 		  AND verification_token_expires_at >= now()
@@ -237,6 +239,62 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		"message": "email verified successfully",
 		"user_id": userID,
 	})
+}
+
+func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "email required")
+	}
+
+	var userID, fullName string
+	var emailVerified bool
+	var sentAt *time.Time
+	var resendCount int
+	err := a.db.QueryRow(c.Context(), `
+		SELECT id, full_name, email_verified, verification_sent_at, verification_resend_count
+		FROM users
+		WHERE email = $1
+	`, email).Scan(&userID, &fullName, &emailVerified, &sentAt, &resendCount)
+	if err != nil {
+		return c.JSON(fiber.Map{"message": "if the email exists, a verification message will be sent"})
+	}
+	if emailVerified {
+		return c.JSON(fiber.Map{"message": "account is already verified"})
+	}
+	if sentAt != nil && time.Since(*sentAt) < 5*time.Minute {
+		return fiber.NewError(fiber.StatusTooManyRequests, "please wait before requesting another verification email")
+	}
+
+	verificationToken, err := newVerificationToken()
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().Add(24 * time.Hour)
+	_, err = a.db.Exec(c.Context(), `
+		UPDATE users
+		SET verification_token = $2,
+			verification_token_expires_at = $3,
+			verification_sent_at = now(),
+			verification_resend_count = $4,
+			updated_at = now()
+		WHERE id = $1
+	`, userID, verificationToken, expiresAt, resendCount+1)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
+	}
+	if err := a.sendVerificationEmail(c, userID, email, fullName, verificationToken); err != nil {
+		return err
+	}
+	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Verification email resent",
+		"Please check your inbox to activate your account.", map[string]any{"verification_required": true})
+	return c.JSON(fiber.Map{"message": "verification email sent"})
 }
 
 func (a *AuthController) respondSession(c *fiber.Ctx, userID string) error {

@@ -1,0 +1,3 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS verification_resend_count INTEGER NOT NULL DEFAULT 0;
