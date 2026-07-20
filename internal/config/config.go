@@ -24,6 +24,7 @@ type Config struct {
 	PrivyAppID               string
 	PrivyVerificationMode    string
 	DefaultCountry           string
+	AllowedCountries         string
 	AdminBootstrapToken      string
 	AWSRegion                string
 	AWSAccessKeyID           string
@@ -58,6 +59,7 @@ func Load() Config {
 		PrivyAppID:               env("PRIVY_APP_ID", ""),
 		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "local"),
 		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
+		AllowedCountries:         env("ALLOWED_COUNTRIES", "NG"),
 		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),
 		AWSRegion:                env("AWS_REGION", "eu-north-1"),
 		AWSAccessKeyID:           env("AWS_ACCESS_KEY_ID", ""),

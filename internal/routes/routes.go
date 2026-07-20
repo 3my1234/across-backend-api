@@ -25,6 +25,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	supportController := controllers.NewSupportController(db)
 	analyticsController := controllers.NewAnalyticsController(db)
 	profileController := controllers.NewProfileController(db)
+	countryGuard := middleware.RequireAllowedCountry(cfg)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -35,10 +36,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
 	v1.Post("/dev/login", dev.Login)
-	v1.Post("/auth/signup", authController.Signup)
-	v1.Post("/auth/login", authController.Login)
-	v1.Post("/auth/gmail", authController.Gmail)
-	v1.Post("/auth/privy/verify", authController.VerifyPrivy)
+	v1.Post("/auth/signup", countryGuard, authController.Signup)
+	v1.Post("/auth/login", countryGuard, authController.Login)
+	v1.Post("/auth/gmail", countryGuard, authController.Gmail)
+	v1.Post("/auth/privy/verify", countryGuard, authController.VerifyPrivy)
 	v1.Get("/auth/verify-email", authController.VerifyEmail)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
@@ -81,11 +82,11 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed := v1.Group("", middleware.RequireAuth(cfg))
 	authed.Get("/auth/session", authController.Session)
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
-	authed.Post("/checkout/quote", orders.QuoteCheckout)
+	authed.Post("/checkout/quote", countryGuard, orders.QuoteCheckout)
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
 	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
-	authed.Post("/payments/flutterwave/checkout", payments.FlutterwaveCheckout)
-	authed.Post("/payments/tokenized-charge", payments.TokenizedCharge)
+	authed.Post("/payments/flutterwave/checkout", countryGuard, payments.FlutterwaveCheckout)
+	authed.Post("/payments/tokenized-charge", countryGuard, payments.TokenizedCharge)
 	authed.Post("/uploads/presign", uploads.UserPresign)
 	authed.Get("/products/:product_id/reviews/mine", reviews.MyProductReview)
 	authed.Put("/products/:product_id/reviews", reviews.UpsertProductReview)
@@ -123,5 +124,5 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	// Profile
 	authed.Get("/profile", profileController.GetProfile)
-	authed.Put("/profile", profileController.UpdateProfile)
+	authed.Put("/profile", countryGuard, profileController.UpdateProfile)
 }

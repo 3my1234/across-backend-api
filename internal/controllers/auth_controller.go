@@ -40,9 +40,6 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if req.FullName == "" || req.Email == "" || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name, email, and 8+ character password are required")
 	}
-	if err := requireNigeriaOnly(c); err != nil {
-		return err
-	}
 
 	countryID, err := ensureCountry(c, a.db)
 	if err != nil {
@@ -90,9 +87,6 @@ func (a *AuthController) Login(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if err := requireNigeriaOnly(c); err != nil {
-		return err
-	}
 
 	var userID, hash string
 	var emailVerified bool
@@ -120,9 +114,6 @@ func (a *AuthController) Gmail(c *fiber.Ctx) error {
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.FullName = strings.TrimSpace(req.FullName)
-	if err := requireNigeriaOnly(c); err != nil {
-		return err
-	}
 	if req.Email == "" || !strings.Contains(req.Email, "@gmail.") && !strings.HasSuffix(req.Email, "@gmail.com") {
 		return fiber.NewError(fiber.StatusBadRequest, "valid gmail address required")
 	}
@@ -164,9 +155,6 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	}
 	if token == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "privy token required")
-	}
-	if err := requireNigeriaOnly(c); err != nil {
-		return err
 	}
 
 	email, name, err := a.verifyPrivyToken(c, token)
@@ -275,14 +263,6 @@ func (a *AuthController) sendVerificationEmail(c *fiber.Ctx, userID, toEmail, to
 		return err
 	}
 	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Verify your email", "Check your inbox to verify your account.", map[string]any{"verification_link": link})
-	return nil
-}
-
-func requireNigeriaOnly(c *fiber.Ctx) error {
-	country := strings.ToUpper(strings.TrimSpace(c.Get("X-Client-Country-Code")))
-	if country != "" && country != "NG" {
-		return fiber.NewError(fiber.StatusForbidden, "service currently available in Nigeria only")
-	}
 	return nil
 }
 
