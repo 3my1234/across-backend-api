@@ -258,6 +258,13 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 	if err := p.initializeEscrow(c.Context(), orderID, event.Data.TxRef, stringify(event.Data.ID)); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
+	// Create payment notification
+	var userID, amount string
+	p.db.QueryRow(c.Context(), `SELECT user_id, total_amount::text FROM orders WHERE id = $1`, orderID).Scan(&userID, &amount)
+	if userID != "" {
+		CreateNotification(c.Context(), p.db, userID, orderID, nil, "payment_received",
+			"Payment Confirmed", "Your payment of NGN "+amount+" has been received. Your order is being processed.", nil)
+	}
 	return c.SendStatus(fiber.StatusOK)
 }
 
