@@ -47,3 +47,19 @@ func (e *EmailService) SendWelcomeEmail(toEmail, toName string) error {
 	auth := smtp.PlainAuth("", e.cfg.SMTPUsername, e.cfg.SMTPPassword, e.cfg.SMTPHost)
 	return smtp.SendMail(addr, auth, e.cfg.SMTPFromEmail, []string{toEmail}, msg)
 }
+
+func (e *EmailService) SendHTML(toEmail, subject, htmlBody string) error {
+	if e.cfg.SMTPHost == "" || e.cfg.SMTPUsername == "" {
+		return nil
+	}
+
+	msg := []byte("From: " + e.cfg.SMTPFromName + " <" + e.cfg.SMTPFromEmail + ">\r\n" +
+		"To: " + toEmail + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/html; charset=UTF-8\r\n\r\n" + htmlBody)
+
+	addr := e.cfg.SMTPHost + ":" + e.cfg.SMTPPort
+	auth := smtp.PlainAuth("", e.cfg.SMTPUsername, e.cfg.SMTPPassword, e.cfg.SMTPHost)
+	return smtp.SendMail(addr, auth, e.cfg.SMTPFromEmail, []string{toEmail}, msg)
+}

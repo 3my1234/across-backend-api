@@ -41,9 +41,19 @@ CREATE TABLE users (
   phone TEXT UNIQUE,
   password_hash TEXT NOT NULL,
   full_name TEXT NOT NULL,
+  avatar_url TEXT NOT NULL DEFAULT '',
+  region TEXT NOT NULL DEFAULT '',
+  date_of_birth DATE,
+  address TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  postal_code TEXT NOT NULL DEFAULT '',
   default_shipping_address JSONB NOT NULL DEFAULT '{}'::jsonb,
   default_billing_address JSONB NOT NULL DEFAULT '{}'::jsonb,
   flutterwave_token TEXT,
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  verification_token TEXT,
+  verification_token_expires_at TIMESTAMPTZ,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -233,3 +243,64 @@ CREATE INDEX idx_escrow_worker_due ON escrow_ledger(escrow_lock_expiry)
   WHERE dispute_status = 'none' AND escrow_status = 'held_in_escrow';
 CREATE INDEX idx_tracking_order_time ON tracking_events(order_id, occurred_at);
 CREATE INDEX idx_batch_events_batch_time ON batch_events(batch_id, created_at);
+
+-- Notifications
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+  batch_id UUID REFERENCES order_batches(id) ON DELETE SET NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_notifications_user_created ON notifications(user_id, created_at DESC);
+
+-- XP System
+CREATE TABLE xp_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  reference_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_xp_transactions_user ON xp_transactions(user_id, created_at DESC);
+CREATE INDEX idx_xp_transactions_ref ON xp_transactions(reference_id);
+
+CREATE TABLE xp_daily_login (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  claim_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  xp_awarded INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, claim_date)
+);
+
+-- Materialized XP balance view
+CREATE VIEW user_xp_balance AS
+  SELECT user_id, COALESCE(SUM(amount), 0)::int AS total_xp
+  FROM xp_transactions GROUP BY user_id;
+
+-- Support tickets
+CREATE TABLE support_tickets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subject TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'closed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE support_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+  sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'admin')),
+  sender_id UUID NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
