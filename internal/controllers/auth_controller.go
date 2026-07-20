@@ -128,7 +128,7 @@ func (a *AuthController) Gmail(c *fiber.Ctx) error {
 	var userID string
 	err = a.db.QueryRow(c.Context(), `
 		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified)
-		VALUES ($1, $2, 'gmail-oauth-placeholder', $3)
+		VALUES ($1, $2, 'gmail-oauth-placeholder', $3, true, true)
 		ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, is_active = true, email_verified = true, updated_at = now()
 		RETURNING id
 	`, countryID, req.Email, req.FullName).Scan(&userID)
@@ -169,7 +169,7 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	var userID string
 	err = a.db.QueryRow(c.Context(), `
 		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified)
-		VALUES ($1, $2, 'privy-google-oauth', $3)
+		VALUES ($1, $2, 'privy-google-oauth', $3, true, true)
 		ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, is_active = true, email_verified = true, updated_at = now()
 		RETURNING id
 	`, countryID, email, name).Scan(&userID)
