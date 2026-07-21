@@ -22,7 +22,8 @@ type Config struct {
 	FlutterwaveSecretKey     string
 	FlutterwaveWebhookSecret string
 	PrivyAppID               string
-	PrivyVerificationMode    string
+	PrivyAppSecret           string
+	PrivyVerificationKey     string
 	DefaultCountry           string
 	AllowedCountries         string
 	AdminBootstrapToken      string
@@ -57,7 +58,8 @@ func Load() Config {
 		FlutterwaveSecretKey:     env("FLUTTERWAVE_SECRET_KEY", ""),
 		FlutterwaveWebhookSecret: env("FLUTTERWAVE_WEBHOOK_SECRET", ""),
 		PrivyAppID:               env("PRIVY_APP_ID", ""),
-		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "local"),
+		PrivyAppSecret:           env("PRIVY_APP_SECRET", ""),
+		PrivyVerificationKey:     env("PRIVY_VERIFICATION_KEY", ""),
 		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
 		AllowedCountries:         env("ALLOWED_COUNTRIES", "NG"),
 		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),

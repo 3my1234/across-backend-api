@@ -293,13 +293,12 @@ func (a *AdminController) ListOrders(c *fiber.Ctx) error {
 
 func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 	rows, err := a.db.Query(c.Context(), `
-		SELECT o.id, u.email, o.total_amount, o.currency_code, o.order_status,
-			COALESCE(el.escrow_status::text, 'not_initialized'),
-			COALESCE(el.dispute_status::text, 'none'),
-			COALESCE(el.flutterwave_tx_ref, ''), o.created_at
+		SELECT o.id, u.email, o.total_amount, o.currency_code, o.order_status::text,
+			COALESCE(o.flutterwave_tx_ref, ''),
+			COALESCE(o.flutterwave_transaction_id, ''),
+			o.paid_at, o.created_at
 		FROM orders o
 		JOIN users u ON u.id = o.user_id
-		LEFT JOIN escrow_ledger el ON el.order_id = o.id
 		ORDER BY o.created_at DESC
 		LIMIT 500
 	`)
@@ -309,21 +308,26 @@ func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 	defer rows.Close()
 	transactions := make([]fiber.Map, 0)
 	for rows.Next() {
-		var id, email, currency, orderStatus, escrowStatus, disputeStatus, txRef string
+		var id, email, currency, orderStatus, txRef, transactionID string
 		var total float64
+		var paidAt *time.Time
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &total, &currency, &orderStatus, &escrowStatus, &disputeStatus, &txRef, &createdAt); err != nil {
+		if err := rows.Scan(&id, &email, &total, &currency, &orderStatus, &txRef, &transactionID, &paidAt, &createdAt); err != nil {
 			return err
+		}
+		paymentStatus := "pending"
+		if paidAt != nil {
+			paymentStatus = "settled"
 		}
 		transactions = append(transactions, fiber.Map{
 			"order_id": id, "email": email, "total_amount": total, "currency": currency,
-			"order_status": orderStatus, "escrow_status": escrowStatus, "dispute_status": disputeStatus,
-			"flutterwave_tx_ref": txRef, "created_at": createdAt,
+			"order_status": orderStatus, "payment_status": paymentStatus,
+			"flutterwave_tx_ref": txRef, "flutterwave_transaction_id": transactionID,
+			"paid_at": paidAt, "created_at": createdAt,
 		})
 	}
 	return c.JSON(fiber.Map{"transactions": transactions})
 }
-
 func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	var req struct {
 		SKU                  string         `json:"sku"`
@@ -999,45 +1003,6 @@ func (a *AdminController) BatchScanTracking(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (a *AdminController) SettleEscrow(c *fiber.Ctx) error {
-	var req struct {
-		OrderIDs []string `json:"order_ids"`
-	}
-	if err := c.BodyParser(&req); err != nil || len(req.OrderIDs) == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
-	}
-	tx, err := a.db.Begin(c.Context())
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(c.Context())
-	for _, orderID := range req.OrderIDs {
-		tag, err := tx.Exec(c.Context(), `
-		UPDATE escrow_ledger
-		SET escrow_status = 'released', released_at = now(), updated_at = now()
-		WHERE order_id = $1 AND dispute_status <> 'active'
-	`, orderID)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			continue
-		}
-		_, err = tx.Exec(c.Context(), `
-		UPDATE orders
-		SET order_status = 'Completed', ready_for_manual_settlement = false, updated_at = now()
-		WHERE id = $1
-	`, orderID)
-		if err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(c.Context()); err != nil {
-		return err
-	}
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
 func (a *AdminController) sendBatchNotifications(batchID, status string, location *string) {
 	loc := ""
 	if location != nil {
@@ -1076,40 +1041,11 @@ func (a *AdminController) sendBatchNotifications(batchID, status string, locatio
 	case "completed":
 		notifyType = "delivered"
 		title = "Package delivered"
-		body = "Your order has been marked as delivered. Please check and confirm receipt in the app."
+		body = "Your order has been delivered. You can now review your purchase in the app."
 	}
 
 	if notifyType != "" {
 		data := map[string]any{"location": loc}
 		_ = notifyBatchUsers(ctx, a.db, batchID, notifyType, title, body, data)
 	}
-}
-
-func (a *AdminController) FreezeDispute(c *fiber.Ctx) error {
-	orderID := c.Params("order_id")
-	tx, err := a.db.Begin(c.Context())
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(c.Context())
-	_, err = tx.Exec(c.Context(), `
-		UPDATE escrow_ledger
-		SET escrow_status = 'frozen', dispute_status = 'active', updated_at = now()
-		WHERE order_id = $1
-	`, orderID)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(c.Context(), `
-		UPDATE orders
-		SET order_status = 'Disputed', updated_at = now()
-		WHERE id = $1
-	`, orderID)
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(c.Context()); err != nil {
-		return err
-	}
-	return c.SendStatus(fiber.StatusNoContent)
 }

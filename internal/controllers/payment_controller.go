@@ -17,6 +17,7 @@ import (
 	"across/backend/internal/config"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -67,9 +68,19 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "saved payment token unavailable")
 	}
 
+	var orderAmount float64
+	var orderCurrency, orderStatus string
+	err = p.db.QueryRow(c.Context(), `SELECT total_amount, currency_code, order_status::text FROM orders WHERE id = $1 AND user_id = $2`, req.OrderID, userID).Scan(&orderAmount, &orderCurrency, &orderStatus)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
+	}
+	if orderStatus != "Pending" {
+		return fiber.NewError(fiber.StatusConflict, "order is not payable")
+	}
+
 	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
 	if p.mockPaymentsEnabled() {
-		if err := p.initializeEscrow(c.Context(), req.OrderID, txRef, "local-dev"); err != nil {
+		if err := p.settleOrderPayment(c.Context(), req.OrderID, txRef, "local-dev", orderAmount, orderCurrency); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
 		}
 		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
@@ -80,8 +91,8 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	}
 	payload := map[string]any{
 		"token":    token,
-		"currency": req.Currency,
-		"amount":   req.Amount,
+		"currency": orderCurrency,
+		"amount":   orderAmount,
 		"email":    email,
 		"tx_ref":   txRef,
 	}
@@ -134,10 +145,20 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
 	}
 
+	var orderAmount float64
+	var orderCurrency, orderStatus string
+	err = p.db.QueryRow(c.Context(), `SELECT total_amount, currency_code, order_status::text FROM orders WHERE id = $1 AND user_id = $2`, req.OrderID, userID).Scan(&orderAmount, &orderCurrency, &orderStatus)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
+	}
+	if orderStatus != "Pending" {
+		return fiber.NewError(fiber.StatusConflict, "order is not payable")
+	}
+
 	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
 	redirectURL := strings.TrimSpace(req.RedirectURL)
 	if redirectURL == "" {
-		redirectURL = "across-test://payments/flutterwave"
+		redirectURL = "across://payments/flutterwave"
 	}
 	if p.mockPaymentsEnabled() {
 		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
@@ -149,16 +170,10 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		})
 	}
 
-	// Parse amount as float64 - Flutterwave API requires numeric amount, not string
-	amountFloat, parseErr := parseAmount(req.Amount)
-	if parseErr != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid amount")
-	}
-
 	payload := map[string]any{
 		"tx_ref":          txRef,
-		"amount":          amountFloat,
-		"currency":        strings.ToUpper(req.Currency),
+		"amount":          orderAmount,
+		"currency":        strings.ToUpper(orderCurrency),
 		"redirect_url":    redirectURL,
 		"payment_options": "card,banktransfer,ussd",
 		"customer": map[string]any{
@@ -255,7 +270,11 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid tx_ref")
 	}
 
-	if err := p.initializeEscrow(c.Context(), orderID, event.Data.TxRef, stringify(event.Data.ID)); err != nil {
+	paidAmount, err := amountValue(event.Data.Amount)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payment amount")
+	}
+	if err := p.settleOrderPayment(c.Context(), orderID, event.Data.TxRef, stringify(event.Data.ID), paidAmount, event.Data.Currency); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
 	var userID, amount string
@@ -291,22 +310,34 @@ func (p *PaymentController) validWebhook(raw []byte, signature string) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
-func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef, gatewayID string) error {
+func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txRef, gatewayID string, paidAmount float64, paidCurrency string) error {
 	tx, err := p.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	var countryID, currencyCode string
+	var countryID, currencyCode, orderStatus, existingTxRef string
 	var orderAmount float64
 	var promisedAt time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT country_id, currency_code, total_amount, COALESCE(delivery_promised_at, now() + interval '14 days')
+		SELECT country_id, currency_code, total_amount,
+			COALESCE(delivery_promised_at, now() + interval '14 days'),
+			order_status::text, COALESCE(flutterwave_tx_ref, '')
 		FROM orders
 		WHERE id = $1
-	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt); err != nil {
+		FOR UPDATE
+	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt, &orderStatus, &existingTxRef); err != nil {
 		return err
+	}
+	if !strings.EqualFold(currencyCode, strings.TrimSpace(paidCurrency)) || paidAmount+0.001 < orderAmount {
+		return errors.New("payment amount or currency does not match order")
+	}
+	if orderStatus != "Pending" {
+		if existingTxRef == txRef && (orderStatus == "Paid" || orderStatus == "Shipped" || orderStatus == "Delivered" || orderStatus == "Completed") {
+			return tx.Commit(ctx)
+		}
+		return errors.New("order is not payable")
 	}
 
 	batchID, batchCode, err := p.ensureDailyBatch(ctx, tx, countryID, promisedAt, orderAmount)
@@ -320,9 +351,12 @@ func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef
 		SET order_status = 'Paid',
 			batch_id = $2,
 			package_label = COALESCE(NULLIF(package_label, ''), $3),
+			flutterwave_tx_ref = $4,
+			flutterwave_transaction_id = $5,
+			paid_at = COALESCE(paid_at, now()),
 			updated_at = now()
 		WHERE id = $1 AND order_status = 'Pending'
-	`, orderID, batchID, packageLabel)
+	`, orderID, batchID, packageLabel, txRef, gatewayID)
 	if err != nil {
 		return err
 	}
@@ -330,25 +364,8 @@ func (p *PaymentController) initializeEscrow(ctx context.Context, orderID, txRef
 		return errors.New("order is not payable")
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO escrow_ledger (
-			order_id, amount, currency_code, escrow_status, escrow_lock_expiry,
-			dispute_status, flutterwave_tx_ref, flutterwave_transaction_id
-		)
-		SELECT id, total_amount, currency_code, 'held_in_escrow',
-			COALESCE(delivery_promised_at, now() + interval '14 days') + interval '3 days',
-			'none', $2, $3
-		FROM orders
-		WHERE id = $1
-		ON CONFLICT (order_id) DO NOTHING
-	`, orderID, txRef, gatewayID)
-	if err != nil {
-		return err
-	}
-
 	return tx.Commit(ctx)
 }
-
 func (p *PaymentController) ensureDailyBatch(ctx context.Context, tx pgx.Tx, countryID string, promisedAt time.Time, orderAmount float64) (string, string, error) {
 	batchDate := time.Now().UTC().Format("2006-01-02")
 	batchCode := fmt.Sprintf("BATCH-%s", strings.ReplaceAll(batchDate, "-", ""))
@@ -386,18 +403,19 @@ func shortOrderLabel(orderID string) string {
 
 func parseOrderID(txRef string) (string, error) {
 	const prefix = "ACROSS-"
-	if len(txRef) <= len(prefix) || txRef[:len(prefix)] != prefix {
+	if !strings.HasPrefix(txRef, prefix) {
 		return "", errors.New("missing prefix")
 	}
-	rest := txRef[len(prefix):]
-	for i := range rest {
-		if rest[i] == '-' {
-			return rest[:i], nil
-		}
+	rest := strings.TrimPrefix(txRef, prefix)
+	if len(rest) < 37 || rest[36] != '-' {
+		return "", errors.New("invalid order reference")
 	}
-	return "", errors.New("missing timestamp")
+	orderID := rest[:36]
+	if _, err := uuid.Parse(orderID); err != nil {
+		return "", errors.New("invalid order id")
+	}
+	return orderID, nil
 }
-
 func stringify(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
@@ -405,4 +423,15 @@ func stringify(v any) string {
 
 func parseAmount(amount string) (float64, error) {
 	return strconv.ParseFloat(amount, 64)
+}
+
+func amountValue(amount any) (float64, error) {
+	switch value := amount.(type) {
+	case float64:
+		return value, nil
+	case string:
+		return parseAmount(value)
+	default:
+		return parseAmount(fmt.Sprint(value))
+	}
 }

@@ -11,7 +11,6 @@ import (
 
 func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
-	escrow := controllers.NewEscrowController(db)
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db)
 	catalog := controllers.NewCatalogController(db, cfg)
@@ -69,8 +68,6 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	opsGroup.Get("/batches/:batch_id/orders", admin.ListBatchOrders)
 	opsGroup.Get("/manifest/pending", admin.PendingManifest)
 	opsGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
-	opsGroup.Post("/escrow/settle", admin.SettleEscrow)
-	opsGroup.Post("/orders/:order_id/dispute-freeze", admin.FreezeDispute)
 	// Admin II: Purchase management
 	opsGroup.Get("/batches/:batch_id/purchase-manifest", ops.GetPurchaseManifest)
 	opsGroup.Post("/batches/:batch_id/purchase-confirm", ops.ConfirmPurchase)
@@ -92,8 +89,6 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/uploads/presign", uploads.UserPresign)
 	authed.Get("/products/:product_id/reviews/mine", reviews.MyProductReview)
 	authed.Put("/products/:product_id/reviews", reviews.UpsertProductReview)
-	authed.Post("/orders/:order_id/escrow/confirm-receipt", escrow.ConfirmReceipt)
-	authed.Post("/orders/:order_id/disputes", escrow.OpenDispute)
 	authed.Get("/notifications", notifications.List)
 	authed.Get("/notifications/unread-count", notifications.UnreadCount)
 	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)

@@ -1,11 +1,16 @@
 package controllers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,19 +19,26 @@ import (
 	"across/backend/internal/services"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthController struct {
-	db    *pgxpool.Pool
-	cfg   config.Config
-	email *services.EmailService
+	db         *pgxpool.Pool
+	cfg        config.Config
+	email      *services.EmailService
+	httpClient *http.Client
 }
 
 func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
-	return &AuthController{db: db, cfg: cfg, email: services.NewEmailService(cfg)}
+	return &AuthController{
+		db:         db,
+		cfg:        cfg,
+		email:      services.NewEmailService(cfg),
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 func (a *AuthController) Signup(c *fiber.Ctx) error {
@@ -173,9 +185,10 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "privy token required")
 	}
 
-	email, name, err := a.verifyPrivyToken(c, token)
+	email, name, privyUserID, err := a.verifyPrivyToken(c.Context(), token)
 	if err != nil {
-		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+		log.Printf("privy verification failed: %v", err)
+		return fiber.NewError(fiber.StatusUnauthorized, "Google sign-in verification failed")
 	}
 
 	countryID, err := ensureCountry(c, a.db)
@@ -183,41 +196,112 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 		return err
 	}
 	var userID string
+	var created bool
 	err = a.db.QueryRow(c.Context(), `
-		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified)
-		VALUES ($1, $2, 'privy-google-oauth', $3, true, true)
-		ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, is_active = true, email_verified = true, updated_at = now()
-		RETURNING id
-	`, countryID, email, name).Scan(&userID)
+		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified, privy_user_id)
+		VALUES ($1, $2, 'privy-google-oauth', $3, true, true, $4)
+		ON CONFLICT (email) DO UPDATE SET
+			full_name = EXCLUDED.full_name,
+			privy_user_id = EXCLUDED.privy_user_id,
+			is_active = true,
+			email_verified = true,
+			updated_at = now()
+		RETURNING id, (xmax = 0)
+	`, countryID, email, name, privyUserID).Scan(&userID, &created)
 	if err != nil {
 		return err
 	}
-	_ = a.email.SendWelcomeEmail(email, name)
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
-		"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
+	if created {
+		_ = a.email.SendWelcomeEmail(email, name)
+		_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
+			"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
+	}
 	return a.respondSession(c, userID)
 }
-
-func (a *AuthController) verifyPrivyToken(c *fiber.Ctx, token string) (string, string, error) {
-	if a.cfg.PrivyVerificationMode == "local" {
-		var req struct {
-			Email    string `json:"email"`
-			FullName string `json:"full_name"`
-		}
-		_ = c.BodyParser(&req)
-		email := strings.ToLower(strings.TrimSpace(req.Email))
-		if email == "" {
-			email = "privy.local@across.dev"
-		}
-		name := strings.TrimSpace(req.FullName)
-		if name == "" {
-			name = "Across Google Buyer"
-		}
-		return email, name, nil
+func (a *AuthController) verifyPrivyToken(ctx context.Context, token string) (string, string, string, error) {
+	if a.cfg.PrivyAppID == "" || a.cfg.PrivyAppSecret == "" || a.cfg.PrivyVerificationKey == "" {
+		return "", "", "", errors.New("Privy server credentials are incomplete")
 	}
-	return "", "", fiber.NewError(fiber.StatusNotImplemented, "server-side Privy JWT verification is not configured")
-}
 
+	verificationKey := strings.ReplaceAll(strings.TrimSpace(a.cfg.PrivyVerificationKey), `\n`, "\n")
+	publicKey, err := jwt.ParseECPublicKeyFromPEM([]byte(verificationKey))
+	if err != nil {
+		return "", "", "", fmt.Errorf("parse Privy verification key: %w", err)
+	}
+
+	claims := &jwt.RegisteredClaims{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(parsedToken *jwt.Token) (any, error) {
+		return publicKey, nil
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer("privy.io"), jwt.WithAudience(a.cfg.PrivyAppID), jwt.WithExpirationRequired())
+	if err != nil {
+		return "", "", "", fmt.Errorf("invalid Privy access token: %w", err)
+	}
+	if !parsed.Valid || strings.TrimSpace(claims.Subject) == "" {
+		return "", "", "", errors.New("invalid Privy access token claims")
+	}
+
+	privyUserID := strings.TrimSpace(claims.Subject)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.privy.io/v1/users/"+url.PathEscape(privyUserID), nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	request.SetBasicAuth(a.cfg.PrivyAppID, a.cfg.PrivyAppSecret)
+	request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
+
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return "", "", "", fmt.Errorf("fetch Privy user: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf("fetch Privy user returned HTTP %d", response.StatusCode)
+	}
+
+	var privyUser struct {
+		ID             string `json:"id"`
+		LinkedAccounts []struct {
+			Type    string `json:"type"`
+			Address string `json:"address"`
+			Email   string `json:"email"`
+			Name    string `json:"name"`
+		} `json:"linked_accounts"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&privyUser); err != nil {
+		return "", "", "", fmt.Errorf("decode Privy user: %w", err)
+	}
+	if privyUser.ID != privyUserID {
+		return "", "", "", errors.New("Privy user identity mismatch")
+	}
+
+	email := ""
+	name := ""
+	for _, account := range privyUser.LinkedAccounts {
+		if account.Type == "google_oauth" {
+			email = strings.TrimSpace(account.Email)
+			name = strings.TrimSpace(account.Name)
+			break
+		}
+	}
+	if email == "" {
+		for _, account := range privyUser.LinkedAccounts {
+			if account.Type == "email" {
+				email = strings.TrimSpace(account.Address)
+				break
+			}
+		}
+	}
+	email, validEmail := normalizeEmail(email)
+	if !validEmail {
+		return "", "", "", errors.New("Privy user has no verified email account")
+	}
+	if name == "" {
+		name = strings.TrimSpace(strings.Split(email, "@")[0])
+	}
+	if name == "" {
+		name = "Atlantic Express Buyer"
+	}
+	return email, name, privyUserID, nil
+}
 func (a *AuthController) Session(c *fiber.Ctx) error {
 	userID := c.Locals("user_id")
 	return c.JSON(fiber.Map{"authenticated": true, "user_id": userID})

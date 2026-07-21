@@ -245,11 +245,11 @@ func (o *OpsController) ConfirmDelivered(c *fiber.Ctx) error {
 	for _, orderID := range req.OrderIDs {
 		data := map[string]any{
 			"order_id": orderID,
-			"message":  "Please confirm you received your package. You have 3 days to raise a dispute, or leave a review and earn ₦500 off your next order!",
+			"message":  "Your package has been delivered. Leave a review to earn ₦500 off your next order!",
 		}
 		_ = CreateNotification(c.Context(), o.db, "", orderID, nil, "confirm_receipt",
-			"Package delivered! Confirm receipt",
-			"Your package has been delivered. Please confirm receipt in the app. You have 3 days to raise a dispute, or leave a review to earn ₦500 off your next purchase!",
+			"Package delivered!",
+			"Your package has been delivered. Leave a review to earn ₦500 off your next purchase!",
 			data)
 	}
 

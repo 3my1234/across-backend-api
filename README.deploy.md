@@ -41,22 +41,7 @@ JWT_SECRET=replace-with-long-random-secret
 FLUTTERWAVE_SECRET_KEY=replace-with-flutterwave-secret-key
 FLUTTERWAVE_WEBHOOK_SECRET=replace-with-webhook-secret
 PRIVY_APP_ID=replace-with-privy-app-id
-PRIVY_VERIFICATION_MODE=local
+PRIVY_APP_SECRET=replace-with-privy-app-secret
+PRIVY_VERIFICATION_KEY=replace-with-privy-es256-public-key
 DEFAULT_COUNTRY=NG
 ```
-
-## Worker
-
-The escrow worker is a separate long-running process. Deploy it as a second Coolify service using:
-
-```text
-Dockerfile.worker
-```
-
-It must share the same PostgreSQL and Redis environment variables as the API.
-
-## Database
-
-The API runs SQL migrations on startup from the bundled `migrations/` directory.
-The first boot on an already-initialized database will mark `schema.sql` as applied
-and then apply any later migration files in order.
