@@ -135,6 +135,13 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		}
 	}
 
+	if _, err := tx.Exec(c.Context(), `
+		INSERT INTO tracking_events(order_id, stage, notes)
+		VALUES ($1, 'Order Placed', 'Order created')
+	`, orderID); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(c.Context()); err != nil {
 		return err
 	}
@@ -146,6 +153,47 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		"grand_total": grandTotal,
 		"currency":    currency,
 	})
+}
+
+func (o *OrderController) ListOrders(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	rows, err := o.db.Query(c.Context(), `
+		SELECT o.id, o.currency_code, o.total_amount, o.shipping_fee, o.customs_fee, o.vat_fee,
+			o.order_status::text, o.current_tracking_stage::text, COALESCE(o.package_label, ''),
+			o.created_at,
+			COALESCE((SELECT SUM(oi.quantity)::int FROM order_items oi WHERE oi.order_id = o.id), 0),
+			COALESCE((SELECT string_agg(oi.title, ', ' ORDER BY oi.created_at) FROM order_items oi WHERE oi.order_id = o.id), '')
+		FROM orders o
+		WHERE o.user_id = $1
+		ORDER BY o.created_at DESC
+	`, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
+	}
+	defer rows.Close()
+
+	orders := make([]fiber.Map, 0)
+	for rows.Next() {
+		var id, currency, status, stage, packageLabel, itemsSummary string
+		var totalAmount, shippingFee, customsFee, vatFee float64
+		var createdAt time.Time
+		var itemCount int
+		if err := rows.Scan(&id, &currency, &totalAmount, &shippingFee, &customsFee, &vatFee,
+			&status, &stage, &packageLabel, &createdAt, &itemCount, &itemsSummary); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
+		}
+		orders = append(orders, fiber.Map{
+			"id": id, "currency": currency, "total_amount": totalAmount,
+			"shipping_fee": shippingFee, "customs_fee": customsFee, "vat_fee": vatFee,
+			"order_status": status, "current_tracking_stage": stage,
+			"package_label": packageLabel, "created_at": createdAt,
+			"item_count": itemCount, "items_summary": itemsSummary,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
+	}
+	return c.JSON(fiber.Map{"orders": orders})
 }
 
 func (o *OrderController) Tracking(c *fiber.Ctx) error {

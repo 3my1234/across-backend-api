@@ -69,7 +69,10 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fiber.NewError(fiber.StatusConflict, "account already exists; sign in or resend verification")
+			if pgErr.ConstraintName == "users_phone_key" {
+				return fiber.NewError(fiber.StatusConflict, "phone number is already linked to another account")
+			}
+			return fiber.NewError(fiber.StatusConflict, "email account already exists; sign in or resend verification")
 		}
 		log.Printf("signup insert failed: %v", err)
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")

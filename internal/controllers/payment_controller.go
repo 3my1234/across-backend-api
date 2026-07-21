@@ -263,6 +263,17 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 	if userID != "" {
 		_ = CreateNotification(c.Context(), p.db, userID, orderID, nil, "payment_received",
 			"Payment Confirmed", "Your payment of NGN "+amount+" has been received. Your order is being processed.", nil)
+		tag, awardErr := p.db.Exec(c.Context(), `
+			INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
+			SELECT $1, 50, 'purchase', 'purchase-' || $2
+			WHERE NOT EXISTS (
+				SELECT 1 FROM xp_transactions WHERE user_id = $1 AND reference_id = 'purchase-' || $2
+			)
+		`, userID, orderID)
+		if awardErr == nil && tag.RowsAffected() > 0 {
+			_ = CreateNotification(c.Context(), p.db, userID, orderID, nil, "xp_earned",
+				"Purchase XP earned", "You earned 50 XP for your purchase!", map[string]any{"xp": 50})
+		}
 	}
 	return c.SendStatus(fiber.StatusOK)
 }

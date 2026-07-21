@@ -84,6 +84,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/auth/session", authController.Session)
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
 	authed.Post("/checkout/quote", countryGuard, orders.QuoteCheckout)
+	authed.Get("/orders", orders.ListOrders)
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
 	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
 	authed.Post("/payments/flutterwave/checkout", countryGuard, payments.FlutterwaveCheckout)
