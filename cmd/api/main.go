@@ -36,7 +36,7 @@ func main() {
 	app.Use(requestid.New())
 	app.Use(recover.New())
 	app.Use(logger.New(logger.Config{
-		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${resHeader:X-Request-ID} error=${error}\n",
+		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${locals:requestid} error=${error}\n",
 	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.AllowedOrigins,
