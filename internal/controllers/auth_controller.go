@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"across/backend/internal/auth"
@@ -25,11 +26,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+var errPrivyNotConfigured = errors.New("Privy server credentials are incomplete")
+
 type AuthController struct {
-	db         *pgxpool.Pool
-	cfg        config.Config
-	email      *services.EmailService
-	httpClient *http.Client
+	db                   *pgxpool.Pool
+	cfg                  config.Config
+	email                *services.EmailService
+	httpClient           *http.Client
+	privyKeyMu           sync.RWMutex
+	privyVerificationKey string
 }
 
 func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
@@ -188,7 +193,10 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	email, name, privyUserID, err := a.verifyPrivyToken(c.Context(), token)
 	if err != nil {
 		log.Printf("privy verification failed: %v", err)
-		return fiber.NewError(fiber.StatusUnauthorized, "Google sign-in verification failed")
+		if errors.Is(err, errPrivyNotConfigured) {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "Google sign-in is not configured on the server")
+		}
+		return fiber.NewError(fiber.StatusUnauthorized, "Google session verification failed; please sign in again")
 	}
 
 	countryID, err := ensureCountry(c, a.db)
@@ -218,30 +226,84 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	}
 	return a.respondSession(c, userID)
 }
-func (a *AuthController) verifyPrivyToken(ctx context.Context, token string) (string, string, string, error) {
-	if a.cfg.PrivyAppID == "" || a.cfg.PrivyAppSecret == "" || a.cfg.PrivyVerificationKey == "" {
-		return "", "", "", errors.New("Privy server credentials are incomplete")
+func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, error) {
+	a.privyKeyMu.RLock()
+	cached := a.privyVerificationKey
+	a.privyKeyMu.RUnlock()
+	if cached != "" {
+		return cached, nil
 	}
 
-	verificationKey := strings.ReplaceAll(strings.TrimSpace(a.cfg.PrivyVerificationKey), `\n`, "\n")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://auth.privy.io/api/v1/apps/"+url.PathEscape(a.cfg.PrivyAppID), nil)
+	if err != nil {
+		return "", err
+	}
+	request.SetBasicAuth(a.cfg.PrivyAppID, a.cfg.PrivyAppSecret)
+	request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
+	request.Header.Set("privy-client", "across-backend")
+
+	response, err := a.httpClient.Do(request)
+	if err == nil {
+		defer response.Body.Close()
+		if response.StatusCode == http.StatusOK {
+			var settings struct {
+				VerificationKey string `json:"verification_key"`
+			}
+			if decodeErr := json.NewDecoder(response.Body).Decode(&settings); decodeErr == nil && strings.TrimSpace(settings.VerificationKey) != "" {
+				key := strings.TrimSpace(settings.VerificationKey)
+				a.privyKeyMu.Lock()
+				a.privyVerificationKey = key
+				a.privyKeyMu.Unlock()
+				return key, nil
+			}
+		}
+	}
+
+	fallback := strings.TrimSpace(a.cfg.PrivyVerificationKey)
+	if fallback != "" {
+		a.privyKeyMu.Lock()
+		a.privyVerificationKey = fallback
+		a.privyKeyMu.Unlock()
+		return fallback, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("fetch Privy verification key: %w", err)
+	}
+	return "", errors.New("Privy verification key unavailable")
+}
+func verifyPrivyAccessToken(token, verificationKey, appID string) (string, error) {
+	verificationKey = strings.ReplaceAll(strings.TrimSpace(verificationKey), `\n`, "\n")
 	publicKey, err := jwt.ParseECPublicKeyFromPEM([]byte(verificationKey))
 	if err != nil {
-		return "", "", "", fmt.Errorf("parse Privy verification key: %w", err)
+		return "", fmt.Errorf("parse Privy verification key: %w", err)
 	}
-
 	claims := &jwt.RegisteredClaims{}
 	parsed, err := jwt.ParseWithClaims(token, claims, func(parsedToken *jwt.Token) (any, error) {
 		return publicKey, nil
-	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer("privy.io"), jwt.WithAudience(a.cfg.PrivyAppID), jwt.WithExpirationRequired())
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer("privy.io"), jwt.WithAudience(appID), jwt.WithExpirationRequired())
 	if err != nil {
-		return "", "", "", fmt.Errorf("invalid Privy access token: %w", err)
+		return "", fmt.Errorf("invalid Privy access token: %w", err)
 	}
 	if !parsed.Valid || strings.TrimSpace(claims.Subject) == "" {
-		return "", "", "", errors.New("invalid Privy access token claims")
+		return "", errors.New("invalid Privy access token claims")
+	}
+	return strings.TrimSpace(claims.Subject), nil
+}
+func (a *AuthController) verifyPrivyToken(ctx context.Context, token string) (string, string, string, error) {
+	if a.cfg.PrivyAppID == "" || a.cfg.PrivyAppSecret == "" {
+		return "", "", "", errPrivyNotConfigured
 	}
 
-	privyUserID := strings.TrimSpace(claims.Subject)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.privy.io/v1/users/"+url.PathEscape(privyUserID), nil)
+	verificationKey, err := a.getPrivyVerificationKey(ctx)
+	if err != nil {
+		return "", "", "", err
+	}
+	privyUserID, err := verifyPrivyAccessToken(token, verificationKey, a.cfg.PrivyAppID)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://auth.privy.io/api/v1/users/"+url.PathEscape(privyUserID), nil)
 	if err != nil {
 		return "", "", "", err
 	}

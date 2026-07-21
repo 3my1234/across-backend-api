@@ -42,6 +42,7 @@ FLUTTERWAVE_SECRET_KEY=replace-with-flutterwave-secret-key
 FLUTTERWAVE_WEBHOOK_SECRET=replace-with-webhook-secret
 PRIVY_APP_ID=replace-with-privy-app-id
 PRIVY_APP_SECRET=replace-with-privy-app-secret
-PRIVY_VERIFICATION_KEY=replace-with-privy-es256-public-key
+# Optional fallback; normally fetched automatically
+PRIVY_VERIFICATION_KEY=
 DEFAULT_COUNTRY=NG
 ```

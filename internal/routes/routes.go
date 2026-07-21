@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"strings"
+
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
@@ -29,7 +31,32 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
 	v1 := app.Group("/api/v1")
-	v1.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	v1.Get("/health", func(c *fiber.Ctx) error {
+		databaseReady := db.Ping(c.Context()) == nil
+		status := fiber.StatusOK
+		if !databaseReady {
+			status = fiber.StatusServiceUnavailable
+		}
+		return c.Status(status).JSON(fiber.Map{"ok": databaseReady})
+	})
+	v1.Get("/ready", func(c *fiber.Ctx) error {
+		databaseReady := db.Ping(c.Context()) == nil
+		privyReady := strings.TrimSpace(cfg.PrivyAppID) != "" && strings.TrimSpace(cfg.PrivyAppSecret) != ""
+		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
+		ready := databaseReady && privyReady && storageReady
+		status := fiber.StatusOK
+		if !ready {
+			status = fiber.StatusServiceUnavailable
+		}
+		return c.Status(status).JSON(fiber.Map{
+			"ok": ready,
+			"checks": fiber.Map{
+				"database":        databaseReady,
+				"google_auth":     privyReady,
+				"profile_uploads": storageReady,
+			},
+		})
+	})
 	v1.Get("/products", catalog.ListProducts)
 	v1.Get("/products/:product_id", catalog.GetProduct)
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
@@ -121,5 +148,5 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	// Profile
 	authed.Get("/profile", profileController.GetProfile)
-	authed.Put("/profile", countryGuard, profileController.UpdateProfile)
+	authed.Put("/profile", profileController.UpdateProfile)
 }

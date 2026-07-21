@@ -94,7 +94,11 @@ func (u *UploadController) UserPresign(c *fiber.Ctx) error {
 	if scope == "" {
 		scope = "reviews"
 	}
-	key := storage.SafeKey("user-uploads/buyer/"+scope+"/image", req.Filename)
+	userID, _ := c.Locals("user_id").(string)
+	if userID == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "user session unavailable")
+	}
+	key := storage.SafeKey("user-uploads/buyer/"+userID+"/"+scope+"/image", req.Filename)
 	uploadURL, err := u.s3.PresignPut(key, mime, 15*time.Minute)
 	if err != nil {
 		log.Printf("user presign failed: key=%s mime=%s err=%v", key, mime, err)
