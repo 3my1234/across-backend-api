@@ -3,6 +3,9 @@ package controllers
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
+	"log"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"across/backend/internal/services"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -35,9 +39,10 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	var validEmail bool
+	req.Email, validEmail = normalizeEmail(req.Email)
 	req.FullName = strings.TrimSpace(req.FullName)
-	if req.FullName == "" || req.Email == "" || len(req.Password) < 8 {
+	if req.FullName == "" || !validEmail || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name, email, and 8+ character password are required")
 	}
 
@@ -62,7 +67,12 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		RETURNING id
 	`, countryID, req.Email, strings.TrimSpace(req.Phone), string(hash), req.FullName, verificationToken, expiresAt).Scan(&userID)
 	if err != nil {
-		return fiber.NewError(fiber.StatusConflict, "account already exists")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fiber.NewError(fiber.StatusConflict, "account already exists; sign in or resend verification")
+		}
+		log.Printf("signup insert failed: %v", err)
+		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
 
 	if err := a.sendVerificationEmail(c, userID, req.Email, req.FullName, verificationToken); err != nil {
@@ -86,19 +96,22 @@ func (a *AuthController) Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
-	email := strings.ToLower(strings.TrimSpace(req.Email))
+	email, validEmail := normalizeEmail(req.Email)
+	if !validEmail {
+		return fiber.NewError(fiber.StatusBadRequest, "valid email required")
+	}
 
 	var userID, hash string
-	var emailVerified bool
+	var emailVerified, isActive bool
 	err := a.db.QueryRow(c.Context(), `
-		SELECT id, password_hash, email_verified
+		SELECT id, password_hash, email_verified, is_active
 		FROM users
-		WHERE email = $1 AND is_active = true
-	`, email).Scan(&userID, &hash, &emailVerified)
+		WHERE email = $1
+	`, email).Scan(&userID, &hash, &emailVerified, &isActive)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid email or password")
 	}
-	if !emailVerified {
+	if !isActive || !emailVerified {
 		return fiber.NewError(fiber.StatusForbidden, "please verify your email before signing in")
 	}
 	return a.respondSession(c, userID)
@@ -330,6 +343,15 @@ func newVerificationToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf[:]), nil
+}
+
+func normalizeEmail(value string) (string, bool) {
+	email := strings.ToLower(strings.TrimSpace(value))
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email || strings.Count(email, "@") != 1 {
+		return "", false
+	}
+	return email, true
 }
 
 func ensureCountry(c *fiber.Ctx, db *pgxpool.Pool) (string, error) {
