@@ -18,6 +18,7 @@ WHERE privy_user_id IS NOT NULL AND trim(privy_user_id) <> ''
 ON CONFLICT (provider, provider_subject) DO NOTHING;
 
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS event_key TEXT;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check;
 
 DELETE FROM notifications
 WHERE data ? 'verification_required'
