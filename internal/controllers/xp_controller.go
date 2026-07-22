@@ -8,128 +8,81 @@ import (
 )
 
 type XPController struct {
-	db *pgxpool.Pool
+	db      *pgxpool.Pool
+	rewards *RewardService
 }
 
 func NewXPController(db *pgxpool.Pool) *XPController {
-	return &XPController{db: db}
+	return &XPController{db: db, rewards: NewRewardService(db)}
 }
 
-// ClaimDailyLogin awards 1 XP if user hasn't claimed today
 func (x *XPController) ClaimDailyLogin(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
-
-	// Check if already claimed today
-	var exists bool
-	err := x.db.QueryRow(c.Context(), `
-		SELECT EXISTS(SELECT 1 FROM xp_daily_login WHERE user_id = $1 AND claim_date = CURRENT_DATE)
-	`, userID).Scan(&exists)
+	claimed, err := x.rewards.AwardDailyLogin(c.Context(), userID, time.Now())
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "check failed")
+		return fiber.NewError(fiber.StatusInternalServerError, "daily reward unavailable")
 	}
-	if exists {
-		return c.JSON(fiber.Map{"claimed": false, "message": "Already claimed today", "xp": 0})
+	if !claimed {
+		return c.JSON(fiber.Map{"claimed": false, "message": "Today's login reward was already claimed", "xp": 0})
 	}
-
-	// Award 1 XP
-	_, err = x.db.Exec(c.Context(), `
-		INSERT INTO xp_daily_login(user_id, xp_awarded) VALUES ($1, 1)
-	`, userID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "award failed")
-	}
-
-	_, err = x.db.Exec(c.Context(), `
-		INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
-		VALUES ($1, 1, 'daily_login', 'daily-' || $1)
-	`, userID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "transaction failed")
-	}
-
-	// Create notification
-	CreateNotification(c.Context(), x.db, userID, "", nil, "xp_earned", "Daily Login XP", "You earned 1 XP for logging in today!", nil)
-
-	return c.JSON(fiber.Map{"claimed": true, "message": "1 XP earned for daily login!", "xp": 1})
+	return c.JSON(fiber.Map{"claimed": true, "message": "You earned 1 XP for today's login", "xp": 1})
 }
 
-// GetBalance returns user's total XP
 func (x *XPController) GetBalance(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
-
 	var totalXP int
-	err := x.db.QueryRow(c.Context(), `
-		SELECT COALESCE(total_xp, 0) FROM user_xp_balance WHERE user_id = $1
-	`, userID).Scan(&totalXP)
-	if err != nil {
-		totalXP = 0
+	if err := x.db.QueryRow(c.Context(), `SELECT COALESCE(SUM(amount), 0)::int FROM xp_transactions WHERE user_id = $1`, userID).Scan(&totalXP); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "XP balance unavailable")
 	}
-
 	return c.JSON(fiber.Map{"xp": totalXP, "naira_value": totalXP})
 }
 
-// GetHistory returns recent XP transactions
 func (x *XPController) GetHistory(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
-
 	rows, err := x.db.Query(c.Context(), `
-		SELECT amount, reason, created_at FROM xp_transactions
-		WHERE user_id = $1
-		ORDER BY created_at DESC LIMIT 50
-	`, userID)
+        SELECT amount, reason, reference_id, created_at
+        FROM xp_transactions
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+    `, userID)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
+		return fiber.NewError(fiber.StatusInternalServerError, "XP history unavailable")
 	}
 	defer rows.Close()
 
 	history := make([]fiber.Map, 0)
 	for rows.Next() {
 		var amount int
-		var reason string
+		var reason, referenceID string
 		var createdAt time.Time
-		if err := rows.Scan(&amount, &reason, &createdAt); err != nil {
-			continue
+		if err := rows.Scan(&amount, &reason, &referenceID, &createdAt); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "XP history unavailable")
 		}
-		history = append(history, fiber.Map{
-			"amount":     amount,
-			"reason":     reason,
-			"created_at": createdAt,
-		})
+		history = append(history, fiber.Map{"amount": amount, "reason": reason, "reference_id": referenceID, "created_at": createdAt})
 	}
 	return c.JSON(fiber.Map{"history": history})
 }
 
-// AwardPurchaseXP awards 50 XP after a successful purchase
 func (x *XPController) AwardPurchaseXP(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	orderID := c.Params("order_id")
-
-	// Check order belongs to user and is paid
 	var orderStatus string
-	err := x.db.QueryRow(c.Context(), `
-		SELECT order_status FROM orders WHERE id = $1 AND user_id = $2
-	`, orderID, userID).Scan(&orderStatus)
-	if err != nil || orderStatus != "Paid" {
-		return fiber.NewError(fiber.StatusBadRequest, "order not payable")
+	var total float64
+	if err := x.db.QueryRow(c.Context(), `SELECT order_status::text, total_amount FROM orders WHERE id = $1 AND user_id = $2`, orderID, userID).Scan(&orderStatus, &total); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "order not found")
 	}
-
-	// Check if already awarded
-	var exists bool
-	x.db.QueryRow(c.Context(), `
-		SELECT EXISTS(SELECT 1 FROM xp_transactions WHERE reference_id = 'purchase-' || $1)
-	`, orderID).Scan(&exists)
-	if exists {
-		return c.JSON(fiber.Map{"awarded": false, "message": "Already awarded"})
+	if orderStatus != "Paid" && orderStatus != "Shipped" && orderStatus != "Delivered" && orderStatus != "Completed" {
+		return fiber.NewError(fiber.StatusConflict, "purchase reward is available after payment confirmation")
 	}
-
-	// Award 50 XP
-	_, err = x.db.Exec(c.Context(), `
-		INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
-		VALUES ($1, 50, 'purchase', 'purchase-' || $2)
-	`, userID, orderID)
+	awarded, amount, err := x.rewards.AwardPurchase(c.Context(), userID, orderID, total)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "award failed")
+		return fiber.NewError(fiber.StatusInternalServerError, "purchase reward unavailable")
 	}
-
-	return c.JSON(fiber.Map{"awarded": true, "message": "50 XP earned for purchase!", "xp": 50})
+	return c.JSON(fiber.Map{"awarded": awarded, "xp": amount, "message": func() string {
+		if awarded {
+			return "Purchase XP awarded"
+		}
+		return "Purchase XP was already awarded"
+	}()})
 }

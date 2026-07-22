@@ -46,3 +46,20 @@ PRIVY_APP_SECRET=replace-with-privy-app-secret
 PRIVY_VERIFICATION_KEY=
 DEFAULT_COUNTRY=NG
 ```
+
+## Transactional email deliverability
+
+Set `SMTP_FROM_EMAIL` to an address on a domain you control and verify with the SMTP provider. Publish that provider's SPF and DKIM records in DNS, then add a DMARC record. The visible From domain should align with the authenticated SPF/DKIM domain; application HTML alone cannot prevent spam placement.
+
+Recommended runtime variables:
+
+```env
+PUBLIC_BASE_URL=https://atlanticexpress-api.sportbanter.online
+WEBSITE_URL=https://atlanticexpress-web.sportbanter.online
+BRAND_LOGO_URL=https://your-public-domain.example/atlantic-express-logo.png
+SMTP_FROM_NAME=Atlantic Express
+SMTP_FROM_EMAIL=no-reply@your-domain.example
+SMTP_REPLY_TO=support@your-domain.example
+```
+
+`BRAND_LOGO_URL` must be a publicly reachable HTTPS image because email clients cannot load assets bundled inside the mobile application.

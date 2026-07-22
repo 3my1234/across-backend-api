@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/mail"
@@ -35,6 +36,8 @@ type AuthController struct {
 	httpClient           *http.Client
 	privyKeyMu           sync.RWMutex
 	privyVerificationKey string
+	identities           *IdentityService
+	rewards              *RewardService
 }
 
 func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
@@ -43,6 +46,8 @@ func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
 		cfg:        cfg,
 		email:      services.NewEmailService(cfg),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		identities: NewIdentityService(db),
+		rewards:    NewRewardService(db),
 	}
 }
 
@@ -95,16 +100,19 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
 
+	deliveryPending := false
 	if err := a.sendVerificationEmail(c, userID, req.Email, req.FullName, verificationToken); err != nil {
-		return err
+		deliveryPending = true
+		log.Printf("verification email delivery failed user_id=%s: %v", userID, err)
 	}
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Verify your email",
-		"Please verify your email address to activate your account.", map[string]any{"verification_required": true})
 
+	message := "Account created. Check your email to activate it."
+	if deliveryPending {
+		message = "Account created, but email delivery is delayed. Use Resend verification shortly."
+	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"message":                     "signup created. verify your email to activate your account",
-		"requires_email_verification": true,
-		"user_id":                     userID,
+		"message": message, "requires_email_verification": true,
+		"verification_delivery_pending": deliveryPending, "user_id": userID,
 	})
 }
 
@@ -187,6 +195,9 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 		token = strings.TrimSpace(req.PrivyTokenAlt)
 	}
 	if token == "" {
+		token = strings.TrimSpace(strings.TrimPrefix(c.Get("Authorization"), "Bearer "))
+	}
+	if token == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "privy token required")
 	}
 
@@ -196,33 +207,28 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 		if errors.Is(err, errPrivyNotConfigured) {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "Google sign-in is not configured on the server")
 		}
-		return fiber.NewError(fiber.StatusUnauthorized, "Google session verification failed; please sign in again")
+		code := privyFailureCode(err)
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Google session verification failed; please sign in again", "code": code, "request_id": c.Locals("requestid")})
 	}
 
 	countryID, err := ensureCountry(c, a.db)
 	if err != nil {
 		return err
 	}
-	var userID string
-	var created bool
-	err = a.db.QueryRow(c.Context(), `
-		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified, privy_user_id)
-		VALUES ($1, $2, 'privy-google-oauth', $3, true, true, $4)
-		ON CONFLICT (email) DO UPDATE SET
-			full_name = EXCLUDED.full_name,
-			privy_user_id = EXCLUDED.privy_user_id,
-			is_active = true,
-			email_verified = true,
-			updated_at = now()
-		RETURNING id, (xmax = 0)
-	`, countryID, email, name, privyUserID).Scan(&userID, &created)
+	userID, created, err := a.identities.ResolvePrivy(c.Context(), countryID, privyUserID, email, name)
 	if err != nil {
-		return err
+		log.Printf("privy identity resolution failed subject=%s: %v", privyUserID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "Google account could not be linked")
+	}
+	awarded, rewardErr := a.rewards.AwardWelcome(c.Context(), userID)
+	if rewardErr != nil {
+		log.Printf("welcome reward failed user_id=%s: %v", userID, rewardErr)
 	}
 	if created {
 		_ = a.email.SendWelcomeEmail(email, name)
-		_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
-			"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
+	}
+	if awarded {
+		log.Printf("welcome reward awarded user_id=%s", userID)
 	}
 	return a.respondSession(c, userID)
 }
@@ -242,14 +248,23 @@ func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, e
 	request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
 	request.Header.Set("privy-client", "across-backend")
 
-	response, err := a.httpClient.Do(request)
-	if err == nil {
+	response, requestErr := a.httpClient.Do(request)
+	var remoteErr error
+	if requestErr != nil {
+		remoteErr = fmt.Errorf("fetch Privy verification key: %w", requestErr)
+	} else {
 		defer response.Body.Close()
-		if response.StatusCode == http.StatusOK {
+		if response.StatusCode != http.StatusOK {
+			remoteErr = fmt.Errorf("fetch Privy verification key returned HTTP %d", response.StatusCode)
+		} else {
 			var settings struct {
 				VerificationKey string `json:"verification_key"`
 			}
-			if decodeErr := json.NewDecoder(response.Body).Decode(&settings); decodeErr == nil && strings.TrimSpace(settings.VerificationKey) != "" {
+			if err := json.NewDecoder(response.Body).Decode(&settings); err != nil {
+				remoteErr = fmt.Errorf("decode Privy app settings: %w", err)
+			} else if strings.TrimSpace(settings.VerificationKey) == "" {
+				remoteErr = errors.New("Privy app settings did not include a verification key")
+			} else {
 				key := strings.TrimSpace(settings.VerificationKey)
 				a.privyKeyMu.Lock()
 				a.privyVerificationKey = key
@@ -266,10 +281,41 @@ func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, e
 		a.privyKeyMu.Unlock()
 		return fallback, nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("fetch Privy verification key: %w", err)
+	return "", remoteErr
+}
+
+func (a *AuthController) PrivyReady(ctx context.Context) error {
+	if strings.TrimSpace(a.cfg.PrivyAppID) == "" || strings.TrimSpace(a.cfg.PrivyAppSecret) == "" {
+		return errPrivyNotConfigured
 	}
-	return "", errors.New("Privy verification key unavailable")
+	_, err := a.getPrivyVerificationKey(ctx)
+	return err
+}
+
+func privyFailureCode(err error) string {
+	switch {
+	case errors.Is(err, jwt.ErrTokenExpired):
+		return "privy_token_expired"
+	case errors.Is(err, jwt.ErrTokenInvalidAudience):
+		return "privy_token_audience_mismatch"
+	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
+		return "privy_token_issuer_mismatch"
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+		return "privy_token_signature_invalid"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "verification key returned http 401"), strings.Contains(message, "verification key returned http 403"):
+		return "privy_server_credentials_rejected"
+	case strings.Contains(message, "parse privy verification key"):
+		return "privy_verification_key_invalid"
+	case strings.Contains(message, "fetch privy user returned http"):
+		return "privy_user_lookup_failed"
+	case strings.Contains(message, "no verified email"):
+		return "privy_verified_email_missing"
+	default:
+		return "privy_token_invalid"
+	}
 }
 func verifyPrivyAccessToken(token, verificationKey, appID string) (string, error) {
 	verificationKey = strings.ReplaceAll(strings.TrimSpace(verificationKey), `\n`, "\n")
@@ -390,17 +436,18 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		RETURNING id, email, full_name
 	`, token).Scan(&userID, &email, &fullName)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid or expired verification token")
+		c.Status(fiber.StatusBadRequest)
+		c.Type("html", "utf-8")
+		return c.SendString(a.verificationResultPage(false, "Verification link unavailable", "This link is invalid or has expired. Return to the app and request a new verification email."))
 	}
 
 	_ = a.email.SendWelcomeEmail(email, fullName)
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
-		"Your email has been verified. Your account is now active.", nil)
+	if _, err := a.rewards.AwardWelcome(c.Context(), userID); err != nil {
+		log.Printf("welcome reward failed user_id=%s: %v", userID, err)
+	}
 
-	return c.JSON(fiber.Map{
-		"message": "email verified successfully",
-		"user_id": userID,
-	})
+	c.Type("html", "utf-8")
+	return c.SendString(a.verificationResultPage(true, "Email verified successfully", "Your Atlantic Express account is active. Return to the mobile app and sign in to continue."))
 }
 
 func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
@@ -454,8 +501,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 	if err := a.sendVerificationEmail(c, userID, email, fullName, verificationToken); err != nil {
 		return err
 	}
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Verification email resent",
-		"Please check your inbox to activate your account.", map[string]any{"verification_required": true})
+
 	return c.JSON(fiber.Map{"message": "verification email sent"})
 }
 
@@ -477,15 +523,26 @@ func (a *AuthController) sendVerificationEmail(c *fiber.Ctx, userID, toEmail, to
 		baseURL = "http://localhost:8080"
 	}
 	link := baseURL + "/api/v1/auth/verify-email?token=" + token
-	subject := "Verify your Atlantic Express email"
-	body := "<p>Hello " + toName + ",</p><p>Click the link below to verify your email and activate your account:</p><p><a href=\"" + link + "\">Verify email</a></p><p>If you did not create this account, ignore this email.</p>"
-	if err := a.email.SendHTML(toEmail, subject, body); err != nil {
+	if err := a.email.SendVerificationEmail(toEmail, toName, link); err != nil {
 		return err
 	}
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Verify your email", "Check your inbox to verify your account.", map[string]any{"verification_link": link})
+
 	return nil
 }
 
+func (a *AuthController) verificationResultPage(success bool, title, message string) string {
+	accent := "#0F3D35"
+	icon := "&#10003;"
+	if !success {
+		accent = "#B42318"
+		icon = "!"
+	}
+	brand := `<div style="font-size:22px;font-weight:800;color:#0F3D35;">Atlantic Express</div>`
+	if logoURL := strings.TrimSpace(a.cfg.BrandLogoURL); logoURL != "" {
+		brand = `<img src="` + html.EscapeString(logoURL) + `" width="170" alt="Atlantic Express" style="max-width:170px;height:auto;">`
+	}
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title></head><body style="margin:0;background:#F3F7F6;font-family:Arial,Helvetica,sans-serif;color:#142522;"><main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;"><section style="width:100%;max-width:540px;background:#FFFFFF;border:1px solid #E2EBE8;border-radius:18px;padding:36px;box-sizing:border-box;text-align:center;box-shadow:0 12px 40px rgba(15,61,53,.08);">` + brand + `<div style="width:64px;height:64px;border-radius:50%;background:` + accent + `;color:#FFFFFF;display:flex;align-items:center;justify-content:center;margin:28px auto 20px;font-size:34px;font-weight:800;">` + icon + `</div><h1 style="font-size:26px;margin:0 0 14px;">` + html.EscapeString(title) + `</h1><p style="font-size:16px;line-height:1.6;color:#52625E;margin:0;">` + html.EscapeString(message) + `</p><p style="margin:28px 0 0;font-size:12px;color:#84918E;">ATLANTIC SHANSU LOGISTICS LIMITED</p></section></main></body></html>`
+}
 func newVerificationToken() (string, error) {
 	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {

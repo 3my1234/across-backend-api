@@ -41,7 +41,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	})
 	v1.Get("/ready", func(c *fiber.Ctx) error {
 		databaseReady := db.Ping(c.Context()) == nil
-		privyReady := strings.TrimSpace(cfg.PrivyAppID) != "" && strings.TrimSpace(cfg.PrivyAppSecret) != ""
+		privyReady := authController.PrivyReady(c.Context()) == nil
 		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
 		ready := databaseReady && privyReady && storageReady
 		status := fiber.StatusOK

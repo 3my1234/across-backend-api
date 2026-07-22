@@ -306,3 +306,19 @@ CREATE TABLE support_messages (
   message TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- External identity and idempotent event invariants
+CREATE TABLE IF NOT EXISTS user_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_subject TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, provider_subject)
+);
+CREATE INDEX IF NOT EXISTS idx_user_identities_user ON user_identities(user_id);
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS event_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_event_key_unique ON notifications(event_key) WHERE event_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS xp_transactions_event_unique ON xp_transactions(user_id, reason, reference_id) WHERE reference_id IS NOT NULL AND reference_id <> '';

@@ -39,6 +39,9 @@ type Config struct {
 	SMTPPassword             string
 	SMTPFromEmail            string
 	SMTPFromName             string
+	SMTPReplyTo              string
+	BrandLogoURL             string
+	WebsiteURL               string
 }
 
 func Load() Config {
@@ -75,6 +78,9 @@ func Load() Config {
 		SMTPPassword:             env("SMTP_PASSWORD", ""),
 		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@sportbanter.online"),
 		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
+		SMTPReplyTo:              env("SMTP_REPLY_TO", ""),
+		BrandLogoURL:             env("BRAND_LOGO_URL", ""),
+		WebsiteURL:               env("WEBSITE_URL", "https://atlanticexpress-web.sportbanter.online"),
 	}
 }
 

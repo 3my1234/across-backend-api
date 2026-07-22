@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,12 +27,14 @@ type PaymentController struct {
 	db         *pgxpool.Pool
 	cfg        config.Config
 	httpClient *http.Client
+	rewards    *RewardService
 }
 
 func NewPaymentController(db *pgxpool.Pool, cfg config.Config) *PaymentController {
 	return &PaymentController{
-		db:  db,
-		cfg: cfg,
+		db:      db,
+		cfg:     cfg,
+		rewards: NewRewardService(db),
 		httpClient: &http.Client{
 			Timeout: 12 * time.Second,
 		},
@@ -277,22 +280,16 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 	if err := p.settleOrderPayment(c.Context(), orderID, event.Data.TxRef, stringify(event.Data.ID), paidAmount, event.Data.Currency); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
-	var userID, amount string
-	_ = p.db.QueryRow(c.Context(), `SELECT user_id, total_amount::text FROM orders WHERE id = $1`, orderID).Scan(&userID, &amount)
-	if userID != "" {
-		_ = CreateNotification(c.Context(), p.db, userID, orderID, nil, "payment_received",
-			"Payment Confirmed", "Your payment of NGN "+amount+" has been received. Your order is being processed.", nil)
-		tag, awardErr := p.db.Exec(c.Context(), `
-			INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
-			SELECT $1, 50, 'purchase', 'purchase-' || $2
-			WHERE NOT EXISTS (
-				SELECT 1 FROM xp_transactions WHERE user_id = $1 AND reference_id = 'purchase-' || $2
-			)
-		`, userID, orderID)
-		if awardErr == nil && tag.RowsAffected() > 0 {
-			_ = CreateNotification(c.Context(), p.db, userID, orderID, nil, "xp_earned",
-				"Purchase XP earned", "You earned 50 XP for your purchase!", map[string]any{"xp": 50})
-		}
+	var userID string
+	var total float64
+	if err := p.db.QueryRow(c.Context(), `SELECT user_id, total_amount FROM orders WHERE id = $1`, orderID).Scan(&userID, &total); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "payment settled but post-payment processing failed")
+	}
+	_ = CreateNotificationOnce(c.Context(), p.db, userID, orderID, nil, "payment_received",
+		"Payment confirmed", fmt.Sprintf("Your payment of NGN %.2f has been received. Your order is being processed.", total),
+		map[string]any{"amount": total, "currency": "NGN"}, "payment-received:"+orderID)
+	if _, _, err := p.rewards.AwardPurchase(c.Context(), userID, orderID, total); err != nil {
+		log.Printf("purchase reward failed order_id=%s: %v", orderID, err)
 	}
 	return c.SendStatus(fiber.StatusOK)
 }

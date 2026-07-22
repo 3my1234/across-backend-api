@@ -20,12 +20,12 @@ func NewNotificationsController(db *pgxpool.Pool) *NotificationsController {
 func (nc *NotificationsController) List(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	rows, err := nc.db.Query(c.Context(), `
-		SELECT id, order_id, type, title, body, data, is_read, created_at
-		FROM notifications
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT 100
-	`, userID)
+        SELECT id::text, COALESCE(order_id::text, ''), type, title, body, data, is_read, created_at
+        FROM notifications
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+    `, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "notifications unavailable")
 	}
@@ -33,24 +33,25 @@ func (nc *NotificationsController) List(c *fiber.Ctx) error {
 
 	notifications := make([]fiber.Map, 0)
 	for rows.Next() {
-		var id string
-		var orderID, dataRaw []byte
-		var ntype, title, body string
+		var id, orderID, notificationType, title, body string
+		var dataRaw []byte
 		var isRead bool
 		var createdAt time.Time
-		if err := rows.Scan(&id, &orderID, &ntype, &title, &body, &dataRaw, &isRead, &createdAt); err != nil {
-			return err
+		if err := rows.Scan(&id, &orderID, &notificationType, &title, &body, &dataRaw, &isRead, &createdAt); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "notifications unavailable")
+		}
+		var data any = map[string]any{}
+		if len(dataRaw) > 0 {
+			_ = json.Unmarshal(dataRaw, &data)
 		}
 		notifications = append(notifications, fiber.Map{
-			"id":         id,
-			"order_id":   string(orderID),
-			"type":       ntype,
-			"title":      title,
-			"body":       body,
-			"data":       string(dataRaw),
-			"is_read":    isRead,
-			"created_at": createdAt,
+			"id": id, "order_id": orderID, "type": notificationType,
+			"title": title, "body": body, "data": data,
+			"is_read": isRead, "created_at": createdAt,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "notifications unavailable")
 	}
 	return c.JSON(fiber.Map{"notifications": notifications})
 }
@@ -58,25 +59,16 @@ func (nc *NotificationsController) List(c *fiber.Ctx) error {
 func (nc *NotificationsController) UnreadCount(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	var count int
-	err := nc.db.QueryRow(c.Context(), `
-		SELECT COUNT(*)::int FROM notifications
-		WHERE user_id = $1 AND is_read = false
-	`, userID).Scan(&count)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "unavailable")
+	if err := nc.db.QueryRow(c.Context(), `SELECT COUNT(*)::int FROM notifications WHERE user_id = $1 AND is_read = false`, userID).Scan(&count); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "notifications unavailable")
 	}
 	return c.JSON(fiber.Map{"unread_count": count})
 }
 
 func (nc *NotificationsController) MarkRead(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
-	notifID := c.Params("notification_id")
-	_, err := nc.db.Exec(c.Context(), `
-		UPDATE notifications
-		SET is_read = true
-		WHERE id = $1 AND user_id = $2
-	`, notifID, userID)
-	if err != nil {
+	tag, err := nc.db.Exec(c.Context(), `UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2`, c.Params("notification_id"), userID)
+	if err != nil || tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "notification not found")
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -84,37 +76,38 @@ func (nc *NotificationsController) MarkRead(c *fiber.Ctx) error {
 
 func (nc *NotificationsController) MarkAllRead(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
-	_, err := nc.db.Exec(c.Context(), `
-		UPDATE notifications
-		SET is_read = true
-		WHERE user_id = $1 AND is_read = false
-	`, userID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "update failed")
+	if _, err := nc.db.Exec(c.Context(), `UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false`, userID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "notification update failed")
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// createNotification inserts a notification for a user. Exported for use by other controllers.
-func CreateNotification(ctx context.Context, db *pgxpool.Pool, userID, orderID string, batchID *string, ntype, title, body string, data map[string]any) error {
-	dataJSON := []byte("{}")
-	if data != nil {
-		dataJSON, _ = json.Marshal(data)
+func marshalNotificationData(data map[string]any) ([]byte, error) {
+	if data == nil {
+		return []byte("{}"), nil
 	}
-	_, err := db.Exec(ctx, `
-		INSERT INTO notifications(user_id, order_id, batch_id, type, title, body, data)
-		VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6, $7)
-	`, userID, orderID, batchID, ntype, title, body, dataJSON)
+	return json.Marshal(data)
+}
+
+func CreateNotification(ctx context.Context, db *pgxpool.Pool, userID, orderID string, batchID *string, notificationType, title, body string, data map[string]any) error {
+	return CreateNotificationOnce(ctx, db, userID, orderID, batchID, notificationType, title, body, data, "")
+}
+
+func CreateNotificationOnce(ctx context.Context, db *pgxpool.Pool, userID, orderID string, batchID *string, notificationType, title, body string, data map[string]any, eventKey string) error {
+	dataJSON, err := marshalNotificationData(data)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, `
+        INSERT INTO notifications(user_id, order_id, batch_id, type, title, body, data, event_key)
+        VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, NULLIF($8, ''))
+        ON CONFLICT DO NOTHING
+    `, userID, orderID, batchID, notificationType, title, body, dataJSON, eventKey)
 	return err
 }
 
-// notifyBatchUsers creates notifications for all users who have orders in a batch.
-func notifyBatchUsers(ctx context.Context, db *pgxpool.Pool, batchID, ntype, title, body string, data map[string]any) error {
-	rows, err := db.Query(ctx, `
-		SELECT DISTINCT o.user_id, o.id
-		FROM orders o
-		WHERE o.batch_id = $1
-	`, batchID)
+func notifyBatchUsers(ctx context.Context, db *pgxpool.Pool, batchID, notificationType, title, body string, data map[string]any) error {
+	rows, err := db.Query(ctx, `SELECT DISTINCT o.user_id, o.id FROM orders o WHERE o.batch_id = $1`, batchID)
 	if err != nil {
 		return err
 	}
@@ -125,9 +118,9 @@ func notifyBatchUsers(ctx context.Context, db *pgxpool.Pool, batchID, ntype, tit
 		if err := rows.Scan(&userID, &orderID); err != nil {
 			return err
 		}
-		if err := CreateNotification(ctx, db, userID, orderID, &batchID, ntype, title, body, data); err != nil {
+		if err := CreateNotification(ctx, db, userID, orderID, &batchID, notificationType, title, body, data); err != nil {
 			return err
 		}
 	}
-	return nil
+	return rows.Err()
 }
