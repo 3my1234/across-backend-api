@@ -294,7 +294,11 @@ func (a *AuthController) PrivyReady(ctx context.Context) error {
 	if strings.TrimSpace(a.cfg.PrivyAppID) == "" || strings.TrimSpace(a.cfg.PrivyAppSecret) == "" {
 		return errPrivyNotConfigured
 	}
-	_, err := a.getPrivyVerificationKey(ctx)
+	verificationKey, err := a.getPrivyVerificationKey(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = parsePrivyVerificationKey(verificationKey)
 	return err
 }
 
