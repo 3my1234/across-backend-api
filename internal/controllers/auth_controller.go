@@ -2,16 +2,22 @@ package controllers
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"html"
 	"log"
+	"math/big"
 	"net/http"
 	"net/mail"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -317,9 +323,90 @@ func privyFailureCode(err error) string {
 		return "privy_token_invalid"
 	}
 }
+
+func parsePrivyVerificationKey(value string) (*ecdsa.PublicKey, error) {
+	normalized := strings.TrimSpace(value)
+	for attempt := 0; attempt < 3; attempt++ {
+		if strings.HasPrefix(normalized, `"`) && strings.HasSuffix(normalized, `"`) {
+			if unquoted, err := strconv.Unquote(normalized); err == nil {
+				normalized = strings.TrimSpace(unquoted)
+			}
+		}
+		next := strings.ReplaceAll(normalized, `\\n`, "\n")
+		next = strings.ReplaceAll(next, `\n`, "\n")
+		next = strings.ReplaceAll(next, `\\r`, "")
+		next = strings.ReplaceAll(next, `\r`, "")
+		if next == normalized {
+			break
+		}
+		normalized = strings.TrimSpace(next)
+	}
+
+	if publicKey, err := parsePrivyPEMOrDER([]byte(normalized)); err == nil {
+		return publicKey, nil
+	}
+
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+		decoded, err := encoding.DecodeString(normalized)
+		if err != nil {
+			continue
+		}
+		if publicKey, err := parsePrivyPEMOrDER(decoded); err == nil {
+			return publicKey, nil
+		}
+	}
+
+	var jwk struct {
+		KeyType string `json:"kty"`
+		Curve   string `json:"crv"`
+		X       string `json:"x"`
+		Y       string `json:"y"`
+	}
+	if err := json.Unmarshal([]byte(normalized), &jwk); err == nil && jwk.KeyType == "EC" && jwk.Curve == "P-256" {
+		xBytes, xErr := base64.RawURLEncoding.DecodeString(jwk.X)
+		yBytes, yErr := base64.RawURLEncoding.DecodeString(jwk.Y)
+		if xErr == nil && yErr == nil {
+			publicKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(xBytes), Y: new(big.Int).SetBytes(yBytes)}
+			if publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y) {
+				return publicKey, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported verification key format (%s, %d bytes)", privyKeyFormat(normalized), len(normalized))
+}
+
+func parsePrivyPEMOrDER(value []byte) (*ecdsa.PublicKey, error) {
+	der := value
+	if block, _ := pem.Decode(value); block != nil {
+		der = block.Bytes
+	}
+	parsed, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return nil, err
+	}
+	publicKey, ok := parsed.(*ecdsa.PublicKey)
+	if !ok || publicKey.Curve != elliptic.P256() {
+		return nil, errors.New("verification key is not an ECDSA P-256 public key")
+	}
+	return publicKey, nil
+}
+
+func privyKeyFormat(value string) string {
+	switch {
+	case strings.HasPrefix(value, "-----BEGIN"):
+		return "pem"
+	case strings.HasPrefix(value, "{"):
+		return "json"
+	case strings.Contains(value, `\n`):
+		return "escaped-pem"
+	default:
+		return "encoded"
+	}
+}
+
 func verifyPrivyAccessToken(token, verificationKey, appID string) (string, error) {
-	verificationKey = strings.ReplaceAll(strings.TrimSpace(verificationKey), `\n`, "\n")
-	publicKey, err := jwt.ParseECPublicKeyFromPEM([]byte(verificationKey))
+	publicKey, err := parsePrivyVerificationKey(verificationKey)
 	if err != nil {
 		return "", fmt.Errorf("parse Privy verification key: %w", err)
 	}
