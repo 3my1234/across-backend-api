@@ -24,6 +24,7 @@ type Config struct {
 	PrivyAppID               string
 	PrivyAppSecret           string
 	PrivyVerificationKey     string
+	PrivyVerificationMode    string
 	DefaultCountry           string
 	AllowedCountries         string
 	AdminBootstrapToken      string
@@ -63,6 +64,7 @@ func Load() Config {
 		PrivyAppID:               env("PRIVY_APP_ID", ""),
 		PrivyAppSecret:           env("PRIVY_APP_SECRET", ""),
 		PrivyVerificationKey:     env("PRIVY_VERIFICATION_KEY", ""),
+		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "auto"),
 		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
 		AllowedCountries:         env("ALLOWED_COUNTRIES", "NG"),
 		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),

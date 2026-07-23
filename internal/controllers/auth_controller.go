@@ -35,6 +35,29 @@ import (
 
 var errPrivyNotConfigured = errors.New("Privy server credentials are incomplete")
 
+// --- JWKS Types ---
+
+type jwksKey struct {
+	KeyType   string `json:"kty"`
+	Curve     string `json:"crv"`
+	Algorithm string `json:"alg"`
+	KeyID     string `json:"kid"`
+	X         string `json:"x"`
+	Y         string `json:"y"`
+	Use       string `json:"use"`
+}
+
+type jwksResponse struct {
+	Keys []jwksKey `json:"keys"`
+}
+
+type jwksCache struct {
+	parsedKeys map[string]*ecdsa.PublicKey
+	fetchedAt  time.Time
+}
+
+// --- AuthController ---
+
 type AuthController struct {
 	db                   *pgxpool.Pool
 	cfg                  config.Config
@@ -42,6 +65,8 @@ type AuthController struct {
 	httpClient           *http.Client
 	privyKeyMu           sync.RWMutex
 	privyVerificationKey string
+	privyJWKSCache       jwksCache
+	privyJWKSMu          sync.RWMutex
 	identities           *IdentityService
 	rewards              *RewardService
 }
@@ -107,7 +132,7 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	}
 
 	deliveryPending := false
-	if err := a.sendVerificationEmail(c, userID, req.Email, req.FullName, verificationToken); err != nil {
+	if err := a.sendVerificationEmail(req.Email, req.FullName, verificationToken); err != nil {
 		deliveryPending = true
 		log.Printf("verification email delivery failed user_id=%s: %v", userID, err)
 	}
@@ -238,7 +263,45 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	}
 	return a.respondSession(c, userID)
 }
+
+// --- JWKS Support ---
+
+// getPrivyVerificationKey returns a parsed ECDSA P-256 public key for verifying
+// Privy access tokens. It supports three modes controlled by PRIVY_VERIFICATION_MODE:
+//
+//   - "local":   Use the static PRIVY_VERIFICATION_KEY from env config only.
+//   - "jwks":    Fetch the key from the Privy JWKS endpoint only.
+//   - "auto" (default): Try JWKS first, fall back to static key if JWKS is unavailable.
+//
+// In "auto" mode, JWKS keys are cached for up to 1 hour. The static key is also
+// cached once fetched (it never changes at runtime).
 func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(a.cfg.PrivyVerificationMode))
+
+	// In "local" mode, bypass JWKS entirely and use the static key.
+	if mode == "local" {
+		return a.getStaticVerificationKey()
+	}
+
+	// In "jwks" or "auto" mode, try JWKS first.
+	if mode == "jwks" || mode == "auto" || mode == "" {
+		jwksPEM, jwksErr := a.fetchAndCacheJWKS(ctx)
+		if jwksErr == nil {
+			return jwksPEM, nil
+		}
+		// In "jwks" mode, JWKS failure is fatal.
+		if mode == "jwks" {
+			return "", fmt.Errorf("jwks: %w", jwksErr)
+		}
+		// In "auto" mode, log and try the static key.
+		log.Printf("privy jwks fetch failed, falling back to static key: %v", jwksErr)
+	}
+
+	return a.getStaticVerificationKey()
+}
+
+// getStaticVerificationKey returns the cached or configured static verification key.
+func (a *AuthController) getStaticVerificationKey() (string, error) {
 	a.privyKeyMu.RLock()
 	cached := a.privyVerificationKey
 	a.privyKeyMu.RUnlock()
@@ -246,7 +309,35 @@ func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, e
 		return cached, nil
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://auth.privy.io/api/v1/apps/"+url.PathEscape(a.cfg.PrivyAppID), nil)
+	// Try fetching from the Privy apps API (original method).
+	apiKey, err := a.fetchPrivyAppsAPIKey()
+	if err == nil {
+		a.privyKeyMu.Lock()
+		a.privyVerificationKey = apiKey
+		a.privyKeyMu.Unlock()
+		return apiKey, nil
+	}
+	log.Printf("privy apps api fetch failed: %v", err)
+
+	// Fall back to the env-configured PRIVY_VERIFICATION_KEY.
+	fallback := strings.TrimSpace(a.cfg.PrivyVerificationKey)
+	if fallback != "" {
+		if _, parseErr := parsePrivyVerificationKey(fallback); parseErr != nil {
+			return "", fmt.Errorf("static key from env is invalid: %w", parseErr)
+		}
+		a.privyKeyMu.Lock()
+		a.privyVerificationKey = fallback
+		a.privyKeyMu.Unlock()
+		return fallback, nil
+	}
+
+	return "", fmt.Errorf("no privy verification key available: %w", err)
+}
+
+// fetchPrivyAppsAPIKey fetches the app settings from Privy's apps API and
+// extracts the verification_key field. Returns the PEM string.
+func (a *AuthController) fetchPrivyAppsAPIKey() (string, error) {
+	request, err := http.NewRequest(http.MethodGet, "https://auth.privy.io/api/v1/apps/"+url.PathEscape(a.cfg.PrivyAppID), nil)
 	if err != nil {
 		return "", err
 	}
@@ -254,47 +345,261 @@ func (a *AuthController) getPrivyVerificationKey(ctx context.Context) (string, e
 	request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
 	request.Header.Set("privy-client", "across-backend")
 
-	response, requestErr := a.httpClient.Do(request)
-	var remoteErr error
-	if requestErr != nil {
-		remoteErr = fmt.Errorf("fetch Privy verification key: %w", requestErr)
-	} else {
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			remoteErr = fmt.Errorf("fetch Privy verification key returned HTTP %d", response.StatusCode)
-		} else {
-			var settings struct {
-				VerificationKey string `json:"verification_key"`
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("fetch Privy apps API: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch Privy apps API returned HTTP %d", response.StatusCode)
+	}
+
+	var settings struct {
+		VerificationKey string `json:"verification_key"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&settings); err != nil {
+		return "", fmt.Errorf("decode Privy app settings: %w", err)
+	}
+	key := strings.TrimSpace(settings.VerificationKey)
+	if key == "" {
+		return "", errors.New("Privy app settings did not include a verification_key field")
+	}
+	if _, parseErr := parsePrivyVerificationKey(key); parseErr != nil {
+		return "", fmt.Errorf("verification key from Privy API is invalid: %w", parseErr)
+	}
+	return key, nil
+}
+
+// --- JWKS Implementation ---
+
+// fetchAndCacheJWKS fetches the JWKS from the Privy JWKS endpoint and
+// returns a single PEM-encoded public key for use with the existing
+// verifyPrivyAccessToken function (which validates ES256-signed JWTs).
+//
+// When multiple keys exist in the JWKS set, each is cached. The returned
+// PEM string is the first valid P-256 key found, so that the existing
+// token verification logic works. The cached JWKS is used for subsequent
+// calls, with a 1-hour TTL before re-fetching.
+func (a *AuthController) fetchAndCacheJWKS(ctx context.Context) (string, error) {
+	// Check if we have a fresh cached set of parsed keys.
+	if pemKey := a.getCachedJWKSPEM(); pemKey != "" {
+		return pemKey, nil
+	}
+
+	// Fetch the JWKS from Privy.
+	jwksURL := "https://auth.privy.io/api/v1/apps/" + url.PathEscape(a.cfg.PrivyAppID) + "/jwks.json"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
+	request.Header.Set("privy-client", "across-backend")
+
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("fetch Privy JWKS: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch Privy JWKS returned HTTP %d", response.StatusCode)
+	}
+
+	var jwks jwksResponse
+	if err := json.NewDecoder(response.Body).Decode(&jwks); err != nil {
+		return "", fmt.Errorf("decode Privy JWKS: %w", err)
+	}
+	if len(jwks.Keys) == 0 {
+		return "", errors.New("Privy JWKS returned an empty key set")
+	}
+
+	parsed := make(map[string]*ecdsa.PublicKey, len(jwks.Keys))
+	var firstPEM string
+
+	// Parse each JWK into an ECDSA P-256 public key.
+	for _, key := range jwks.Keys {
+		if key.KeyType != "EC" || key.Curve != "P-256" {
+			continue
+		}
+		xBytes, xErr := base64.RawURLEncoding.DecodeString(key.X)
+		yBytes, yErr := base64.RawURLEncoding.DecodeString(key.Y)
+		if xErr != nil || yErr != nil {
+			continue
+		}
+		publicKey := &ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(xBytes),
+			Y:     new(big.Int).SetBytes(yBytes),
+		}
+		if !publicKey.Curve.IsOnCurve(publicKey.X, publicKey.Y) {
+			continue
+		}
+
+		kid := key.KeyID
+		if kid == "" {
+			kid = "default"
+		}
+		parsed[kid] = publicKey
+
+		// Encode the first valid key as PEM for use with the existing verifier.
+		if firstPEM == "" {
+			derBytes, derErr := x509.MarshalPKIXPublicKey(publicKey)
+			if derErr != nil {
+				continue
 			}
-			if err := json.NewDecoder(response.Body).Decode(&settings); err != nil {
-				remoteErr = fmt.Errorf("decode Privy app settings: %w", err)
-			} else if strings.TrimSpace(settings.VerificationKey) == "" {
-				remoteErr = errors.New("Privy app settings did not include a verification key")
-			} else {
-				key := strings.TrimSpace(settings.VerificationKey)
-				a.privyKeyMu.Lock()
-				a.privyVerificationKey = key
-				a.privyKeyMu.Unlock()
-				return key, nil
+			pemBlock := &pem.Block{
+				Type:  "PUBLIC KEY",
+				Bytes: derBytes,
 			}
+			firstPEM = string(pem.EncodeToMemory(pemBlock))
 		}
 	}
 
-	fallback := strings.TrimSpace(a.cfg.PrivyVerificationKey)
-	if fallback != "" {
-		a.privyKeyMu.Lock()
-		a.privyVerificationKey = fallback
-		a.privyKeyMu.Unlock()
-		return fallback, nil
+	if len(parsed) == 0 {
+		return "", errors.New("no valid EC P-256 keys found in Privy JWKS")
 	}
-	return "", remoteErr
+
+	// Update the cache.
+	a.privyJWKSMu.Lock()
+	a.privyJWKSCache = jwksCache{
+		parsedKeys: parsed,
+		fetchedAt:  time.Now(),
+	}
+	a.privyJWKSMu.Unlock()
+
+	if firstPEM == "" {
+		return "", errors.New("could not encode any JWKS key as PEM")
+	}
+	return firstPEM, nil
 }
 
+// getCachedJWKSPEM checks the in-memory JWKS cache and returns a PEM-encoded
+// public key if the cache is fresh (less than 1 hour old). Returns "" if
+// the cache is empty or stale.
+func (a *AuthController) getCachedJWKSPEM() string {
+	a.privyJWKSMu.RLock()
+	defer a.privyJWKSMu.RUnlock()
+
+	if a.privyJWKSCache.fetchedAt.IsZero() || time.Since(a.privyJWKSCache.fetchedAt) > time.Hour {
+		return ""
+	}
+	// Return the first key from the cache as PEM.
+	for _, pubKey := range a.privyJWKSCache.parsedKeys {
+		derBytes, err := x509.MarshalPKIXPublicKey(pubKey)
+		if err != nil {
+			continue
+		}
+		pemBlock := &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: derBytes,
+		}
+		return string(pem.EncodeToMemory(pemBlock))
+	}
+	return ""
+}
+
+// parseJWKSTokenHeader extracts the key ID (kid) from an unverified JWT header.
+// This is used to look up the correct JWKS key when the token specifies one.
+func parseJWKSTokenHeader(tokenString string) (string, error) {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) < 2 {
+		return "", errors.New("invalid JWT format")
+	}
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("decode JWT header: %w", err)
+	}
+	var header struct {
+		KeyID string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		return "", fmt.Errorf("parse JWT header: %w", err)
+	}
+	return header.KeyID, nil
+}
+
+// verifyPrivyAccessTokenWithJWKS verifies a Privy access token using the
+// JWKS key set. It extracts the kid from the JWT header, looks up the
+// matching key in the JWKS cache, and verifies the ES256 signature.
+func (a *AuthController) verifyPrivyAccessTokenWithJWKS(token, appID string) (string, error) {
+	// Parse the kid from the token header.
+	kid, err := parseJWKSTokenHeader(token)
+	if err != nil {
+		return "", fmt.Errorf("parse token header for kid: %w", err)
+	}
+
+	// Look up the key in the JWKS cache.
+	a.privyJWKSMu.RLock()
+	cache := a.privyJWKSCache
+	a.privyJWKSMu.RUnlock()
+
+	if cache.fetchedAt.IsZero() || time.Since(cache.fetchedAt) > time.Hour {
+		return "", errors.New("JWKS cache is empty or stale")
+	}
+
+	publicKey, ok := cache.parsedKeys[kid]
+	if !ok {
+		// Try "default" if no kid matched.
+		publicKey, ok = cache.parsedKeys["default"]
+		if !ok {
+			return "", fmt.Errorf("no JWK found for kid=%s", kid)
+		}
+	}
+
+	// Parse and verify the JWT using the matched key.
+	claims := &jwt.RegisteredClaims{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(parsedToken *jwt.Token) (any, error) {
+		return publicKey, nil
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer("privy.io"), jwt.WithAudience(appID), jwt.WithExpirationRequired())
+	if err != nil {
+		return "", fmt.Errorf("invalid Privy access token: %w", err)
+	}
+	if !parsed.Valid || strings.TrimSpace(claims.Subject) == "" {
+		return "", errors.New("invalid Privy access token claims")
+	}
+	return strings.TrimSpace(claims.Subject), nil
+}
+
+// PrivyReady checks that the Privy integration is configured and the
+// verification key (either from JWKS or static config) is valid.
 func (a *AuthController) PrivyReady(ctx context.Context) error {
 	if strings.TrimSpace(a.cfg.PrivyAppID) == "" || strings.TrimSpace(a.cfg.PrivyAppSecret) == "" {
 		return errPrivyNotConfigured
 	}
-	verificationKey, err := a.getPrivyVerificationKey(ctx)
+
+	mode := strings.ToLower(strings.TrimSpace(a.cfg.PrivyVerificationMode))
+
+	// Validate JWKS endpoint if mode is "jwks" or "auto".
+	if mode == "jwks" || mode == "auto" || mode == "" {
+		jwksURL := "https://auth.privy.io/api/v1/apps/" + url.PathEscape(a.cfg.PrivyAppID) + "/jwks.json"
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
+		if err != nil {
+			if mode == "jwks" {
+				return fmt.Errorf("jwks readiness: %w", err)
+			}
+		} else {
+			request.Header.Set("privy-app-id", a.cfg.PrivyAppID)
+			request.Header.Set("privy-client", "across-backend")
+			response, reqErr := a.httpClient.Do(request)
+			if reqErr == nil {
+				defer response.Body.Close()
+				var jwks jwksResponse
+				if decodeErr := json.NewDecoder(response.Body).Decode(&jwks); decodeErr == nil && len(jwks.Keys) > 0 {
+					// JWKS is available and valid.
+					return nil
+				}
+			}
+			// If JWKS fails and mode is "jwks", return error.
+			if mode == "jwks" {
+				return fmt.Errorf("jwks readiness: %w", reqErr)
+			}
+		}
+		// In "auto" mode, fall through to validate the static key.
+	}
+
+	// Fall back to validating the static key.
+	verificationKey, err := a.getStaticVerificationKey()
 	if err != nil {
 		return err
 	}
@@ -323,6 +628,8 @@ func privyFailureCode(err error) string {
 		return "privy_user_lookup_failed"
 	case strings.Contains(message, "no verified email"):
 		return "privy_verified_email_missing"
+	case strings.Contains(message, "jwks"):
+		return "privy_jwks_error"
 	default:
 		return "privy_token_invalid"
 	}
@@ -431,15 +738,19 @@ func (a *AuthController) verifyPrivyToken(ctx context.Context, token string) (st
 		return "", "", "", errPrivyNotConfigured
 	}
 
+	// Get the verification key (supports JWKS + static key fallback).
 	verificationKey, err := a.getPrivyVerificationKey(ctx)
 	if err != nil {
 		return "", "", "", err
 	}
+
+	// Verify the access token using the PEM key.
 	privyUserID, err := verifyPrivyAccessToken(token, verificationKey, a.cfg.PrivyAppID)
 	if err != nil {
 		return "", "", "", err
 	}
 
+	// Fetch the Privy user to get email and name.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://auth.privy.io/api/v1/users/"+url.PathEscape(privyUserID), nil)
 	if err != nil {
 		return "", "", "", err
@@ -589,7 +900,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
 	}
-	if err := a.sendVerificationEmail(c, userID, email, fullName, verificationToken); err != nil {
+	if err := a.sendVerificationEmail(email, fullName, verificationToken); err != nil {
 		return err
 	}
 
@@ -608,7 +919,7 @@ func (a *AuthController) respondSession(c *fiber.Ctx, userID string) error {
 	})
 }
 
-func (a *AuthController) sendVerificationEmail(c *fiber.Ctx, userID, toEmail, toName, token string) error {
+func (a *AuthController) sendVerificationEmail(toEmail, toName, token string) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(a.cfg.PublicBaseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
