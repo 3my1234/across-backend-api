@@ -165,6 +165,7 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 			COALESCE((SELECT string_agg(oi.title, ', ' ORDER BY oi.created_at) FROM order_items oi WHERE oi.order_id = o.id), '')
 		FROM orders o
 		WHERE o.user_id = $1
+		  AND o.order_status != 'Pending'
 		ORDER BY o.created_at DESC
 	`, userID)
 	if err != nil {
