@@ -31,6 +31,22 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
 	v1 := app.Group("/api/v1")
+	v1.Use(func(c *fiber.Ctx) error {
+		err := c.Next()
+		if c.GetRespHeader("Cache-Control") != "" {
+			return err
+		}
+		path := c.Path()
+		if c.Method() == fiber.MethodGet &&
+			(path == "/api/v1/products" ||
+				strings.HasPrefix(path, "/api/v1/products/") && !strings.Contains(path, "/mine")) {
+			c.Set(fiber.HeaderCacheControl, "public, max-age=60, stale-while-revalidate=300")
+			c.Vary(fiber.HeaderAcceptEncoding)
+			return err
+		}
+		c.Set(fiber.HeaderCacheControl, "private, no-store")
+		return err
+	})
 	v1.Get("/health", func(c *fiber.Ctx) error {
 		databaseReady := db.Ping(c.Context()) == nil
 		status := fiber.StatusOK

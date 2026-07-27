@@ -145,7 +145,7 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 			c.Set(header, value)
 		}
 	}
-	c.Set("Cache-Control", "public, max-age=86400")
+	c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
 	c.Status(resp.StatusCode)
 	_, err = io.Copy(c.Response().BodyWriter(), resp.Body)
 	return err
