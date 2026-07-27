@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,52 +87,78 @@ func (o *OpsController) ConfirmPurchase(c *fiber.Ctx) error {
 	})
 }
 
-// GetPurchaseManifest returns all order items in a batch organized for Admin II procurement
+// GetPurchaseManifest returns a bounded, searchable page of order items for Admin II.
 func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 	batchID := c.Params("batch_id")
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := o.db.Query(c.Context(), `
 		SELECT oi.id, oi.sku, oi.title, oi.quantity, oi.unit_price,
 			oi.purchase_status, oi.purchase_notes,
 			u.id, u.full_name, u.email, u.phone,
-			o.id, o.package_label
+			o.id, o.package_label, oi.created_at,
+			COUNT(*) OVER() AS total_count
 		FROM order_items oi
 		JOIN orders o ON o.id = oi.order_id
 		JOIN users u ON u.id = o.user_id
 		WHERE o.batch_id = $1
-		ORDER BY u.full_name, oi.created_at
-	`, batchID)
+		  AND ($2 = '' OR oi.sku ILIKE '%' || $2 || '%' OR oi.title ILIKE '%' || $2 || '%'
+			OR u.full_name ILIKE '%' || $2 || '%' OR u.email ILIKE '%' || $2 || '%'
+			OR oi.purchase_status ILIKE '%' || $2 || '%')
+		  AND ($3::timestamptz IS NULL OR (oi.created_at, oi.id) < ($3, $4::uuid))
+		ORDER BY oi.created_at DESC, oi.id DESC
+		LIMIT $5
+	`, batchID, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "manifest unavailable")
 	}
 	defer rows.Close()
 
 	type BuyerOrder struct {
-		BuyerID        string  `json:"buyer_id"`
-		BuyerName      string  `json:"buyer_name"`
-		BuyerEmail     string  `json:"buyer_email"`
-		BuyerPhone     string  `json:"buyer_phone"`
-		OrderID        string  `json:"order_id"`
-		PackageLabel   string  `json:"package_label"`
-		ItemID         string  `json:"item_id"`
-		SKU            string  `json:"sku"`
-		Title          string  `json:"title"`
-		Quantity       int     `json:"quantity"`
-		UnitPrice      float64 `json:"unit_price"`
-		PurchaseStatus string  `json:"purchase_status"`
-		PurchaseNotes  string  `json:"purchase_notes"`
+		BuyerID        string    `json:"buyer_id"`
+		BuyerName      string    `json:"buyer_name"`
+		BuyerEmail     string    `json:"buyer_email"`
+		BuyerPhone     string    `json:"buyer_phone"`
+		OrderID        string    `json:"order_id"`
+		PackageLabel   string    `json:"package_label"`
+		ItemID         string    `json:"item_id"`
+		SKU            string    `json:"sku"`
+		Title          string    `json:"title"`
+		Quantity       int       `json:"quantity"`
+		UnitPrice      float64   `json:"unit_price"`
+		PurchaseStatus string    `json:"purchase_status"`
+		PurchaseNotes  string    `json:"purchase_notes"`
+		CreatedAt      time.Time `json:"created_at"`
 	}
 	items := make([]BuyerOrder, 0)
+	var totalCount int64
 	for rows.Next() {
 		var item BuyerOrder
 		if err := rows.Scan(&item.ItemID, &item.SKU, &item.Title, &item.Quantity, &item.UnitPrice,
 			&item.PurchaseStatus, &item.PurchaseNotes,
 			&item.BuyerID, &item.BuyerName, &item.BuyerEmail, &item.BuyerPhone,
-			&item.OrderID, &item.PackageLabel); err != nil {
+			&item.OrderID, &item.PackageLabel, &item.CreatedAt, &totalCount); err != nil {
 			return err
 		}
 		items = append(items, item)
 	}
-	return c.JSON(fiber.Map{"items": items, "total_items": len(items)})
+	nextCursor := ""
+	if len(items) > page.Limit {
+		items = items[:page.Limit]
+		last := items[len(items)-1]
+		nextCursor = encodeAdminCursor(last.CreatedAt, last.ItemID)
+	}
+	return c.JSON(fiber.Map{
+		"items":       items,
+		"total_items": totalCount,
+		"page":        adminPageMeta(page, totalCount, len(items), nextCursor),
+	})
 }
 
 // ---------- Admin III: Delivery Management ----------

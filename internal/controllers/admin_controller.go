@@ -48,11 +48,66 @@ func (a *AdminController) Login(c *fiber.Ctx) error {
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid admin credentials")
 	}
+	role = normalizeAdminRole(role)
 	token, expiresAt, err := auth.Sign(adminID, a.cfg.JWTSecret, 12*time.Hour)
 	if err != nil {
 		return err
 	}
 	return c.JSON(fiber.Map{"access_token": token, "expires_at": expiresAt, "admin_id": adminID, "full_name": fullName, "role": role})
+}
+
+// Session validates the persisted admin token and returns the current server-side
+// identity. The role is deliberately read from the database on every restore so
+// deactivated accounts and role changes take effect without waiting for JWT expiry.
+func (a *AdminController) Session(c *fiber.Ctx) error {
+	adminID, ok := c.Locals("admin_id").(string)
+	if !ok || adminID == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "admin session unavailable")
+	}
+
+	var fullName, role string
+	if err := a.db.QueryRow(c.Context(), `
+		SELECT full_name, role
+		FROM admins
+		WHERE id = $1 AND is_active = true
+	`, adminID).Scan(&fullName, &role); err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "admin account unavailable")
+	}
+	role = normalizeAdminRole(role)
+
+	return c.JSON(fiber.Map{
+		"admin_id":  adminID,
+		"full_name": fullName,
+		"role":      role,
+	})
+}
+
+func (a *AdminController) Overview(c *fiber.Ctx) error {
+	role, _ := c.Locals("admin_role").(string)
+	if role == "procurement_admin" || role == "courier_admin" {
+		var batches int64
+		if err := a.db.QueryRow(c.Context(), `SELECT COUNT(*) FROM order_batches`).Scan(&batches); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "overview unavailable")
+		}
+		return c.JSON(fiber.Map{"batch_count": batches})
+	}
+
+	var orders, transactions, manifest int64
+	if err := a.db.QueryRow(c.Context(), `
+		SELECT
+			(SELECT COUNT(*) FROM orders),
+			(SELECT COUNT(*) FROM orders WHERE paid_at IS NOT NULL),
+			(SELECT COUNT(*) FROM order_items oi
+			 JOIN orders o ON o.id = oi.order_id
+			 WHERE o.order_status IN ('Paid', 'Shipped'))
+	`).Scan(&orders, &transactions, &manifest); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "overview unavailable")
+	}
+	return c.JSON(fiber.Map{
+		"order_count":       orders,
+		"transaction_count": transactions,
+		"manifest_count":    manifest,
+	})
 }
 
 func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
@@ -91,23 +146,35 @@ func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
 }
 
 func (a *AdminController) ListAdmins(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT id, email, full_name, role, is_active, created_at, updated_at
+			, COUNT(*) OVER() AS total_count
 		FROM admins
-		ORDER BY created_at DESC
-		LIMIT 500
-	`)
+		WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR full_name ILIKE '%' || $1 || '%' OR role ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3::uuid))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "admins unavailable")
 	}
 	defer rows.Close()
 
 	admins := make([]fiber.Map, 0)
+	var total int64
 	for rows.Next() {
 		var id, email, fullName, role string
 		var isActive bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &email, &fullName, &role, &isActive, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &email, &fullName, &role, &isActive, &createdAt, &updatedAt, &total); err != nil {
 			return err
 		}
 		admins = append(admins, fiber.Map{
@@ -120,29 +187,47 @@ func (a *AdminController) ListAdmins(c *fiber.Ctx) error {
 			"updated_at": updatedAt,
 		})
 	}
-	return c.JSON(fiber.Map{"admins": admins})
+	nextCursor := ""
+	if len(admins) > page.Limit {
+		admins = admins[:page.Limit]
+		last := admins[len(admins)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"admins": admins, "page": adminPageMeta(page, total, len(admins), nextCursor)})
 }
 
 func (a *AdminController) ListUsers(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT u.id, u.full_name, u.email, u.phone, cc.country_code, cc.currency_code, u.is_active, u.created_at, u.updated_at
+			, COUNT(*) OVER() AS total_count
 		FROM users u
 		JOIN countries_config cc ON cc.id = u.country_id
-		ORDER BY u.created_at DESC
-		LIMIT 1000
-	`)
+		WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%' OR u.full_name ILIKE '%' || $1 || '%' OR u.phone ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (u.created_at, u.id) < ($2, $3::uuid))
+		ORDER BY u.created_at DESC, u.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "users unavailable")
 	}
 	defer rows.Close()
 
 	users := make([]fiber.Map, 0)
+	var total int64
 	for rows.Next() {
 		var id, fullName, countryCode, currencyCode string
 		var email, phone sql.NullString
 		var isActive bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &fullName, &email, &phone, &countryCode, &currencyCode, &isActive, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &fullName, &email, &phone, &countryCode, &currencyCode, &isActive, &createdAt, &updatedAt, &total); err != nil {
 			return err
 		}
 		users = append(users, fiber.Map{
@@ -157,7 +242,13 @@ func (a *AdminController) ListUsers(c *fiber.Ctx) error {
 			"updated_at":    updatedAt,
 		})
 	}
-	return c.JSON(fiber.Map{"users": users})
+	nextCursor := ""
+	if len(users) > page.Limit {
+		users = users[:page.Limit]
+		last := users[len(users)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"users": users, "page": adminPageMeta(page, total, len(users), nextCursor)})
 }
 
 func (a *AdminController) DeleteUser(c *fiber.Ctx) error {
@@ -261,25 +352,38 @@ func nullableString(value sql.NullString) any {
 }
 
 func (a *AdminController) ListOrders(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT o.id, u.email, o.currency_code, o.total_amount, o.shipping_fee,
 			COALESCE(o.customs_fee, 0), COALESCE(o.vat_fee, 0),
-			o.order_status, o.current_tracking_stage, o.created_at
+			o.order_status, o.current_tracking_stage, o.created_at,
+			COUNT(*) OVER() AS total_count
 		FROM orders o
 		JOIN users u ON u.id = o.user_id
-		ORDER BY o.created_at DESC
-		LIMIT 500
-	`)
+		WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%' OR o.id::text = $1
+			OR o.order_status::text ILIKE '%' || $1 || '%' OR o.current_tracking_stage::text ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (o.created_at, o.id) < ($2, $3::uuid))
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	orders := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
 		var id, email, currency, status, stage string
 		var total, shipping, customs, vat float64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &currency, &total, &shipping, &customs, &vat, &status, &stage, &createdAt); err != nil {
+		if err := rows.Scan(&id, &email, &currency, &total, &shipping, &customs, &vat, &status, &stage, &createdAt, &totalCount); err != nil {
 			return err
 		}
 		orders = append(orders, fiber.Map{
@@ -288,31 +392,49 @@ func (a *AdminController) ListOrders(c *fiber.Ctx) error {
 			"status": status, "stage": stage, "created_at": createdAt,
 		})
 	}
-	return c.JSON(fiber.Map{"orders": orders})
+	nextCursor := ""
+	if len(orders) > page.Limit {
+		orders = orders[:page.Limit]
+		last := orders[len(orders)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"orders": orders, "page": adminPageMeta(page, totalCount, len(orders), nextCursor)})
 }
 
 func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT o.id, u.email, o.total_amount, o.currency_code, o.order_status::text,
 			COALESCE(o.flutterwave_tx_ref, ''),
 			COALESCE(o.flutterwave_transaction_id, ''),
-			o.paid_at, o.created_at
+			o.paid_at, o.created_at, COUNT(*) OVER() AS total_count
 		FROM orders o
 		JOIN users u ON u.id = o.user_id
-		ORDER BY o.created_at DESC
-		LIMIT 500
-	`)
+		WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%' OR o.id::text = $1
+			OR o.flutterwave_tx_ref ILIKE '%' || $1 || '%' OR o.flutterwave_transaction_id ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (o.created_at, o.id) < ($2, $3::uuid))
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	transactions := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
 		var id, email, currency, orderStatus, txRef, transactionID string
 		var total float64
 		var paidAt *time.Time
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &total, &currency, &orderStatus, &txRef, &transactionID, &paidAt, &createdAt); err != nil {
+		if err := rows.Scan(&id, &email, &total, &currency, &orderStatus, &txRef, &transactionID, &paidAt, &createdAt, &totalCount); err != nil {
 			return err
 		}
 		paymentStatus := "pending"
@@ -320,13 +442,19 @@ func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 			paymentStatus = "settled"
 		}
 		transactions = append(transactions, fiber.Map{
-			"order_id": id, "email": email, "total_amount": total, "currency": currency,
+			"id": id, "order_id": id, "email": email, "total_amount": total, "currency": currency,
 			"order_status": orderStatus, "payment_status": paymentStatus,
 			"flutterwave_tx_ref": txRef, "flutterwave_transaction_id": transactionID,
 			"paid_at": paidAt, "created_at": createdAt,
 		})
 	}
-	return c.JSON(fiber.Map{"transactions": transactions})
+	nextCursor := ""
+	if len(transactions) > page.Limit {
+		transactions = transactions[:page.Limit]
+		last := transactions[len(transactions)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"transactions": transactions, "page": adminPageMeta(page, totalCount, len(transactions), nextCursor)})
 }
 func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	var req struct {
@@ -402,20 +530,33 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 }
 
 func (a *AdminController) ListProducts(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0),
-			p.inventory_count, p.is_active, p.created_at, p.updated_at
+			p.inventory_count, p.is_active, p.created_at, p.updated_at,
+			COUNT(*) OVER() AS total_count
 		FROM products p
-		ORDER BY p.created_at DESC
-		LIMIT 500
-	`)
+		WHERE ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
+			OR p.description ILIKE '%' || $1 || '%' OR array_to_string(p.category_path, ' ') ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (p.created_at, p.id) < ($2, $3::uuid))
+		ORDER BY p.created_at DESC, p.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "products unavailable")
 	}
 	defer rows.Close()
 
 	products := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
 		var id, sku, title, description, currency string
 		var categories, images []string
@@ -423,7 +564,7 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 		var inventory int
 		var isActive bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &isActive, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &isActive, &createdAt, &updatedAt, &totalCount); err != nil {
 			return err
 		}
 		products = append(products, fiber.Map{
@@ -442,7 +583,13 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 			"updated_at":          updatedAt,
 		})
 	}
-	return c.JSON(fiber.Map{"products": products})
+	nextCursor := ""
+	if len(products) > page.Limit {
+		products = products[:page.Limit]
+		last := products[len(products)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"products": products, "page": adminPageMeta(page, totalCount, len(products), nextCursor)})
 }
 
 func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
@@ -564,28 +711,42 @@ func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 }
 
 func (a *AdminController) ListBatches(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT b.id, b.batch_code, b.batch_date, b.status::text, b.transport_mode,
 			b.total_ngn_collected, b.total_cny_sent, b.current_location, b.notes,
-			COUNT(o.id)::int AS order_count
+			COUNT(o.id)::int AS order_count, b.created_at,
+			COUNT(*) OVER() AS total_count
 		FROM order_batches b
 		LEFT JOIN orders o ON o.batch_id = b.id
+		WHERE ($1 = '' OR b.batch_code ILIKE '%' || $1 || '%' OR b.status::text ILIKE '%' || $1 || '%'
+			OR b.transport_mode ILIKE '%' || $1 || '%' OR b.current_location ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (b.created_at, b.id) < ($2, $3::uuid))
 		GROUP BY b.id
-		ORDER BY b.batch_date DESC, b.created_at DESC
-		LIMIT 200
-	`)
+		ORDER BY b.created_at DESC, b.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "batches unavailable")
 	}
 	defer rows.Close()
 
 	batches := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
 		var id, code, status, transport, location, notes string
 		var batchDate time.Time
 		var totalNgn, totalCny float64
 		var orderCount int
-		if err := rows.Scan(&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny, &location, &notes, &orderCount); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny, &location, &notes, &orderCount, &createdAt, &totalCount); err != nil {
 			return err
 		}
 		batches = append(batches, fiber.Map{
@@ -599,32 +760,55 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			"current_location":    location,
 			"notes":               notes,
 			"order_count":         orderCount,
+			"created_at":          createdAt,
 		})
 	}
-	return c.JSON(fiber.Map{"batches": batches})
+	nextCursor := ""
+	if len(batches) > page.Limit {
+		batches = batches[:page.Limit]
+		last := batches[len(batches)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"batches": batches, "page": adminPageMeta(page, totalCount, len(batches), nextCursor)})
 }
 
 func (a *AdminController) ListBatchOrders(c *fiber.Ctx) error {
 	batchID := c.Params("batch_id")
+	deliverableOnly := c.QueryBool("deliverable", false)
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT o.id, u.email, o.package_label, o.order_status, o.current_tracking_stage,
-			o.currency_code, o.total_amount, o.customs_fee, o.vat_fee, o.created_at
+			o.currency_code, o.total_amount, o.customs_fee, o.vat_fee, o.created_at,
+			COUNT(*) OVER() AS total_count
 		FROM orders o
 		JOIN users u ON u.id = o.user_id
 		WHERE o.batch_id = $1
-		ORDER BY o.created_at ASC
-	`, batchID)
+		  AND ($2 = '' OR u.email ILIKE '%' || $2 || '%' OR o.package_label ILIKE '%' || $2 || '%'
+			OR o.order_status::text ILIKE '%' || $2 || '%' OR o.current_tracking_stage::text ILIKE '%' || $2 || '%')
+		  AND ($3::timestamptz IS NULL OR (o.created_at, o.id) < ($3, $4::uuid))
+		  AND (NOT $5 OR o.current_tracking_stage::text NOT IN ('Delivered', 'Completed'))
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $6
+	`, batchID, page.Search, page.CursorTime, cursorID, deliverableOnly, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "batch orders unavailable")
 	}
 	defer rows.Close()
 
 	orders := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
 		var id, email, packageLabel, status, stage, currency string
 		var total, customs, vat float64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &packageLabel, &status, &stage, &currency, &total, &customs, &vat, &createdAt); err != nil {
+		if err := rows.Scan(&id, &email, &packageLabel, &status, &stage, &currency, &total, &customs, &vat, &createdAt, &totalCount); err != nil {
 			return err
 		}
 		orders = append(orders, fiber.Map{
@@ -640,7 +824,13 @@ func (a *AdminController) ListBatchOrders(c *fiber.Ctx) error {
 			"created_at":    createdAt,
 		})
 	}
-	return c.JSON(fiber.Map{"orders": orders})
+	nextCursor := ""
+	if len(orders) > page.Limit {
+		orders = orders[:page.Limit]
+		last := orders[len(orders)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"orders": orders, "page": adminPageMeta(page, totalCount, len(orders), nextCursor)})
 }
 
 func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
@@ -936,31 +1126,51 @@ func normalizeBatchStatus(value string) string {
 }
 
 func (a *AdminController) PendingManifest(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 	rows, err := a.db.Query(c.Context(), `
-		SELECT o.id, o.order_status, o.current_tracking_stage, oi.sku, oi.title, oi.quantity, lh.code
+		SELECT o.id, o.order_status, o.current_tracking_stage, oi.sku, oi.title, oi.quantity, lh.code,
+			oi.id, oi.created_at, COUNT(*) OVER() AS total_count
 		FROM orders o
 		JOIN order_items oi ON oi.order_id = o.id
 		LEFT JOIN logistics_hubs lh ON lh.id = oi.origin_hub_id
 		WHERE o.order_status IN ('Paid', 'Shipped')
-		ORDER BY o.created_at ASC
-		LIMIT 1000
-	`)
+		  AND ($1 = '' OR oi.sku ILIKE '%' || $1 || '%' OR oi.title ILIKE '%' || $1 || '%'
+			OR o.id::text = $1 OR o.order_status::text ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (oi.created_at, oi.id) < ($2, $3::uuid))
+		ORDER BY oi.created_at DESC, oi.id DESC
+		LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "manifest unavailable")
 	}
 	defer rows.Close()
 
 	items := make([]fiber.Map, 0)
+	var totalCount int64
 	for rows.Next() {
-		var orderID, status, stage, sku, title string
+		var orderID, status, stage, sku, title, itemID string
 		var hubCode *string
 		var qty int
-		if err := rows.Scan(&orderID, &status, &stage, &sku, &title, &qty, &hubCode); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&orderID, &status, &stage, &sku, &title, &qty, &hubCode, &itemID, &createdAt, &totalCount); err != nil {
 			return err
 		}
-		items = append(items, fiber.Map{"order_id": orderID, "status": status, "stage": stage, "sku": sku, "title": title, "quantity": qty, "hub_code": hubCode})
+		items = append(items, fiber.Map{"id": itemID, "order_id": orderID, "status": status, "stage": stage, "sku": sku, "title": title, "quantity": qty, "hub_code": hubCode, "created_at": createdAt})
 	}
-	return c.JSON(fiber.Map{"items": items})
+	nextCursor := ""
+	if len(items) > page.Limit {
+		items = items[:page.Limit]
+		last := items[len(items)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	return c.JSON(fiber.Map{"items": items, "page": adminPageMeta(page, totalCount, len(items), nextCursor)})
 }
 
 func (a *AdminController) BatchScanTracking(c *fiber.Ctx) error {

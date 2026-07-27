@@ -72,10 +72,16 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	v1.Post("/admin/login", admin.Login)
 	v1.Post("/admin/pricing/calculate", controllers.PriceBreakdown)
+	v1.Get("/admin/session", middleware.RequireAdminRoles(cfg, db,
+		"super_admin", "catalog_admin", "procurement_admin", "courier_admin"), admin.Session)
+	v1.Get("/admin/overview", middleware.RequireAdminRoles(cfg, db,
+		"super_admin", "catalog_admin", "procurement_admin", "courier_admin"), admin.Overview)
 
 	superAdminGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin"))
 	catalogGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin"))
 	opsGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin", "courier_admin"))
+	procurementGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin"))
+	courierGroup := v1.Group("/admin", middleware.RequireAdminRoles(cfg, db, "super_admin", "courier_admin"))
 
 	superAdminGroup.Post("/admins", admin.CreateAdmin)
 	superAdminGroup.Patch("/admins/:admin_id/password", admin.ResetAdminPassword)
@@ -96,13 +102,13 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	opsGroup.Get("/manifest/pending", admin.PendingManifest)
 	opsGroup.Post("/tracking/batch-scan", admin.BatchScanTracking)
 	// Admin II: Purchase management
-	opsGroup.Get("/batches/:batch_id/purchase-manifest", ops.GetPurchaseManifest)
-	opsGroup.Post("/batches/:batch_id/purchase-confirm", ops.ConfirmPurchase)
+	procurementGroup.Get("/batches/:batch_id/purchase-manifest", ops.GetPurchaseManifest)
+	procurementGroup.Post("/batches/:batch_id/purchase-confirm", ops.ConfirmPurchase)
 	// Admin III: Delivery management
-	opsGroup.Post("/batches/:batch_id/confirm-arrival", ops.ConfirmArrival)
-	opsGroup.Post("/batches/confirm-delivered", ops.ConfirmDelivered)
+	courierGroup.Post("/batches/:batch_id/confirm-arrival", ops.ConfirmArrival)
+	courierGroup.Post("/batches/confirm-delivered", ops.ConfirmDelivered)
 	// Auto-confirm expired deliveries (can be called by cron)
-	opsGroup.Post("/deliveries/auto-confirm", ops.AutoConfirmDeliveries)
+	courierGroup.Post("/deliveries/auto-confirm", ops.AutoConfirmDeliveries)
 
 	authed := v1.Group("", middleware.RequireAuth(cfg))
 	authed.Get("/auth/session", authController.Session)
