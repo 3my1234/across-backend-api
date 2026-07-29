@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"across/backend/internal/config"
+	"across/backend/internal/controllers"
 	"across/backend/internal/db"
 	"across/backend/internal/migrations"
 	"across/backend/internal/routes"
@@ -52,6 +53,7 @@ func main() {
 
 	// Start background cron workers
 	go startAutoConfirmWorker(ctx, store.PG)
+	go startBatchClosureWorker(ctx, store.PG)
 
 	log.Printf("service configuration: privy_app_id_set=%t privy_app_secret_set=%t s3_region_set=%t s3_bucket_set=%t",
 		strings.TrimSpace(cfg.PrivyAppID) != "", strings.TrimSpace(cfg.PrivyAppSecret) != "",
@@ -79,21 +81,40 @@ func startAutoConfirmWorker(ctx context.Context, db *pgxpool.Pool) {
 }
 
 func runAutoConfirm(ctx context.Context, db *pgxpool.Pool) {
-	tag, err := db.Exec(ctx, `
-		UPDATE orders
-		SET order_status = 'Completed',
-			delivery_confirmed = true,
-			confirmed_at = now(),
-			updated_at = now()
-		WHERE current_tracking_stage = 'Delivered'::tracking_stage
-			AND delivery_confirmed = false
-			AND delivered_at < now() - interval '3 days'
-	`)
+	count, err := controllers.AutoConfirmExpiredDeliveries(ctx, db)
 	if err != nil {
 		log.Printf("auto-confirm worker error: %v", err)
 		return
 	}
-	if count := tag.RowsAffected(); count > 0 {
+	if count > 0 {
 		log.Printf("auto-confirm worker: auto-confirmed %d deliveries", count)
+	}
+}
+
+// startBatchClosureWorker closes operational-day batches shortly after their
+// country-specific midnight. Conditional updates make this replica-safe.
+func startBatchClosureWorker(ctx context.Context, db *pgxpool.Pool) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	runBatchClosure(ctx, db)
+	for {
+		select {
+		case <-ticker.C:
+			runBatchClosure(ctx, db)
+		case <-ctx.Done():
+			log.Println("batch closure worker stopped")
+			return
+		}
+	}
+}
+
+func runBatchClosure(ctx context.Context, db *pgxpool.Pool) {
+	count, err := controllers.CloseExpiredBatches(ctx, db)
+	if err != nil {
+		log.Printf("batch closure worker error: %v", err)
+		return
+	}
+	if count > 0 {
+		log.Printf("batch closure worker: closed %d operational-day batches", count)
 	}
 }

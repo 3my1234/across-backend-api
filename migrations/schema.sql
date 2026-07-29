@@ -29,6 +29,7 @@ CREATE TABLE countries_config (
   base_escrow_days INTEGER NOT NULL DEFAULT 14 CHECK (base_escrow_days > 0),
   active_payment_gateways TEXT[] NOT NULL DEFAULT ARRAY['flutterwave'],
   vat_rate_bps INTEGER NOT NULL DEFAULT 0 CHECK (vat_rate_bps >= 0),
+  operational_timezone TEXT NOT NULL DEFAULT 'UTC',
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -77,12 +78,17 @@ CREATE TABLE logistics_hubs (
 
 CREATE TYPE batch_status AS ENUM (
   'collecting_funds',
+  'closed',
   'settled',
   'funds_sent_to_china',
+  'funds_sent_to_procurement',
+  'procurement_acknowledged',
   'purchasing',
+  'procurement_complete',
   'enroute_nigeria',
   'arrived_local',
   'sorted',
+  'ready_for_pickup',
   'completed'
 );
 
@@ -93,13 +99,31 @@ CREATE TABLE order_batches (
   batch_date DATE NOT NULL,
   status batch_status NOT NULL DEFAULT 'collecting_funds',
   transport_mode TEXT NOT NULL DEFAULT 'air' CHECK (transport_mode IN ('air', 'sea')),
+  route_key TEXT NOT NULL DEFAULT 'LOS',
+  batch_sequence INTEGER NOT NULL DEFAULT 1 CHECK (batch_sequence > 0),
   total_ngn_collected NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_ngn_collected >= 0),
   total_cny_sent NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_cny_sent >= 0),
   current_location TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  closed_at TIMESTAMPTZ,
+  membership_locked BOOLEAN NOT NULL DEFAULT false,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  reconciled_at TIMESTAMPTZ,
+  reconciled_by UUID,
+  procurement_funds_amount NUMERIC(14,2) CHECK (procurement_funds_amount IS NULL OR procurement_funds_amount > 0),
+  procurement_funds_currency CHAR(3) NOT NULL DEFAULT 'NGN',
+  procurement_funds_reference TEXT NOT NULL DEFAULT '',
+  procurement_funds_sent_at TIMESTAMPTZ,
+  procurement_funds_sent_by UUID,
+  procurement_funds_acknowledged_at TIMESTAMPTZ,
+  procurement_funds_acknowledged_by UUID,
+  procurement_completed_at TIMESTAMPTZ,
+  procurement_completed_by UUID,
+  completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(country_id, batch_date)
+  UNIQUE(country_id, batch_date, route_key, transport_mode, batch_sequence)
 );
 
 -- Per-category SKU counters for sequential SKUs like MCL-000001
@@ -161,6 +185,13 @@ CREATE TABLE order_items (
   variant JSONB NOT NULL DEFAULT '{}'::jsonb,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   unit_price NUMERIC(14,2) NOT NULL CHECK (unit_price >= 0),
+  purchase_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (purchase_status IN ('pending', 'purchased', 'failed')),
+  purchase_notes TEXT NOT NULL DEFAULT '',
+  exception_resolution TEXT NOT NULL DEFAULT 'none'
+    CHECK (exception_resolution IN ('none', 'pending', 'refunded', 'substituted', 'cancelled')),
+  exception_resolved_at TIMESTAMPTZ,
+  exception_resolved_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -206,9 +237,11 @@ CREATE TABLE batch_events (
   batch_id UUID NOT NULL REFERENCES order_batches(id) ON DELETE CASCADE,
   actor_id UUID,
   event_type TEXT NOT NULL,
+  previous_status batch_status,
   status batch_status,
   location TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

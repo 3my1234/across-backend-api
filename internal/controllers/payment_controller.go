@@ -364,25 +364,109 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	return tx.Commit(ctx)
 }
 func (p *PaymentController) ensureDailyBatch(ctx context.Context, tx pgx.Tx, countryID string, promisedAt time.Time, orderAmount float64) (string, string, error) {
-	batchDate := time.Now().UTC().Format("2006-01-02")
-	batchCode := fmt.Sprintf("BATCH-%s", strings.ReplaceAll(batchDate, "-", ""))
-
-	var batchID string
+	var countryCode, operationalTimezone, batchDate string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO order_batches(batch_code, country_id, batch_date, status, total_ngn_collected, current_location, notes)
-		VALUES ($1, $2, $3::date, 'collecting_funds', $4, 'Payment settlement', '')
-		ON CONFLICT (country_id, batch_date)
-		DO UPDATE SET total_ngn_collected = order_batches.total_ngn_collected + EXCLUDED.total_ngn_collected,
-			updated_at = now()
-		RETURNING id
-	`, batchCode, countryID, batchDate, orderAmount).Scan(&batchID); err != nil {
+		SELECT c.country_code, tz.effective_timezone,
+			(now() AT TIME ZONE tz.effective_timezone)::date::text
+		FROM countries_config c
+		CROSS JOIN LATERAL (
+			SELECT CASE
+				WHEN c.country_code = 'NG' AND c.operational_timezone = 'UTC'
+					THEN 'Africa/Lagos'
+				ELSE c.operational_timezone
+			END AS effective_timezone
+		) tz
+		WHERE c.id = $1 AND c.is_active = true
+	`, countryID).Scan(&countryCode, &operationalTimezone, &batchDate); err != nil {
 		return "", "", err
 	}
 
-	_, err := tx.Exec(ctx, `
-		INSERT INTO batch_events(batch_id, event_type, status, location, notes)
-		VALUES ($1, 'payment_confirmed', 'collecting_funds', 'Payment settlement', $2)
-	`, batchID, promisedAt.Format(time.RFC3339))
+	routeKey := strings.ToUpper(strings.TrimSpace(countryCode))
+	if routeKey == "NG" {
+		routeKey = "LOS"
+	}
+	transportMode := "air"
+	lockKey := fmt.Sprintf("daily-batch:%s:%s:%s:%s", countryID, batchDate, routeKey, transportMode)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return "", "", err
+	}
+
+	var batchID, batchCode string
+	err := tx.QueryRow(ctx, `
+		SELECT id, batch_code
+		FROM order_batches
+		WHERE country_id = $1
+		  AND batch_date = $2::date
+		  AND route_key = $3
+		  AND transport_mode = $4
+		  AND status = 'collecting_funds'::batch_status
+		  AND membership_locked = false
+		ORDER BY batch_sequence DESC
+		LIMIT 1
+		FOR UPDATE
+	`, countryID, batchDate, routeKey, transportMode).Scan(&batchID, &batchCode)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", err
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		var sequence int
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(MAX(batch_sequence), 0) + 1
+			FROM order_batches
+			WHERE country_id = $1
+			  AND batch_date = $2::date
+			  AND route_key = $3
+			  AND transport_mode = $4
+		`, countryID, batchDate, routeKey, transportMode).Scan(&sequence); err != nil {
+			return "", "", err
+		}
+		batchCode = fmt.Sprintf("%s-%s-%s-%s-%02d",
+			strings.ToUpper(countryCode),
+			routeKey,
+			strings.ToUpper(transportMode),
+			strings.ReplaceAll(batchDate, "-", ""),
+			sequence,
+		)
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO order_batches(
+				batch_code, country_id, batch_date, status, transport_mode, route_key,
+				batch_sequence, total_ngn_collected, current_location, notes, opened_at,
+				membership_locked
+			)
+			VALUES (
+				$1, $2, $3::date, 'collecting_funds', $4, $5,
+				$6, $7, 'Payment settlement', '', now(), false
+			)
+			RETURNING id
+		`, batchCode, countryID, batchDate, transportMode, routeKey, sequence, orderAmount).Scan(&batchID); err != nil {
+			return "", "", err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE order_batches
+			SET total_ngn_collected = total_ngn_collected + $2,
+				updated_at = now(),
+				version = version + 1
+			WHERE id = $1
+			  AND status = 'collecting_funds'::batch_status
+			  AND membership_locked = false
+		`, batchID, orderAmount); err != nil {
+			return "", "", err
+		}
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO batch_events(batch_id, event_type, status, location, notes, metadata)
+		VALUES (
+			$1, 'payment_confirmed', 'collecting_funds', 'Payment settlement', $2,
+			jsonb_build_object(
+				'operational_timezone', $3,
+				'business_date', $4,
+				'amount', $5
+			)
+		)
+	`, batchID, promisedAt.Format(time.RFC3339), operationalTimezone, batchDate, orderAmount)
 	if err != nil {
 		return "", "", err
 	}

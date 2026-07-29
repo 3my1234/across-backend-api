@@ -122,7 +122,11 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusConflict, "review could not be created")
 		}
-		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": reviewID, "created": true})
+		rewardClaimed, rewardErr := creditReviewReward(c.Context(), rc.db, userID, orderID)
+		if rewardErr != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "review saved but reward could not be credited")
+		}
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": reviewID, "created": true, "review_reward_claimed": rewardClaimed})
 	}
 
 	_, err = rc.db.Exec(c.Context(), `
@@ -133,7 +137,11 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"id": reviewID, "updated": true})
+	rewardClaimed, rewardErr := creditReviewReward(c.Context(), rc.db, userID, orderID)
+	if rewardErr != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "review saved but reward could not be credited")
+	}
+	return c.JSON(fiber.Map{"id": reviewID, "updated": true, "review_reward_claimed": rewardClaimed})
 }
 
 func (rc *ReviewController) MyProductReview(c *fiber.Ctx) error {

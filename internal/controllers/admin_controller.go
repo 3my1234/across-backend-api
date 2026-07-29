@@ -722,7 +722,11 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 	rows, err := a.db.Query(c.Context(), `
 		SELECT b.id, b.batch_code, b.batch_date, b.status::text, b.transport_mode,
 			b.total_ngn_collected, b.total_cny_sent, b.current_location, b.notes,
-			COUNT(o.id)::int AS order_count, b.created_at,
+			COUNT(o.id)::int AS order_count, b.created_at, b.version, b.membership_locked,
+			b.opened_at, b.closed_at, b.route_key, b.batch_sequence,
+			b.procurement_funds_amount, b.procurement_funds_currency,
+			b.procurement_funds_reference, b.procurement_funds_sent_at,
+			b.procurement_funds_acknowledged_at, b.procurement_completed_at,
 			COUNT(*) OVER() AS total_count
 		FROM order_batches b
 		LEFT JOIN orders o ON o.batch_id = b.id
@@ -746,21 +750,46 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 		var totalNgn, totalCny float64
 		var orderCount int
 		var createdAt time.Time
-		if err := rows.Scan(&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny, &location, &notes, &orderCount, &createdAt, &totalCount); err != nil {
+		var version int64
+		var membershipLocked bool
+		var openedAt time.Time
+		var closedAt, fundsSentAt, fundsAcknowledgedAt, procurementCompletedAt *time.Time
+		var routeKey, fundsCurrency, fundsReference string
+		var batchSequence int
+		var fundsAmount *float64
+		if err := rows.Scan(
+			&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny,
+			&location, &notes, &orderCount, &createdAt, &version, &membershipLocked,
+			&openedAt, &closedAt, &routeKey, &batchSequence, &fundsAmount,
+			&fundsCurrency, &fundsReference, &fundsSentAt, &fundsAcknowledgedAt,
+			&procurementCompletedAt, &totalCount,
+		); err != nil {
 			return err
 		}
 		batches = append(batches, fiber.Map{
-			"id":                  id,
-			"batch_code":          code,
-			"batch_date":          batchDate,
-			"status":              status,
-			"transport_mode":      transport,
-			"total_ngn_collected": totalNgn,
-			"total_cny_sent":      totalCny,
-			"current_location":    location,
-			"notes":               notes,
-			"order_count":         orderCount,
-			"created_at":          createdAt,
+			"id":                                id,
+			"batch_code":                        code,
+			"batch_date":                        batchDate,
+			"status":                            status,
+			"transport_mode":                    transport,
+			"total_ngn_collected":               totalNgn,
+			"total_cny_sent":                    totalCny,
+			"current_location":                  location,
+			"notes":                             notes,
+			"order_count":                       orderCount,
+			"created_at":                        createdAt,
+			"version":                           version,
+			"membership_locked":                 membershipLocked,
+			"opened_at":                         openedAt,
+			"closed_at":                         closedAt,
+			"route_key":                         routeKey,
+			"batch_sequence":                    batchSequence,
+			"procurement_funds_amount":          fundsAmount,
+			"procurement_funds_currency":        fundsCurrency,
+			"procurement_funds_reference":       fundsReference,
+			"procurement_funds_sent_at":         fundsSentAt,
+			"procurement_funds_acknowledged_at": fundsAcknowledgedAt,
+			"procurement_completed_at":          procurementCompletedAt,
 		})
 	}
 	nextCursor := ""
@@ -847,6 +876,9 @@ func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
 	if req.Status == nil && req.TransportMode == nil && req.CurrentLocation == nil && req.Notes == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "no fields to update")
 	}
+	if req.Status != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "use a role-specific batch transition action")
+	}
 
 	tx, err := a.db.Begin(c.Context())
 	if err != nil {
@@ -854,14 +886,7 @@ func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback(c.Context())
 
-	var statusValue, transportValue, locationValue, notesValue *string
-	if req.Status != nil {
-		normalized := normalizeBatchStatus(*req.Status)
-		if normalized == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid batch status")
-		}
-		statusValue = &normalized
-	}
+	var transportValue, locationValue, notesValue *string
 	if req.TransportMode != nil {
 		normalized := strings.ToLower(strings.TrimSpace(*req.TransportMode))
 		if normalized != "air" && normalized != "sea" {
@@ -881,20 +906,17 @@ func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
 	var updatedStatus string
 	if err := tx.QueryRow(c.Context(), `
 		UPDATE order_batches
-		SET status = COALESCE($2, status)::batch_status,
-			transport_mode = COALESCE($3, transport_mode),
-			current_location = COALESCE($4, current_location),
-			notes = COALESCE($5, notes),
+		SET transport_mode = COALESCE($2, transport_mode),
+			current_location = COALESCE($3, current_location),
+			notes = COALESCE($4, notes),
+			version = version + 1,
 			updated_at = now()
 		WHERE id = $1
 		RETURNING status::text
-	`, batchID, statusValue, transportValue, locationValue, notesValue).Scan(&updatedStatus); err != nil {
+	`, batchID, transportValue, locationValue, notesValue).Scan(&updatedStatus); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "batch not found")
 	}
 
-	if err := syncBatchOrders(c.Context(), tx, batchID, updatedStatus); err != nil {
-		return err
-	}
 	if _, err := tx.Exec(c.Context(), `
 		INSERT INTO batch_events(batch_id, event_type, status, location, notes)
 		VALUES ($1, 'status_update', $2::batch_status, COALESCE($3, ''), COALESCE($4, ''))
@@ -905,9 +927,6 @@ func (a *AdminController) UpdateBatch(c *fiber.Ctx) error {
 	if err := tx.Commit(c.Context()); err != nil {
 		return err
 	}
-
-	// Send notifications to buyers based on new batch status
-	go a.sendBatchNotifications(batchID, updatedStatus, req.CurrentLocation)
 
 	return c.JSON(fiber.Map{"batch_id": batchID, "status": updatedStatus, "updated": true})
 }
