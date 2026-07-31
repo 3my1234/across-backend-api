@@ -135,6 +135,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/orders/:order_id/confirm-receipt", ops.ConfirmReceipt)
 	authed.Post("/orders/:order_id/review-reward/claim", ops.ClaimReviewReward)
 	authed.Post("/payments/flutterwave/checkout", countryGuard, payments.FlutterwaveCheckout)
+	authed.Post("/payments/flutterwave/verify", payments.VerifyFlutterwavePayment)
 	authed.Post("/payments/tokenized-charge", countryGuard, payments.TokenizedCharge)
 	authed.Post("/uploads/presign", uploads.UserPresign)
 	authed.Get("/products/:product_id/reviews/mine", reviews.MyProductReview)
