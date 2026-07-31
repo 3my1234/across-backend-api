@@ -81,7 +81,7 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "order is not payable")
 	}
 
-	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
+	txRef := newPaymentReference(req.OrderID)
 	if p.mockPaymentsEnabled() {
 		if err := p.settleOrderPayment(c.Context(), req.OrderID, txRef, "local-dev", orderAmount, orderCurrency); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
@@ -158,7 +158,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "order is not payable")
 	}
 
-	txRef := "ACROSS-" + req.OrderID + "-" + time.Now().UTC().Format("20060102150405")
+	txRef := newPaymentReference(req.OrderID)
 	redirectURL := strings.TrimSpace(req.RedirectURL)
 	if redirectURL == "" {
 		redirectURL = "across://payments/flutterwave"
@@ -186,6 +186,9 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		"customizations": map[string]any{
 			"title":       "Atlantic Express Checkout",
 			"description": "Pay securely with Flutterwave",
+		},
+		"meta": map[string]any{
+			"order_id": req.OrderID,
 		},
 	}
 	body, _ := json.Marshal(payload)
@@ -265,6 +268,8 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid webhook")
 	}
 	if event.Event != "charge.completed" || event.Data.Status != "successful" {
+		log.Printf("flutterwave payment not settled event=%q status=%q tx_ref=%q transaction_id=%s",
+			event.Event, event.Data.Status, event.Data.TxRef, stringify(event.Data.ID))
 		return c.SendStatus(fiber.StatusAccepted)
 	}
 
@@ -480,6 +485,10 @@ func shortOrderLabel(orderID string) string {
 		return clean[:8]
 	}
 	return clean
+}
+
+func newPaymentReference(orderID string) string {
+	return "ACROSS-" + orderID + "-" + uuid.NewString()
 }
 
 func parseOrderID(txRef string) (string, error) {
