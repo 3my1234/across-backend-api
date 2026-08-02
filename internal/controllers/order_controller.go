@@ -3,6 +3,7 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -56,6 +57,22 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 	if err := c.BodyParser(&req); err != nil || len(req.Items) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cart")
+	}
+
+	var email, fullName, phone string
+	if err := o.db.QueryRow(c.Context(), `
+		SELECT COALESCE(email, ''), COALESCE(full_name, ''), COALESCE(phone, '')
+		FROM users
+		WHERE id = $1 AND is_active = true
+	`, userID).Scan(&email, &fullName, &phone); err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
+	}
+	if missing := missingPurchasingProfileFields(email, fullName, phone); len(missing) > 0 {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"code":           "PROFILE_INCOMPLETE",
+			"message":        "Complete your profile before purchasing: " + strings.Join(missing, ", "),
+			"missing_fields": missing,
+		})
 	}
 
 	tx, err := o.db.Begin(c.Context())
@@ -153,6 +170,20 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		"grand_total": grandTotal,
 		"currency":    currency,
 	})
+}
+
+func missingPurchasingProfileFields(email, fullName, phone string) []string {
+	missing := make([]string, 0, 3)
+	if strings.TrimSpace(fullName) == "" {
+		missing = append(missing, "full name")
+	}
+	if strings.TrimSpace(email) == "" {
+		missing = append(missing, "email")
+	}
+	if strings.TrimSpace(phone) == "" {
+		missing = append(missing, "phone number")
+	}
+	return missing
 }
 
 func (o *OrderController) ListOrders(c *fiber.Ctx) error {

@@ -146,14 +146,21 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "order_id, amount, and currency are required")
 	}
 
-	var email, fullName string
+	var email, fullName, phone string
 	err := p.db.QueryRow(c.Context(), `
-		SELECT email, full_name
+		SELECT COALESCE(email, ''), COALESCE(full_name, ''), COALESCE(phone, '')
 		FROM users
 		WHERE id = $1 AND is_active = true
-	`, userID).Scan(&email, &fullName)
+	`, userID).Scan(&email, &fullName, &phone)
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
+	}
+	if missing := missingPurchasingProfileFields(email, fullName, phone); len(missing) > 0 {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"code":           "PROFILE_INCOMPLETE",
+			"message":        "Complete your profile before payment: " + strings.Join(missing, ", "),
+			"missing_fields": missing,
+		})
 	}
 
 	var orderAmount float64
@@ -187,9 +194,10 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		"currency":        strings.ToUpper(orderCurrency),
 		"redirect_url":    redirectURL,
 		"payment_options": "card,banktransfer,ussd",
-		"customer": map[string]any{
-			"email": email,
-			"name":  strings.TrimSpace(fullName),
+		"customer":        buildFlutterwaveCustomer(email, fullName, phone),
+		"configurations": map[string]any{
+			"session_duration":  30,
+			"max_retry_attempt": 5,
 		},
 		"customizations": map[string]any{
 			"title":       "Atlantic Express Checkout",
@@ -250,6 +258,17 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		"redirect_url":  redirectURL,
 		"response":      gatewayResp,
 	})
+}
+
+func buildFlutterwaveCustomer(email, fullName, phone string) map[string]any {
+	customer := map[string]any{
+		"email": strings.TrimSpace(email),
+		"name":  strings.TrimSpace(fullName),
+	}
+	if normalizedPhone := strings.TrimSpace(phone); normalizedPhone != "" {
+		customer["phonenumber"] = normalizedPhone
+	}
+	return customer
 }
 
 func (p *PaymentController) mockPaymentsEnabled() bool {
@@ -366,6 +385,67 @@ func (p *PaymentController) VerifyFlutterwavePayment(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
 	return c.JSON(fiber.Map{"payment_state": "settled", "order_id": orderID})
+}
+
+// AdminReconcileFlutterwavePayment recovers a successful charge whose webhook
+// could not be settled. Flutterwave remains the source of truth; request values
+// can identify a payment but can never mark it paid.
+func (p *PaymentController) AdminReconcileFlutterwavePayment(c *fiber.Ctx) error {
+	var req flutterwaveVerifyRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	req.OrderID = strings.TrimSpace(req.OrderID)
+	req.TxRef = strings.TrimSpace(req.TxRef)
+	req.TransactionID = strings.TrimSpace(req.TransactionID)
+	if req.OrderID == "" || (req.TxRef == "" && req.TransactionID == "") {
+		return fiber.NewError(fiber.StatusBadRequest, "order_id and a transaction reference or ID are required")
+	}
+
+	var storedTxRef string
+	if err := p.db.QueryRow(c.Context(), `
+		SELECT COALESCE(flutterwave_tx_ref, '') FROM orders WHERE id = $1
+	`, req.OrderID).Scan(&storedTxRef); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payment order not found")
+	}
+	if storedTxRef != "" && req.TxRef != "" && storedTxRef != req.TxRef {
+		return fiber.NewError(fiber.StatusConflict, "transaction reference does not match the order checkout")
+	}
+
+	verified, err := p.verifyFlutterwaveTransaction(c.Context(), req.TransactionID, firstNonEmpty(req.TxRef, storedTxRef))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "payment verification unavailable")
+	}
+	if !successfulFlutterwaveStatus(verified.Data.Status) {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"payment_state": "pending", "gateway_status": verified.Data.Status, "order_id": req.OrderID,
+		})
+	}
+
+	verifiedRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
+	verifiedOrderID, err := parseOrderID(verifiedRef)
+	if err != nil || verifiedOrderID != req.OrderID {
+		return fiber.NewError(fiber.StatusConflict, "verified transaction does not match order")
+	}
+	paidAmount, err := amountValue(verified.Data.Amount)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
+	}
+	transactionID := gatewayID(verified.Data.ID)
+	if err := p.settleAndNotify(c.Context(), verifiedOrderID, verifiedRef, transactionID, paidAmount, verified.Data.Currency); err != nil {
+		return fiber.NewError(fiber.StatusConflict, err.Error())
+	}
+
+	actorID, _ := c.Locals("admin_id").(string)
+	if _, err := p.db.Exec(c.Context(), `
+		INSERT INTO admin_audit_logs(actor_id, action, entity_type, entity_id, priority, metadata)
+		VALUES (NULLIF($1, '')::uuid, 'flutterwave_payment_reconciled', 'order', $2::uuid, 'high',
+			jsonb_build_object('tx_ref', $3::text, 'transaction_id', $4::text, 'amount', $5::numeric, 'currency', $6::text))
+	`, actorID, verifiedOrderID, verifiedRef, transactionID, paidAmount, verified.Data.Currency); err != nil {
+		log.Printf("payment reconciliation audit failed order_id=%s: %v", verifiedOrderID, err)
+	}
+
+	return c.JSON(fiber.Map{"payment_state": "settled", "order_id": verifiedOrderID, "transaction_id": transactionID})
 }
 
 func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef, transactionID string, paidAmount float64, currency string) error {

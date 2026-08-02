@@ -106,6 +106,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Get("/users", catalogOnly, admin.ListUsers)
 	adminRoutes.Get("/orders", catalogOnly, admin.ListOrders)
 	adminRoutes.Get("/transactions", catalogOnly, admin.ListTransactions)
+	adminRoutes.Post("/payments/flutterwave/reconcile", superOnly, payments.AdminReconcileFlutterwavePayment)
 	adminRoutes.Get("/products", catalogOnly, admin.ListProducts)
 	adminRoutes.Post("/products", catalogOnly, admin.CreateProduct)
 	adminRoutes.Patch("/products/:product_id", catalogOnly, admin.UpdateProduct)

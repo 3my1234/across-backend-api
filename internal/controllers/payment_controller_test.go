@@ -50,3 +50,34 @@ func TestValidWebhookSupportsCurrentAndLegacySignatures(t *testing.T) {
 		t.Fatal("invalid signature must be rejected")
 	}
 }
+
+func TestBuildFlutterwaveCustomerIncludesAvailablePhone(t *testing.T) {
+	customer := buildFlutterwaveCustomer(" buyer@example.com ", " Buyer Name ", " +2348000000000 ")
+
+	if customer["email"] != "buyer@example.com" {
+		t.Fatalf("unexpected customer email: %#v", customer["email"])
+	}
+	if customer["name"] != "Buyer Name" {
+		t.Fatalf("unexpected customer name: %#v", customer["name"])
+	}
+	if customer["phonenumber"] != "+2348000000000" {
+		t.Fatalf("unexpected customer phone: %#v", customer["phonenumber"])
+	}
+}
+
+func TestBuildFlutterwaveCustomerOmitsMissingPhone(t *testing.T) {
+	customer := buildFlutterwaveCustomer("buyer@example.com", "Buyer Name", "  ")
+	if _, exists := customer["phonenumber"]; exists {
+		t.Fatal("empty customer phone must not be sent to Flutterwave")
+	}
+}
+
+func TestMissingPurchasingProfileFields(t *testing.T) {
+	missing := missingPurchasingProfileFields("buyer@example.com", " ", "")
+	if len(missing) != 2 || missing[0] != "full name" || missing[1] != "phone number" {
+		t.Fatalf("unexpected missing profile fields: %#v", missing)
+	}
+	if complete := missingPurchasingProfileFields("buyer@example.com", "Buyer Name", "+2348000000000"); len(complete) != 0 {
+		t.Fatalf("complete purchasing profile was rejected: %#v", complete)
+	}
+}
