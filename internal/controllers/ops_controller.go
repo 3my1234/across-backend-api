@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
@@ -176,16 +177,22 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 	rows, err := o.db.Query(c.Context(), `
 		SELECT oi.id, oi.sku, oi.title, oi.quantity, oi.unit_price,
 			oi.purchase_status, oi.purchase_notes, oi.exception_resolution,
-			u.id, u.full_name, u.email, u.phone,
-			o.id, o.package_label, oi.created_at,
+			oi.variant, COALESCE(p.description, ''), p.cost_price_rmb, p.image_urls, p.factory_details, oi.product_snapshot,
+			COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, ''),
+			u.id, u.full_name, COALESCE(u.email, ''), COALESCE(u.phone, ''),
+			o.id, COALESCE(o.package_label, ''), oi.created_at,
 			COUNT(*) OVER() AS total_count
 		FROM order_items oi
 		JOIN orders o ON o.id = oi.order_id
+		JOIN products p ON p.id = oi.product_id
 		JOIN users u ON u.id = o.user_id
-		WHERE o.batch_id = $1
+		LEFT JOIN logistics_hubs lh ON lh.id = COALESCE(oi.origin_hub_id, p.origin_hub_id)
+		WHERE o.batch_id = $1::uuid
 		  AND ($2 = '' OR oi.sku ILIKE '%' || $2 || '%' OR oi.title ILIKE '%' || $2 || '%'
 			OR u.full_name ILIKE '%' || $2 || '%' OR u.email ILIKE '%' || $2 || '%'
-			OR oi.purchase_status ILIKE '%' || $2 || '%')
+			OR oi.purchase_status ILIKE '%' || $2 || '%' OR o.package_label ILIKE '%' || $2 || '%'
+			OR p.factory_details::text ILIKE '%' || $2 || '%' OR oi.product_snapshot::text ILIKE '%' || $2 || '%' OR lh.code ILIKE '%' || $2 || '%'
+			OR lh.name ILIKE '%' || $2 || '%' OR lh.city ILIKE '%' || $2 || '%')
 		  AND ($3::timestamptz IS NULL OR (oi.created_at, oi.id) < ($3, $4::uuid))
 		ORDER BY oi.created_at DESC, oi.id DESC
 		LIMIT $5
@@ -196,32 +203,51 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 	defer rows.Close()
 
 	type BuyerOrder struct {
-		BuyerID             string    `json:"buyer_id"`
-		BuyerName           string    `json:"buyer_name"`
-		BuyerEmail          string    `json:"buyer_email"`
-		BuyerPhone          string    `json:"buyer_phone"`
-		OrderID             string    `json:"order_id"`
-		PackageLabel        string    `json:"package_label"`
-		ItemID              string    `json:"item_id"`
-		SKU                 string    `json:"sku"`
-		Title               string    `json:"title"`
-		Quantity            int       `json:"quantity"`
-		UnitPrice           float64   `json:"unit_price"`
-		PurchaseStatus      string    `json:"purchase_status"`
-		PurchaseNotes       string    `json:"purchase_notes"`
-		ExceptionResolution string    `json:"exception_resolution"`
-		CreatedAt           time.Time `json:"created_at"`
+		BuyerID             string         `json:"buyer_id"`
+		BuyerName           string         `json:"buyer_name"`
+		BuyerEmail          string         `json:"buyer_email"`
+		BuyerPhone          string         `json:"buyer_phone"`
+		OrderID             string         `json:"order_id"`
+		PackageLabel        string         `json:"package_label"`
+		ItemID              string         `json:"item_id"`
+		SKU                 string         `json:"sku"`
+		Title               string         `json:"title"`
+		Quantity            int            `json:"quantity"`
+		UnitPrice           float64        `json:"unit_price"`
+		Variant             map[string]any `json:"variant"`
+		Description         string         `json:"description"`
+		SupplierCostRMB     float64        `json:"supplier_cost_rmb"`
+		ImageURLs           []string       `json:"image_urls"`
+		FactoryDetails      map[string]any `json:"factory_details"`
+		ProductSnapshot     map[string]any `json:"product_snapshot"`
+		OriginHubCode       string         `json:"origin_hub_code"`
+		OriginHubName       string         `json:"origin_hub_name"`
+		OriginHubCity       string         `json:"origin_hub_city"`
+		OriginHubAddress    string         `json:"origin_hub_address"`
+		PurchaseStatus      string         `json:"purchase_status"`
+		PurchaseNotes       string         `json:"purchase_notes"`
+		ExceptionResolution string         `json:"exception_resolution"`
+		CreatedAt           time.Time      `json:"created_at"`
 	}
 	items := make([]BuyerOrder, 0)
 	var totalCount int64
 	for rows.Next() {
 		var item BuyerOrder
+		var variantRaw, factoryRaw, snapshotRaw []byte
 		if err := rows.Scan(&item.ItemID, &item.SKU, &item.Title, &item.Quantity, &item.UnitPrice,
 			&item.PurchaseStatus, &item.PurchaseNotes, &item.ExceptionResolution,
+			&variantRaw, &item.Description, &item.SupplierCostRMB, &item.ImageURLs, &factoryRaw, &snapshotRaw,
+			&item.OriginHubCode, &item.OriginHubName, &item.OriginHubCity, &item.OriginHubAddress,
 			&item.BuyerID, &item.BuyerName, &item.BuyerEmail, &item.BuyerPhone,
 			&item.OrderID, &item.PackageLabel, &item.CreatedAt, &totalCount); err != nil {
 			return err
 		}
+		item.Variant = map[string]any{}
+		item.FactoryDetails = map[string]any{}
+		item.ProductSnapshot = map[string]any{}
+		_ = json.Unmarshal(variantRaw, &item.Variant)
+		_ = json.Unmarshal(factoryRaw, &item.FactoryDetails)
+		_ = json.Unmarshal(snapshotRaw, &item.ProductSnapshot)
 		items = append(items, item)
 	}
 	nextCursor := ""

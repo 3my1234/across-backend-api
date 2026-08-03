@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,14 +20,17 @@ type batchActionSpec struct {
 }
 
 var batchActionSpecs = map[string]batchActionSpec{
-	"close_collection":              {From: []string{"collecting_funds"}, To: "closed", Roles: []string{"catalog_admin"}},
-	"reconcile":                     {From: []string{"closed"}, To: "settled", Roles: []string{"catalog_admin"}},
-	"send_procurement_funds":        {From: []string{"settled"}, To: "funds_sent_to_procurement", Roles: []string{"super_admin"}},
+	"close_collection":    {From: []string{"collecting_funds"}, To: "closed", Roles: []string{"super_admin", "catalog_admin"}},
+	"approve_procurement": {From: []string{"closed", "settled"}, To: "funds_sent_to_procurement", Roles: []string{"super_admin", "catalog_admin"}},
+	// Legacy actions remain accepted so batches already in an old state can be recovered.
+	"reconcile":                     {From: []string{"closed"}, To: "settled", Roles: []string{"super_admin", "catalog_admin"}},
+	"send_procurement_funds":        {From: []string{"settled"}, To: "funds_sent_to_procurement", Roles: []string{"super_admin", "catalog_admin"}},
 	"acknowledge_procurement_funds": {From: []string{"funds_sent_to_procurement"}, To: "procurement_acknowledged", Roles: []string{"procurement_admin"}},
-	"start_procurement":             {From: []string{"procurement_acknowledged"}, To: "purchasing", Roles: []string{"procurement_admin"}},
+	"start_procurement":             {From: []string{"funds_sent_to_procurement", "procurement_acknowledged"}, To: "purchasing", Roles: []string{"procurement_admin"}},
 	"complete_procurement":          {From: []string{"purchasing"}, To: "procurement_complete", Roles: []string{"procurement_admin"}},
-	"dispatch":                      {From: []string{"procurement_complete"}, To: "enroute_nigeria", Roles: []string{"procurement_admin"}},
+	"dispatch":                      {From: []string{"purchasing", "procurement_complete"}, To: "enroute_nigeria", Roles: []string{"procurement_admin"}},
 	"confirm_arrival":               {From: []string{"enroute_nigeria"}, To: "arrived_local", Roles: []string{"courier_admin"}},
+	"confirm_ready_for_pickup":      {From: []string{"enroute_nigeria"}, To: "ready_for_pickup", Roles: []string{"courier_admin"}},
 	"ready_for_pickup":              {From: []string{"arrived_local"}, To: "ready_for_pickup", Roles: []string{"courier_admin"}},
 }
 
@@ -40,6 +44,7 @@ type batchTransitionRequest struct {
 	PickupLocation  string  `json:"pickup_location"`
 	PickupPhone     string  `json:"pickup_phone"`
 	Notes           string  `json:"notes"`
+	ManifestChecked bool    `json:"manifest_checked"`
 }
 
 func validateBatchAction(role, currentStatus, action string) (batchActionSpec, error) {
@@ -48,7 +53,7 @@ func validateBatchAction(role, currentStatus, action string) (batchActionSpec, e
 		return batchActionSpec{}, fiber.NewError(fiber.StatusBadRequest, "unsupported batch action")
 	}
 	role = normalizeAdminRole(role)
-	if role != "super_admin" && !containsString(spec.Roles, role) {
+	if !containsString(spec.Roles, role) {
 		return batchActionSpec{}, fiber.NewError(fiber.StatusForbidden, "this action belongs to another admin role")
 	}
 	if !containsString(spec.From, currentStatus) {
@@ -126,13 +131,14 @@ func (o *OpsController) TransitionBatch(c *fiber.Ctx) error {
 	}
 
 	metadata, err := json.Marshal(map[string]any{
-		"action":          req.Action,
-		"actor_role":      normalizeAdminRole(role),
-		"amount":          req.Amount,
-		"currency":        req.Currency,
-		"reference":       req.Reference,
-		"pickup_location": req.PickupLocation,
-		"pickup_phone":    req.PickupPhone,
+		"action":           req.Action,
+		"actor_role":       normalizeAdminRole(role),
+		"amount":           req.Amount,
+		"currency":         req.Currency,
+		"reference":        req.Reference,
+		"pickup_location":  req.PickupLocation,
+		"pickup_phone":     req.PickupPhone,
+		"manifest_checked": req.ManifestChecked,
 	})
 	if err != nil {
 		return err
@@ -151,42 +157,46 @@ func (o *OpsController) TransitionBatch(c *fiber.Ctx) error {
 			notes = CASE WHEN $4 <> '' THEN $4 ELSE notes END,
 			membership_locked = CASE WHEN $5 = 'close_collection' THEN true ELSE membership_locked END,
 			closed_at = CASE WHEN $5 = 'close_collection' THEN COALESCE(closed_at, now()) ELSE closed_at END,
-			reconciled_at = CASE WHEN $5 = 'reconcile' THEN now() ELSE reconciled_at END,
-			reconciled_by = CASE WHEN $5 = 'reconcile' THEN $6::uuid ELSE reconciled_by END,
+			reconciled_at = CASE WHEN $5 IN ('reconcile', 'approve_procurement') THEN now() ELSE reconciled_at END,
+			reconciled_by = CASE WHEN $5 IN ('reconcile', 'approve_procurement') THEN $6::uuid ELSE reconciled_by END,
 			procurement_funds_amount = CASE WHEN $5 = 'send_procurement_funds' THEN $7 ELSE procurement_funds_amount END,
 			procurement_funds_currency = CASE WHEN $5 = 'send_procurement_funds' THEN $8 ELSE procurement_funds_currency END,
 			procurement_funds_reference = CASE WHEN $5 = 'send_procurement_funds' THEN $9 ELSE procurement_funds_reference END,
 			procurement_funds_sent_at = CASE WHEN $5 = 'send_procurement_funds' THEN now() ELSE procurement_funds_sent_at END,
 			procurement_funds_sent_by = CASE WHEN $5 = 'send_procurement_funds' THEN $6::uuid ELSE procurement_funds_sent_by END,
-			procurement_funds_acknowledged_at = CASE WHEN $5 = 'acknowledge_procurement_funds' THEN now() ELSE procurement_funds_acknowledged_at END,
-			procurement_funds_acknowledged_by = CASE WHEN $5 = 'acknowledge_procurement_funds' THEN $6::uuid ELSE procurement_funds_acknowledged_by END,
-			procurement_completed_at = CASE WHEN $5 = 'complete_procurement' THEN now() ELSE procurement_completed_at END,
-			procurement_completed_by = CASE WHEN $5 = 'complete_procurement' THEN $6::uuid ELSE procurement_completed_by END,
+			procurement_funds_acknowledged_at = CASE WHEN $5 IN ('acknowledge_procurement_funds', 'start_procurement') THEN now() ELSE procurement_funds_acknowledged_at END,
+			procurement_funds_acknowledged_by = CASE WHEN $5 IN ('acknowledge_procurement_funds', 'start_procurement') THEN $6::uuid ELSE procurement_funds_acknowledged_by END,
+			procurement_completed_at = CASE WHEN $5 IN ('complete_procurement', 'dispatch') THEN now() ELSE procurement_completed_at END,
+			procurement_completed_by = CASE WHEN $5 IN ('complete_procurement', 'dispatch') THEN $6::uuid ELSE procurement_completed_by END,
 			version = version + 1,
 			updated_at = now()
-		WHERE id = $1 AND version = $10
+		WHERE id = $1::uuid AND version = $10
 		RETURNING version
 	`, batchID, spec.To, location, req.Notes, req.Action, actorID, req.Amount,
 		defaultCurrency(req.Currency), req.Reference, currentVersion).Scan(&newVersion); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fiber.NewError(fiber.StatusConflict, "batch changed; reload before trying again")
 		}
-		return err
+		log.Printf("batch transition update failed batch_id=%s action=%s: %v", batchID, req.Action, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "batch update failed; reload and try again")
 	}
 
 	if err := applyTransitionOrderEffects(c.Context(), tx, batchID, req, spec.To); err != nil {
-		return err
+		log.Printf("batch transition order effects failed batch_id=%s action=%s: %v", batchID, req.Action, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "order tracking update failed; no changes were saved")
 	}
 	if _, err := tx.Exec(c.Context(), `
 		INSERT INTO batch_events(
 			batch_id, actor_id, event_type, previous_status, status, location, notes, metadata
 		)
-		VALUES ($1, $2, $3, $4::batch_status, $5::batch_status, $6, $7, $8::jsonb)
+		VALUES ($1::uuid, $2::uuid, $3, $4::batch_status, $5::batch_status, $6, $7, $8::jsonb)
 	`, batchID, actorID, req.Action, currentStatus, spec.To, location, req.Notes, metadata); err != nil {
-		return err
+		log.Printf("batch transition event failed batch_id=%s action=%s: %v", batchID, req.Action, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "batch audit update failed; no changes were saved")
 	}
 	if err := insertTransitionNotifications(c.Context(), tx, batchID, req.Action, spec.To, location); err != nil {
-		return err
+		log.Printf("batch transition notifications failed batch_id=%s action=%s: %v", batchID, req.Action, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "buyer notification update failed; no changes were saved")
 	}
 	if err := tx.Commit(c.Context()); err != nil {
 		return err
@@ -221,6 +231,18 @@ func isISO4217Code(value string) bool {
 
 func validateBatchActionPayload(ctx context.Context, tx pgx.Tx, batchID string, req batchTransitionRequest) error {
 	switch req.Action {
+	case "approve_procurement":
+		var paidOrders int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)::int
+			FROM orders
+			WHERE batch_id = $1::uuid AND order_status IN ('Paid', 'Shipped')
+		`, batchID).Scan(&paidOrders); err != nil {
+			return err
+		}
+		if paidOrders == 0 {
+			return fiber.NewError(fiber.StatusConflict, "this batch has no paid orders to procure")
+		}
 	case "send_procurement_funds":
 		if req.Amount <= 0 || req.Reference == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "positive amount and transfer reference are required")
@@ -228,13 +250,13 @@ func validateBatchActionPayload(ctx context.Context, tx pgx.Tx, batchID string, 
 		if !isISO4217Code(defaultCurrency(req.Currency)) {
 			return fiber.NewError(fiber.StatusBadRequest, "currency must be a three-letter ISO 4217 code")
 		}
-	case "complete_procurement":
+	case "complete_procurement", "dispatch":
 		var unresolved int
 		if err := tx.QueryRow(ctx, `
 			SELECT COUNT(*)::int
 			FROM order_items oi
 			JOIN orders o ON o.id = oi.order_id
-			WHERE o.batch_id = $1
+			WHERE o.batch_id = $1::uuid
 			  AND (
 				oi.purchase_status = 'pending'
 				OR (
@@ -255,6 +277,13 @@ func validateBatchActionPayload(ctx context.Context, tx pgx.Tx, batchID string, 
 	case "ready_for_pickup":
 		if req.PickupLocation == "" || req.PickupPhone == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "pickup location and phone are required")
+		}
+	case "confirm_ready_for_pickup":
+		if req.PickupLocation == "" || req.PickupPhone == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "pickup location and phone are required")
+		}
+		if !req.ManifestChecked {
+			return fiber.NewError(fiber.StatusBadRequest, "confirm that received products match the batch checklist")
 		}
 	}
 	return nil
@@ -288,7 +317,7 @@ func applyTransitionOrderEffects(ctx context.Context, tx pgx.Tx, batchID string,
 			pickup_phone = CASE WHEN $5 = '' THEN pickup_phone ELSE $5 END,
 			delivery_notes = CASE WHEN $6 = '' THEN delivery_notes ELSE $6 END,
 			updated_at = now()
-		WHERE batch_id = $1
+		WHERE batch_id = $1::uuid
 	`, batchID, trackingStage, orderStatus, req.PickupLocation, req.PickupPhone, req.Notes); err != nil {
 		return err
 	}
@@ -296,7 +325,7 @@ func applyTransitionOrderEffects(ctx context.Context, tx pgx.Tx, batchID string,
 		INSERT INTO tracking_events(order_id, stage, notes)
 		SELECT id, $2::tracking_stage, $3
 		FROM orders
-		WHERE batch_id = $1
+		WHERE batch_id = $1::uuid
 	`, batchID, trackingStage, trackingNote)
 	return err
 }
@@ -324,6 +353,10 @@ func insertTransitionNotifications(ctx context.Context, tx pgx.Tx, batchID, acti
 		notificationType = "ready_for_pickup"
 		title = "Package ready for pickup"
 		body = "Your package is ready at " + location + "."
+	case "confirm_ready_for_pickup":
+		notificationType = "ready_for_pickup"
+		title = "Package ready for pickup"
+		body = "Your package has been received, checked, and is ready at " + location + "."
 	default:
 		return nil
 	}
@@ -331,11 +364,11 @@ func insertTransitionNotifications(ctx context.Context, tx pgx.Tx, batchID, acti
 		INSERT INTO notifications(
 			user_id, order_id, batch_id, type, title, body, data, event_key
 		)
-		SELECT DISTINCT o.user_id, o.id, $1, $2, $3, $4,
+		SELECT DISTINCT o.user_id, o.id, $1::uuid, $2, $3, $4,
 			jsonb_build_object('batch_status', $5, 'location', $6),
 			'batch-transition:' || $1::text || ':' || $7 || ':' || o.id::text
 		FROM orders o
-		WHERE o.batch_id = $1
+		WHERE o.batch_id = $1::uuid
 		ON CONFLICT DO NOTHING
 	`, batchID, notificationType, title, body, status, location, action)
 	return err

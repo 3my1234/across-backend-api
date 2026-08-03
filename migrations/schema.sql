@@ -188,6 +188,7 @@ CREATE TABLE order_items (
   purchase_status TEXT NOT NULL DEFAULT 'pending'
     CHECK (purchase_status IN ('pending', 'purchased', 'failed')),
   purchase_notes TEXT NOT NULL DEFAULT '',
+  product_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   exception_resolution TEXT NOT NULL DEFAULT 'none'
     CHECK (exception_resolution IN ('none', 'pending', 'refunded', 'substituted', 'cancelled')),
   exception_resolved_at TIMESTAMPTZ,

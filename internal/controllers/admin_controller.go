@@ -727,13 +727,23 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			b.procurement_funds_amount, b.procurement_funds_currency,
 			b.procurement_funds_reference, b.procurement_funds_sent_at,
 			b.procurement_funds_acknowledged_at, b.procurement_completed_at,
+			COALESCE(ms.pending_items, 0), COALESCE(ms.purchased_items, 0), COALESCE(ms.failed_items, 0),
 			COUNT(*) OVER() AS total_count
 		FROM order_batches b
 		LEFT JOIN orders o ON o.batch_id = b.id
+		LEFT JOIN LATERAL (
+			SELECT
+				COUNT(*) FILTER (WHERE oi.purchase_status = 'pending')::int AS pending_items,
+				COUNT(*) FILTER (WHERE oi.purchase_status = 'purchased')::int AS purchased_items,
+				COUNT(*) FILTER (WHERE oi.purchase_status = 'failed')::int AS failed_items
+			FROM order_items oi
+			JOIN orders manifest_order ON manifest_order.id = oi.order_id
+			WHERE manifest_order.batch_id = b.id
+		) ms ON true
 		WHERE ($1 = '' OR b.batch_code ILIKE '%' || $1 || '%' OR b.status::text ILIKE '%' || $1 || '%'
 			OR b.transport_mode ILIKE '%' || $1 || '%' OR b.current_location ILIKE '%' || $1 || '%')
 		  AND ($2::timestamptz IS NULL OR (b.created_at, b.id) < ($2, $3::uuid))
-		GROUP BY b.id
+		GROUP BY b.id, ms.pending_items, ms.purchased_items, ms.failed_items
 		ORDER BY b.created_at DESC, b.id DESC
 		LIMIT $4
 	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
@@ -757,12 +767,13 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 		var routeKey, fundsCurrency, fundsReference string
 		var batchSequence int
 		var fundsAmount *float64
+		var pendingItems, purchasedItems, failedItems int
 		if err := rows.Scan(
 			&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny,
 			&location, &notes, &orderCount, &createdAt, &version, &membershipLocked,
 			&openedAt, &closedAt, &routeKey, &batchSequence, &fundsAmount,
 			&fundsCurrency, &fundsReference, &fundsSentAt, &fundsAcknowledgedAt,
-			&procurementCompletedAt, &totalCount,
+			&procurementCompletedAt, &pendingItems, &purchasedItems, &failedItems, &totalCount,
 		); err != nil {
 			return err
 		}
@@ -790,6 +801,9 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			"procurement_funds_sent_at":         fundsSentAt,
 			"procurement_funds_acknowledged_at": fundsAcknowledgedAt,
 			"procurement_completed_at":          procurementCompletedAt,
+			"pending_items":                     pendingItems,
+			"purchased_items":                   purchasedItems,
+			"failed_items":                      failedItems,
 		})
 	}
 	nextCursor := ""

@@ -93,8 +93,9 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	superOnly := middleware.RequireAdminRoles(cfg, db, "super_admin")
 	catalogOnly := middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin")
 	opsOnly := middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin", "courier_admin")
-	procurementOnly := middleware.RequireAdminRoles(cfg, db, "super_admin", "procurement_admin")
 	courierOnly := middleware.RequireAdminRoles(cfg, db, "super_admin", "courier_admin")
+	procurementActions := middleware.RequireAdminRoles(cfg, db, "procurement_admin")
+	courierActions := middleware.RequireAdminRoles(cfg, db, "courier_admin")
 
 	adminRoutes.Get("/session", allAdmins, admin.Session)
 	adminRoutes.Get("/overview", allAdmins, admin.Overview)
@@ -119,10 +120,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Post("/tracking/batch-scan", opsOnly, admin.BatchScanTracking)
 	adminRoutes.Post("/batches/:batch_id/transitions", allAdmins, ops.TransitionBatch)
 	// Admin II: Purchase management
-	adminRoutes.Get("/batches/:batch_id/purchase-manifest", procurementOnly, ops.GetPurchaseManifest)
-	adminRoutes.Post("/batches/:batch_id/purchase-confirm", procurementOnly, ops.ConfirmPurchase)
+	adminRoutes.Get("/batches/:batch_id/purchase-manifest", allAdmins, ops.GetPurchaseManifest)
+	adminRoutes.Post("/batches/:batch_id/purchase-confirm", procurementActions, ops.ConfirmPurchase)
 	// Admin III: Delivery management
-	adminRoutes.Post("/batches/confirm-delivered", courierOnly, ops.ConfirmDelivered)
+	adminRoutes.Post("/batches/confirm-delivered", courierActions, ops.ConfirmDelivered)
 	// Auto-confirm expired deliveries (can be called by cron)
 	adminRoutes.Post("/deliveries/auto-confirm", courierOnly, ops.AutoConfirmDeliveries)
 

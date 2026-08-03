@@ -121,14 +121,36 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 
 	for _, item := range req.Items {
-		var title string
-		var unitPrice float64
+		var title, description, hubCode, hubName, hubCity, hubAddress string
+		var unitPrice, supplierCostRMB float64
+		var imageURLs []string
+		var factoryRaw []byte
 		if err := tx.QueryRow(c.Context(), `
-			SELECT title, local_selling_price
-			FROM products
-			WHERE id = $1
-		`, item.ProductID).Scan(&title, &unitPrice); err != nil {
+			SELECT p.title, p.description, p.local_selling_price, p.cost_price_rmb,
+				p.image_urls, p.factory_details,
+				COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, '')
+			FROM products p
+			LEFT JOIN logistics_hubs lh ON lh.id = COALESCE(NULLIF($2, '')::uuid, p.origin_hub_id)
+			WHERE p.id = $1
+		`, item.ProductID, item.OriginHubID).Scan(
+			&title, &description, &unitPrice, &supplierCostRMB, &imageURLs, &factoryRaw,
+			&hubCode, &hubName, &hubCity, &hubAddress,
+		); err != nil {
 			return err
+		}
+		factoryDetails := map[string]any{}
+		_ = json.Unmarshal(factoryRaw, &factoryDetails)
+		productSnapshot, err := json.Marshal(map[string]any{
+			"description":       description,
+			"image_urls":        imageURLs,
+			"supplier_cost_rmb": supplierCostRMB,
+			"factory_details":   factoryDetails,
+			"origin_hub": map[string]any{
+				"code": hubCode, "name": hubName, "city": hubCity, "address": hubAddress,
+			},
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "product snapshot failed")
 		}
 		variantJSON, err := json.Marshal(item.Variant)
 		if err != nil {
@@ -144,9 +166,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			originHubID = &hubID
 		}
 		_, err = tx.Exec(c.Context(), `
-		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice)
+		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price, product_snapshot)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice, productSnapshot)
 		if err != nil {
 			return err
 		}
