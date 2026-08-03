@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -47,6 +48,24 @@ func TestValidateBatchActionEnforcesRoleAndOrder(t *testing.T) {
 				t.Fatalf("error = %#v, want Fiber status %d", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestBatchTransitionNotificationSQLTypesEveryParameter(t *testing.T) {
+	for _, typedParameter := range []string{
+		"$1::uuid",
+		"$2::text",
+		"$3::text",
+		"$4::text",
+		"$5::jsonb",
+		"$6::text",
+	} {
+		if !strings.Contains(insertBatchTransitionNotificationSQL, typedParameter) {
+			t.Fatalf("notification SQL must explicitly type %s", typedParameter)
+		}
+	}
+	if strings.Contains(insertBatchTransitionNotificationSQL, "jsonb_build_object") {
+		t.Fatal("notification SQL must pass pre-encoded JSON instead of untyped parameters to jsonb_build_object")
 	}
 }
 

@@ -330,6 +330,18 @@ func applyTransitionOrderEffects(ctx context.Context, tx pgx.Tx, batchID string,
 	return err
 }
 
+const insertBatchTransitionNotificationSQL = `
+	INSERT INTO notifications(
+		user_id, order_id, batch_id, type, title, body, data, event_key
+	)
+	SELECT DISTINCT o.user_id, o.id, $1::uuid, $2::text, $3::text, $4::text,
+		$5::jsonb,
+		'batch-transition:' || $1::text || ':' || $6::text || ':' || o.id::text
+	FROM orders o
+	WHERE o.batch_id = $1::uuid
+	ON CONFLICT DO NOTHING
+`
+
 func insertTransitionNotifications(ctx context.Context, tx pgx.Tx, batchID, action, status, location string) error {
 	var notificationType, title, body string
 	switch action {
@@ -360,17 +372,15 @@ func insertTransitionNotifications(ctx context.Context, tx pgx.Tx, batchID, acti
 	default:
 		return nil
 	}
-	_, err := tx.Exec(ctx, `
-		INSERT INTO notifications(
-			user_id, order_id, batch_id, type, title, body, data, event_key
-		)
-		SELECT DISTINCT o.user_id, o.id, $1::uuid, $2, $3, $4,
-			jsonb_build_object('batch_status', $5, 'location', $6),
-			'batch-transition:' || $1::text || ':' || $7 || ':' || o.id::text
-		FROM orders o
-		WHERE o.batch_id = $1::uuid
-		ON CONFLICT DO NOTHING
-	`, batchID, notificationType, title, body, status, location, action)
+	data, err := json.Marshal(map[string]string{
+		"batch_status": status,
+		"location":     location,
+	})
+	if err != nil {
+		return fmt.Errorf("encode transition notification: %w", err)
+	}
+	_, err = tx.Exec(ctx, insertBatchTransitionNotificationSQL,
+		batchID, notificationType, title, body, data, action)
 	return err
 }
 
