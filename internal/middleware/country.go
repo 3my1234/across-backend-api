@@ -29,12 +29,19 @@ func RequireAllowedCountry(cfg config.Config) fiber.Handler {
 	}
 
 	return func(c *fiber.Ctx) error {
-		country, err := detectCountryCode(c)
-		if err != nil {
-			return err
+		// Cloudflare already geolocates the real visitor at the edge. Prefer that
+		// value to a second lookup of a mobile carrier or proxy address, which can
+		// be slower and less accurate.
+		country := normalizedCountryCode(c.Get("CF-IPCountry"))
+		if country == "" {
+			var err error
+			country, err = detectCountryCode(c)
+			if err != nil {
+				return err
+			}
 		}
 		if country == "" {
-			country = strings.ToUpper(strings.TrimSpace(c.Get("X-Client-Country-Code")))
+			country = normalizedCountryCode(c.Get("X-Client-Country-Code"))
 		}
 		if country == "" {
 			country = defaultCountry
@@ -47,6 +54,14 @@ func RequireAllowedCountry(cfg config.Config) fiber.Handler {
 		}
 		return c.Next()
 	}
+}
+
+func normalizedCountryCode(value string) string {
+	code := strings.ToUpper(strings.TrimSpace(value))
+	if len(code) != 2 || code == "XX" || code == "T1" {
+		return ""
+	}
+	return code
 }
 
 func detectCountryCode(c *fiber.Ctx) (string, error) {
@@ -95,6 +110,11 @@ func detectCountryCode(c *fiber.Ctx) (string, error) {
 }
 
 func clientIPFromRequest(c *fiber.Ctx) string {
+	// CF-Connecting-IP is set by Cloudflare to the original visitor. XFF can
+	// contain an arbitrary client-supplied left-most value, so it is fallback.
+	if ip := strings.TrimSpace(c.Get("CF-Connecting-IP")); ip != "" {
+		return ip
+	}
 	forwarded := strings.TrimSpace(c.Get("X-Forwarded-For"))
 	if forwarded != "" {
 		parts := strings.Split(forwarded, ",")
@@ -103,9 +123,6 @@ func clientIPFromRequest(c *fiber.Ctx) string {
 				return ip
 			}
 		}
-	}
-	if ip := strings.TrimSpace(c.Get("CF-Connecting-IP")); ip != "" {
-		return ip
 	}
 	if ip := strings.TrimSpace(c.Get("X-Real-IP")); ip != "" {
 		return ip
