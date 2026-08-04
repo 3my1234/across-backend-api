@@ -42,7 +42,8 @@ func (o *OpsController) ConfirmPurchase(c *fiber.Ctx) error {
 
 	tx, err := o.db.Begin(c.Context())
 	if err != nil {
-		return err
+		log.Printf("procurement item transaction start failed batch_id=%s: %v", batchID, err)
+		return fiber.NewError(fiber.StatusServiceUnavailable, "procurement update is temporarily unavailable")
 	}
 	defer tx.Rollback(c.Context())
 	adminID, _ := c.Locals("admin_id").(string)
@@ -58,7 +59,8 @@ func (o *OpsController) ConfirmPurchase(c *fiber.Ctx) error {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "batch not found")
 		}
-		return err
+		log.Printf("procurement batch lock failed batch_id=%s: %v", batchID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 	}
 	if batchStatus != "purchasing" {
 		return fiber.NewError(fiber.StatusConflict, "manifest items can only be changed while procurement is active")
@@ -97,10 +99,11 @@ func (o *OpsController) ConfirmPurchase(c *fiber.Ctx) error {
 					ELSE NULL
 				END
 			FROM orders o
-			WHERE oi.id = $1 AND oi.order_id = o.id AND o.batch_id = $6
+			WHERE oi.id = $1::uuid AND oi.order_id = o.id AND o.batch_id = $6::uuid
 		`, item.OrderItemID, normalized, notes, resolution, actorID, batchID)
 		if err != nil {
-			return err
+			log.Printf("procurement item status update failed batch_id=%s item_id=%s: %v", batchID, item.OrderItemID, err)
+			return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 		}
 		if tag.RowsAffected() > 0 {
 			var userID, orderID string
@@ -108,52 +111,42 @@ func (o *OpsController) ConfirmPurchase(c *fiber.Ctx) error {
 				SELECT o.user_id, o.id
 				FROM order_items oi
 				JOIN orders o ON o.id = oi.order_id
-				WHERE oi.id = $1 AND o.batch_id = $2
+				WHERE oi.id = $1::uuid AND o.batch_id = $2::uuid
 			`, item.OrderItemID, batchID).Scan(&userID, &orderID); err != nil {
-				return err
+				log.Printf("procurement item owner lookup failed batch_id=%s item_id=%s: %v", batchID, item.OrderItemID, err)
+				return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 			}
+			batchIDCopy := batchID
 			if normalized == "purchased" {
 				purchasedCount++
-				if _, err := tx.Exec(c.Context(), `
-					INSERT INTO notifications(
-						user_id, order_id, batch_id, type, title, body, data, event_key
-					)
-					VALUES (
-						$1, $2, $3, 'product_purchased', 'Your item has been secured',
-						'Your item has been purchased from the supplier.',
-						jsonb_build_object('order_item_id', $4, 'purchase_status', 'purchased'),
-						'purchase-item:' || $4
-					)
-					ON CONFLICT DO NOTHING
-				`, userID, orderID, batchID, item.OrderItemID); err != nil {
-					return err
+				if err := insertNotification(c.Context(), tx, userID, orderID, &batchIDCopy,
+					"product_purchased", "Your item has been secured",
+					"Your item has been purchased from the supplier.",
+					map[string]any{"order_item_id": item.OrderItemID, "purchase_status": "purchased"},
+					"purchase-item:"+item.OrderItemID); err != nil {
+					log.Printf("procurement purchased notification failed batch_id=%s item_id=%s: %v", batchID, item.OrderItemID, err)
+					return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 				}
 			} else {
 				failedCount++
-				if _, err := tx.Exec(c.Context(), `
-					INSERT INTO notifications(
-						user_id, order_id, batch_id, type, title, body, data, event_key
-					)
-					VALUES (
-						$1, $2, $3, 'procurement_exception', 'Item procurement update',
-						$4,
-						jsonb_build_object(
-							'order_item_id', $5,
-							'purchase_status', 'failed',
-							'resolution', $6
-						),
-						'purchase-exception:' || $5 || ':' || $6
-					)
-					ON CONFLICT DO NOTHING
-				`, userID, orderID, batchID, notes, item.OrderItemID, resolution); err != nil {
-					return err
+				if err := insertNotification(c.Context(), tx, userID, orderID, &batchIDCopy,
+					"procurement_exception", "Item procurement update", notes,
+					map[string]any{
+						"order_item_id":   item.OrderItemID,
+						"purchase_status": "failed",
+						"resolution":      resolution,
+					},
+					"purchase-exception:"+item.OrderItemID+":"+resolution); err != nil {
+					log.Printf("procurement exception notification failed batch_id=%s item_id=%s: %v", batchID, item.OrderItemID, err)
+					return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 				}
 			}
 		}
 	}
 
 	if err := tx.Commit(c.Context()); err != nil {
-		return err
+		log.Printf("procurement item transaction commit failed batch_id=%s: %v", batchID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "procurement item update failed; no changes were saved")
 	}
 
 	return c.JSON(fiber.Map{
@@ -319,18 +312,12 @@ func (o *OpsController) ConfirmDelivered(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(c.Context(), `
-			INSERT INTO notifications(
-				user_id, order_id, batch_id, type, title, body, data, event_key
-			)
-			VALUES (
-				$1, $2, $3, 'confirm_receipt', 'Package delivered!',
-				'Confirm that you received your package. After confirmation, leave a review to earn ₦500 off your next purchase.',
-				jsonb_build_object('order_id', $2, 'confirmation_required', true),
-				'confirm-receipt:' || $2::text
-			)
-			ON CONFLICT DO NOTHING
-		`, delivered.UserID, delivered.OrderID, req.BatchID); err != nil {
+		batchIDCopy := req.BatchID
+		if err := insertNotification(c.Context(), tx, delivered.UserID, delivered.OrderID, &batchIDCopy,
+			"confirm_receipt", "Package delivered!",
+			"Confirm that you received your package. After confirmation, leave a review to earn ₦500 off your next purchase.",
+			map[string]any{"order_id": delivered.OrderID, "confirmation_required": true},
+			"confirm-receipt:"+delivered.OrderID); err != nil {
 			return err
 		}
 	}

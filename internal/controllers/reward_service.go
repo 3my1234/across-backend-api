@@ -110,15 +110,26 @@ func (r *RewardService) award(ctx context.Context, userID, orderID string, amoun
 	return true, tx.Commit(ctx)
 }
 
+const insertNotificationSQL = `
+    INSERT INTO notifications(user_id, order_id, batch_id, type, title, body, data, event_key)
+    VALUES (
+        $1::uuid,
+        NULLIF($2::text, '')::uuid,
+        $3::uuid,
+        $4::text,
+        $5::text,
+        $6::text,
+        $7::jsonb,
+        NULLIF($8::text, '')
+    )
+    ON CONFLICT DO NOTHING
+`
+
 func insertNotification(ctx context.Context, tx pgx.Tx, userID, orderID string, batchID *string, notificationType, title, body string, data map[string]any, eventKey string) error {
 	dataJSON, err := marshalNotificationData(data)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
-        INSERT INTO notifications(user_id, order_id, batch_id, type, title, body, data, event_key)
-        VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, NULLIF($8, ''))
-        ON CONFLICT DO NOTHING
-    `, userID, orderID, batchID, notificationType, title, body, dataJSON, eventKey)
+	_, err = tx.Exec(ctx, insertNotificationSQL, userID, orderID, batchID, notificationType, title, body, dataJSON, eventKey)
 	return err
 }

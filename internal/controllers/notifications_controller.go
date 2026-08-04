@@ -98,11 +98,8 @@ func CreateNotificationOnce(ctx context.Context, db *pgxpool.Pool, userID, order
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(ctx, `
-        INSERT INTO notifications(user_id, order_id, batch_id, type, title, body, data, event_key)
-        VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, NULLIF($8, ''))
-        ON CONFLICT DO NOTHING
-    `, userID, orderID, batchID, notificationType, title, body, dataJSON, eventKey)
+	_, err = db.Exec(ctx, insertNotificationSQL,
+		userID, orderID, batchID, notificationType, title, body, dataJSON, eventKey)
 	return err
 }
 

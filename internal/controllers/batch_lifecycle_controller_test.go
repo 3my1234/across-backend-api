@@ -69,6 +69,26 @@ func TestBatchTransitionNotificationSQLTypesEveryParameter(t *testing.T) {
 	}
 }
 
+func TestSharedNotificationSQLTypesEveryParameter(t *testing.T) {
+	for _, typedParameter := range []string{
+		"$1::uuid",
+		"$2::text",
+		"$3::uuid",
+		"$4::text",
+		"$5::text",
+		"$6::text",
+		"$7::jsonb",
+		"$8::text",
+	} {
+		if !strings.Contains(insertNotificationSQL, typedParameter) {
+			t.Fatalf("shared notification SQL must explicitly type %s", typedParameter)
+		}
+	}
+	if strings.Contains(insertNotificationSQL, "jsonb_build_object") {
+		t.Fatal("shared notification SQL must pass pre-encoded JSON")
+	}
+}
+
 func TestConfirmReadyForPickupRequiresPickupDetailsAndChecklistConfirmation(t *testing.T) {
 	tests := []struct {
 		name    string
