@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"across/backend/internal/db"
 	"across/backend/internal/migrations"
 	"across/backend/internal/routes"
+	"across/backend/internal/services"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
@@ -54,11 +56,47 @@ func main() {
 	// Start background cron workers
 	go startAutoConfirmWorker(ctx, store.PG)
 	go startBatchClosureWorker(ctx, store.PG)
+	go startPushNotificationWorker(ctx, store.PG)
 
 	log.Printf("service configuration: privy_app_id_set=%t privy_app_secret_set=%t s3_region_set=%t s3_bucket_set=%t",
 		strings.TrimSpace(cfg.PrivyAppID) != "", strings.TrimSpace(cfg.PrivyAppSecret) != "",
 		strings.TrimSpace(cfg.AWSRegion) != "", strings.TrimSpace(cfg.S3BucketName) != "")
 	log.Fatal(app.Listen(cfg.HTTPAddr))
+}
+
+func startPushNotificationWorker(ctx context.Context, db *pgxpool.Pool) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	client := &http.Client{Timeout: 15 * time.Second}
+	runPushNotifications(ctx, db, client)
+	for {
+		select {
+		case <-ticker.C:
+			runPushNotifications(ctx, db, client)
+		case <-ctx.Done():
+			log.Println("push notification worker stopped")
+			return
+		}
+	}
+}
+
+func runPushNotifications(ctx context.Context, db *pgxpool.Pool, client *http.Client) {
+	count, err := services.RunPushDeliveryBatch(ctx, db, client)
+	if err != nil {
+		log.Printf("push notification worker error: %v", err)
+		return
+	}
+	if count > 0 {
+		log.Printf("push notification worker: submitted %d deliveries", count)
+	}
+	checked, err := services.RunPushReceiptBatch(ctx, db, client)
+	if err != nil {
+		log.Printf("push receipt worker error: %v", err)
+		return
+	}
+	if checked > 0 {
+		log.Printf("push receipt worker: checked %d receipts", checked)
+	}
 }
 
 // startAutoConfirmWorker runs every hour to auto-confirm deliveries older than 3 days

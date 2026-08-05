@@ -98,6 +98,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	courierActions := middleware.RequireAdminRoles(cfg, db, "courier_admin")
 
 	adminRoutes.Get("/session", allAdmins, admin.Session)
+	adminRoutes.Get("/activity", allAdmins, admin.Activity)
 	adminRoutes.Get("/overview", allAdmins, admin.Overview)
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
@@ -144,8 +145,11 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Put("/products/:product_id/reviews", reviews.UpsertProductReview)
 	authed.Get("/notifications", notifications.List)
 	authed.Get("/notifications/unread-count", notifications.UnreadCount)
+	authed.Get("/notifications/activity", notifications.Activity)
 	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
+	authed.Post("/notifications/push-token", notifications.RegisterPushToken)
+	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
 
 	// XP System
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)

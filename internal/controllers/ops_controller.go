@@ -330,47 +330,55 @@ func (o *OpsController) ConfirmDelivered(c *fiber.Ctx) error {
 }
 
 // ConfirmReceipt allows a buyer to confirm only their own delivered order.
+const confirmReceiptUpdateSQL = `
+	UPDATE orders
+	SET order_status = 'Completed',
+		delivery_confirmed = true,
+		confirmed_at = COALESCE(confirmed_at, now()),
+		updated_at = now()
+	WHERE id = $1::uuid
+	  AND user_id = $2::uuid
+	  AND order_status = 'Delivered'
+	  AND current_tracking_stage = 'Delivered'::tracking_stage
+	  AND delivery_confirmed = false
+`
+
 func (o *OpsController) ConfirmReceipt(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	orderID := c.Params("order_id")
 	tx, err := o.db.Begin(c.Context())
 	if err != nil {
-		return err
+		log.Printf("receipt transaction start failed order_id=%s user_id=%s: %v", orderID, userID, err)
+		return fiber.NewError(fiber.StatusServiceUnavailable, "receipt confirmation is temporarily unavailable")
 	}
 	defer tx.Rollback(c.Context())
 
 	var batchID *string
-	tag, err := tx.Exec(c.Context(), `
-		UPDATE orders
-		SET order_status = 'Completed',
-			delivery_confirmed = true,
-			confirmed_at = COALESCE(confirmed_at, now()),
-			updated_at = now()
-		WHERE id = $1
-		  AND user_id = $2
-		  AND order_status = 'Delivered'
-		  AND current_tracking_stage = 'Delivered'::tracking_stage
-		  AND delivery_confirmed = false
-	`, orderID, userID)
+	tag, err := tx.Exec(c.Context(), confirmReceiptUpdateSQL, orderID, userID)
 	if err != nil {
-		return err
+		log.Printf("receipt order update failed order_id=%s user_id=%s: %v", orderID, userID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusConflict, "order is not awaiting receipt confirmation")
 	}
-	if err := tx.QueryRow(c.Context(), `SELECT batch_id FROM orders WHERE id = $1`, orderID).Scan(&batchID); err != nil {
-		return err
+	if err := tx.QueryRow(c.Context(), `SELECT batch_id FROM orders WHERE id = $1::uuid`, orderID).Scan(&batchID); err != nil {
+		log.Printf("receipt batch lookup failed order_id=%s: %v", orderID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 	}
 	if err := createReviewRewardTx(c.Context(), tx, userID, orderID); err != nil {
-		return err
+		log.Printf("receipt review reward failed order_id=%s user_id=%s: %v", orderID, userID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 	}
 	if batchID != nil {
 		if err := completeBatchIfResolved(c.Context(), tx, *batchID); err != nil {
-			return err
+			log.Printf("receipt batch completion failed order_id=%s batch_id=%s: %v", orderID, *batchID, err)
+			return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 		}
 	}
 	if err := tx.Commit(c.Context()); err != nil {
-		return err
+		log.Printf("receipt transaction commit failed order_id=%s user_id=%s: %v", orderID, userID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 	}
 	return c.JSON(fiber.Map{"confirmed": true, "order_id": orderID, "review_reward_available": true})
 }
@@ -400,13 +408,13 @@ func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID s
 	tag, err := tx.Exec(ctx, `
 		UPDATE review_rewards
 		SET is_claimed = true, claimed_at = now()
-		WHERE user_id = $1
-		  AND order_id = $2
+		WHERE user_id = $1::uuid
+		  AND order_id = $2::uuid
 		  AND is_claimed = false
 		  AND EXISTS (
 			SELECT 1
 			FROM reviews r
-			WHERE r.user_id = $1 AND r.order_id = $2
+			WHERE r.user_id = $1::uuid AND r.order_id = $2::uuid
 		  )
 	`, userID, orderID)
 	if err != nil {
@@ -417,21 +425,15 @@ func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID s
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
-		VALUES ($1, 500, 'review_reward', 'review-reward-' || $2)
+		VALUES ($1::uuid, 500, 'review_reward', 'review-reward-' || $2::text)
 		ON CONFLICT DO NOTHING
 	`, userID, orderID); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO notifications(user_id, order_id, type, title, body, data, event_key)
-		VALUES (
-			$1, $2, 'xp_earned', 'Review reward claimed',
-			'₦500 has been added to your rewards balance.',
-			jsonb_build_object('xp', 500, 'naira_value', 500, 'reason', 'review_reward'),
-			'review-reward-claimed:' || $2::text
-		)
-		ON CONFLICT DO NOTHING
-	`, userID, orderID); err != nil {
+	if err := insertNotification(ctx, tx, userID, orderID, nil,
+		"xp_earned", "Review reward claimed", "₦500 has been added to your rewards balance.",
+		map[string]any{"xp": 500, "naira_value": 500, "reason": "review_reward"},
+		"review-reward-claimed:"+orderID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -472,22 +474,15 @@ func (o *OpsController) AutoConfirmDeliveries(c *fiber.Ctx) error {
 func createReviewRewardTx(ctx context.Context, tx pgx.Tx, userID, orderID string) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO review_rewards(user_id, order_id, reward_amount, reward_currency)
-		VALUES ($1, $2, 500, 'NGN')
+		VALUES ($1::uuid, $2::uuid, 500, 'NGN')
 		ON CONFLICT (user_id, order_id) DO NOTHING
 	`, userID, orderID); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
-		INSERT INTO notifications(user_id, order_id, type, title, body, data, event_key)
-		VALUES (
-			$1, $2, 'review_request', 'Review and earn ₦500!',
-			'Your order is complete. Leave a review to earn ₦500 off your next purchase.',
-			jsonb_build_object('reward_amount', 500),
-			'review-request:' || $2::text
-		)
-		ON CONFLICT DO NOTHING
-	`, userID, orderID)
-	return err
+	return insertNotification(ctx, tx, userID, orderID, nil,
+		"review_request", "Review and earn ₦500!",
+		"Your order is complete. Leave a review to earn ₦500 off your next purchase.",
+		map[string]any{"reward_amount": 500}, "review-request:"+orderID)
 }
 
 func completeBatchIfResolved(ctx context.Context, tx pgx.Tx, batchID string) error {
