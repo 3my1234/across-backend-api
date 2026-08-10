@@ -268,6 +268,20 @@ CREATE TABLE admins (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE admin_activity_state (
+  admin_id UUID PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE,
+  read_through_created_at TIMESTAMPTZ NOT NULL,
+  read_through_event_id UUID NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE admin_activity_reads (
+  admin_id UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  event_id UUID NOT NULL REFERENCES batch_events(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (admin_id, event_id)
+);
+
 CREATE INDEX idx_products_category_path ON products USING gin(category_path);
 CREATE INDEX idx_products_active_price ON products(is_active, local_selling_price);
 CREATE INDEX idx_orders_user_created ON orders(user_id, created_at DESC);
@@ -279,6 +293,8 @@ CREATE INDEX idx_escrow_worker_due ON escrow_ledger(escrow_lock_expiry)
   WHERE dispute_status = 'none' AND escrow_status = 'held_in_escrow';
 CREATE INDEX idx_tracking_order_time ON tracking_events(order_id, occurred_at);
 CREATE INDEX idx_batch_events_batch_time ON batch_events(batch_id, created_at);
+CREATE INDEX idx_batch_events_status_created_id ON batch_events(status, created_at DESC, id DESC);
+CREATE INDEX idx_admin_activity_reads_event ON admin_activity_reads(event_id, admin_id);
 
 -- Notifications
 CREATE TABLE notifications (

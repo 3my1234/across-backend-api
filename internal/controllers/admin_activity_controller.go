@@ -9,10 +9,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// Activity exposes a bounded event stream for lightweight admin change
-// detection. Clients poll this small indexed endpoint and reload their current
-// view only when a relevant event appears.
+// Activity returns a bounded, role-relevant admin activity history. Read state
+// is stored server-side so it survives refreshes, browsers, and devices.
 func (a *AdminController) Activity(c *fiber.Ctx) error {
+	adminID, _ := c.Locals("admin_id").(string)
 	role, _ := c.Locals("admin_role").(string)
 	limit := c.QueryInt("limit", 25)
 	if limit < 1 {
@@ -43,23 +43,26 @@ func (a *AdminController) Activity(c *fiber.Ctx) error {
 	rows, err := a.db.Query(c.Context(), `
 		SELECT event.id::text, event.batch_id::text, batch.batch_code,
 			event.event_type, COALESCE(event.status::text, ''), event.location,
-			event.notes, event.created_at
+			event.notes, event.created_at,
+			(
+				(state.read_through_created_at IS NOT NULL AND
+				 (event.created_at, event.id) <= (state.read_through_created_at, state.read_through_event_id))
+				OR receipt.event_id IS NOT NULL
+			) AS is_read
 		FROM batch_events event
 		JOIN order_batches batch ON batch.id = event.batch_id
+		LEFT JOIN admin_activity_state state ON state.admin_id = $4::uuid
+		LEFT JOIN admin_activity_reads receipt
+			ON receipt.admin_id = $4::uuid AND receipt.event_id = event.id
 		WHERE ($1::timestamptz IS NULL OR (event.created_at, event.id) > ($1, $2::uuid))
-		  AND (
-			$3::text IN ('super_admin', 'catalog_admin')
-			OR ($3::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
-				('funds_sent_to_procurement', 'procurement_acknowledged', 'purchasing', 'procurement_complete', 'enroute_nigeria'))
-			OR ($3::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
-				('procurement_complete', 'enroute_nigeria', 'arrived_local', 'ready_for_pickup', 'completed'))
-		  )
+		  AND (event.actor_id IS NULL OR event.actor_id <> $4::uuid)
+		  AND `+adminActivityVisibilitySQL+`
 		ORDER BY
 			CASE WHEN $1::timestamptz IS NULL THEN event.created_at END DESC,
 			CASE WHEN $1::timestamptz IS NULL THEN event.id END DESC,
 			event.created_at ASC, event.id ASC
-		LIMIT $4
-	`, cursorTime, cursorIDValue, role, limit)
+		LIMIT $5
+	`, cursorTime, cursorIDValue, role, adminID, limit)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "admin activity unavailable")
 	}
@@ -70,13 +73,14 @@ func (a *AdminController) Activity(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, batchID, batchCode, eventType, status, location, notes string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &batchID, &batchCode, &eventType, &status, &location, &notes, &createdAt); err != nil {
+		var isRead bool
+		if err := rows.Scan(&id, &batchID, &batchCode, &eventType, &status, &location, &notes, &createdAt, &isRead); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "admin activity unavailable")
 		}
 		events = append(events, fiber.Map{
 			"id": id, "batch_id": batchID, "batch_code": batchCode,
 			"event_type": eventType, "status": status, "location": location,
-			"notes": notes, "created_at": createdAt,
+			"notes": notes, "created_at": createdAt, "is_read": isRead,
 		})
 		if cursorTime != nil || latestCursor == "" {
 			latestCursor = encodeAdminCursor(createdAt, id)
@@ -87,3 +91,77 @@ func (a *AdminController) Activity(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"events": events, "cursor": latestCursor})
 }
+
+// MarkActivityRead records an individual read without deleting history.
+func (a *AdminController) MarkActivityRead(c *fiber.Ctx) error {
+	adminID, _ := c.Locals("admin_id").(string)
+	role, _ := c.Locals("admin_role").(string)
+	eventID := c.Params("event_id")
+	result, err := a.db.Exec(c.Context(), `
+		INSERT INTO admin_activity_reads(admin_id, event_id)
+		SELECT $1::uuid, event.id
+		FROM batch_events event
+		WHERE event.id = $2::uuid
+		  AND (event.actor_id IS NULL OR event.actor_id <> $1::uuid)
+		  AND `+adminActivityVisibilitySQL+`
+		ON CONFLICT (admin_id, event_id) DO UPDATE SET read_at = now()
+	`, adminID, eventID, role)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not mark activity as read")
+	}
+	if result.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusNotFound, "activity not found")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// MarkAllActivityRead advances one per-admin watermark, making the operation
+// constant-size even when the event history contains millions of rows.
+func (a *AdminController) MarkAllActivityRead(c *fiber.Ctx) error {
+	adminID, _ := c.Locals("admin_id").(string)
+	role, _ := c.Locals("admin_role").(string)
+	_, err := a.db.Exec(c.Context(), `
+		WITH latest AS (
+			SELECT event.created_at, event.id
+			FROM batch_events event
+			WHERE (event.actor_id IS NULL OR event.actor_id <> $1::uuid)
+			  AND `+adminActivityVisibilityMarkAllSQL+`
+			ORDER BY event.created_at DESC, event.id DESC
+			LIMIT 1
+		)
+		INSERT INTO admin_activity_state(
+			admin_id, read_through_created_at, read_through_event_id, updated_at
+		)
+		SELECT $1::uuid, latest.created_at, latest.id, now()
+		FROM latest
+		ON CONFLICT (admin_id) DO UPDATE SET
+			read_through_created_at = EXCLUDED.read_through_created_at,
+			read_through_event_id = EXCLUDED.read_through_event_id,
+			updated_at = now()
+		WHERE (admin_activity_state.read_through_created_at, admin_activity_state.read_through_event_id)
+			< (EXCLUDED.read_through_created_at, EXCLUDED.read_through_event_id)
+	`, adminID, role)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not mark activity as read")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// Super/Admin I audit the whole operation. Admin II only receives its inbound
+// procurement handoff. Admin III receives dispatch/arrival work and buyer
+// completion. The actor exclusion above prevents self-notifications.
+const adminActivityVisibilitySQL = `(
+	$3::text IN ('super_admin', 'catalog_admin')
+	OR ($3::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
+		('funds_sent_to_procurement', 'procurement_acknowledged'))
+	OR ($3::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
+		('procurement_complete', 'enroute_nigeria', 'arrived_local', 'ready_for_pickup', 'completed'))
+)`
+
+const adminActivityVisibilityMarkAllSQL = `(
+	$2::text IN ('super_admin', 'catalog_admin')
+	OR ($2::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
+		('funds_sent_to_procurement', 'procurement_acknowledged'))
+	OR ($2::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
+		('procurement_complete', 'enroute_nigeria', 'arrived_local', 'ready_for_pickup', 'completed'))
+)`

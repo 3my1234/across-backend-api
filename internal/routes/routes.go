@@ -99,6 +99,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	adminRoutes.Get("/session", allAdmins, admin.Session)
 	adminRoutes.Get("/activity", allAdmins, admin.Activity)
+	adminRoutes.Patch("/activity/read-all", allAdmins, admin.MarkAllActivityRead)
+	adminRoutes.Patch("/activity/:event_id/read", allAdmins, admin.MarkActivityRead)
 	adminRoutes.Get("/overview", allAdmins, admin.Overview)
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
