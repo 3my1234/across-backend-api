@@ -41,6 +41,7 @@ type Config struct {
 	SMTPFromEmail            string
 	SMTPFromName             string
 	SMTPReplyTo              string
+	SESSNSTopicARN           string
 	BrandLogoURL             string
 	WebsiteURL               string
 }
@@ -81,6 +82,7 @@ func Load() Config {
 		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@sportbanter.online"),
 		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
 		SMTPReplyTo:              env("SMTP_REPLY_TO", ""),
+		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:             env("BRAND_LOGO_URL", "https://raw.githubusercontent.com/3my1234/across-mobile-app/main/assets/atlantic-express-logo.png"),
 		WebsiteURL:               env("WEBSITE_URL", "https://atlanticexpress-web.sportbanter.online"),
 	}

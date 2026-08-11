@@ -57,11 +57,41 @@ func main() {
 	go startAutoConfirmWorker(ctx, store.PG)
 	go startBatchClosureWorker(ctx, store.PG)
 	go startPushNotificationWorker(ctx, store.PG)
+	go startEmailDeliveryWorker(ctx, store.PG, cfg)
 
-	log.Printf("service configuration: privy_app_id_set=%t privy_app_secret_set=%t s3_region_set=%t s3_bucket_set=%t",
+	log.Printf("service configuration: privy_app_id_set=%t privy_app_secret_set=%t s3_region_set=%t s3_bucket_set=%t smtp_set=%t ses_feedback_set=%t",
 		strings.TrimSpace(cfg.PrivyAppID) != "", strings.TrimSpace(cfg.PrivyAppSecret) != "",
-		strings.TrimSpace(cfg.AWSRegion) != "", strings.TrimSpace(cfg.S3BucketName) != "")
+		strings.TrimSpace(cfg.AWSRegion) != "", strings.TrimSpace(cfg.S3BucketName) != "",
+		strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "",
+		strings.TrimSpace(cfg.SESSNSTopicARN) != "")
 	log.Fatal(app.Listen(cfg.HTTPAddr))
+}
+
+func startEmailDeliveryWorker(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	sender := services.NewEmailService(cfg)
+	runEmailDelivery(ctx, db, sender)
+	for {
+		select {
+		case <-ticker.C:
+			runEmailDelivery(ctx, db, sender)
+		case <-ctx.Done():
+			log.Println("email delivery worker stopped")
+			return
+		}
+	}
+}
+
+func runEmailDelivery(ctx context.Context, db *pgxpool.Pool, sender *services.EmailService) {
+	count, err := services.RunEmailDeliveryBatch(ctx, db, sender)
+	if err != nil {
+		log.Printf("email delivery worker error: %v", err)
+		return
+	}
+	if count > 0 {
+		log.Printf("email delivery worker: processed %d queued emails", count)
+	}
 }
 
 func startPushNotificationWorker(ctx context.Context, db *pgxpool.Pool) {

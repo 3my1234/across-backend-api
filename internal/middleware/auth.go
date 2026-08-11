@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func RequireAuth(cfg config.Config) fiber.Handler {
+func RequireAuth(cfg config.Config, db *pgxpool.Pool) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		header := c.Get("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
@@ -19,6 +19,11 @@ func RequireAuth(cfg config.Config) fiber.Handler {
 		claims, err := auth.Verify(token, cfg.JWTSecret)
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired token")
+		}
+		var sessionVersion int
+		var active bool
+		if err := db.QueryRow(c.Context(), `SELECT session_version, is_active FROM users WHERE id = $1`, claims.UserID).Scan(&sessionVersion, &active); err != nil || !active || sessionVersion != claims.SessionVersion {
+			return fiber.NewError(fiber.StatusUnauthorized, "session is no longer valid")
 		}
 		c.Locals("user_id", claims.UserID)
 		return c.Next()

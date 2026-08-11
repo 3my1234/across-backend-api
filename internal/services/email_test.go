@@ -1,6 +1,8 @@
 package services
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,6 +28,23 @@ func TestEmailLayoutUsesBrandingAndEscapesMetadata(t *testing.T) {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("expected branded email to contain %q", expected)
 		}
+	}
+}
+
+func TestEmailOutboxRejectsUnknownTemplate(t *testing.T) {
+	service := NewEmailService(config.Config{})
+	err := service.SendOutboxTemplate("buyer@example.com", "Buyer", "unknown", json.RawMessage([]byte("{}")), "outbox-id")
+	if err == nil || !strings.Contains(err.Error(), "unsupported email template") {
+		t.Fatalf("expected unsupported-template error, got %v", err)
+	}
+}
+
+func TestEmailDeliveryRequiresSMTPConfiguration(t *testing.T) {
+	service := NewEmailService(config.Config{})
+	payload := json.RawMessage([]byte("{\"reset_url\":\"https://example.com/reset\"}"))
+	err := service.SendOutboxTemplate("buyer@example.com", "Buyer", "password_reset", payload, "outbox-id")
+	if !errors.Is(err, ErrEmailNotConfigured) {
+		t.Fatalf("expected ErrEmailNotConfigured, got %v", err)
 	}
 }
 

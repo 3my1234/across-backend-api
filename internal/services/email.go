@@ -1,9 +1,13 @@
 package services
 
 import (
+	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"mime/multipart"
+	"net"
 	"net/smtp"
 	"net/textproto"
 	"strings"
@@ -16,11 +20,17 @@ type EmailService struct {
 	cfg config.Config
 }
 
+var ErrEmailNotConfigured = errors.New("SMTP email delivery is not configured")
+
 func NewEmailService(cfg config.Config) *EmailService {
 	return &EmailService{cfg: cfg}
 }
 
 func (e *EmailService) SendVerificationEmail(toEmail, toName, verificationURL string) error {
+	return e.sendVerificationEmail(toEmail, toName, verificationURL, "")
+}
+
+func (e *EmailService) sendVerificationEmail(toEmail, toName, verificationURL, messageID string) error {
 	plainName := strings.TrimSpace(toName)
 	if plainName == "" {
 		plainName = "there"
@@ -34,10 +44,14 @@ func (e *EmailService) SendVerificationEmail(toEmail, toName, verificationURL st
 <p style="margin:0 0 8px;color:#66736F;font-size:13px;line-height:1.5;">This secure link expires in 24 hours. If you did not create this account, you can safely ignore this email.</p>
 <p style="margin:18px 0 0;color:#7B8783;font-size:12px;line-height:1.5;word-break:break-all;">Button not working? Copy and paste this link into your browser:<br><a href="%s" style="color:#0F6B5A;">%s</a></p>`, name, link, link, link))
 	plain := fmt.Sprintf("Hello %s,\n\nConfirm your email address to activate your Atlantic Express account:\n%s\n\nThis secure link expires in 24 hours. If you did not create this account, you can safely ignore this email.", plainName, strings.TrimSpace(verificationURL))
-	return e.SendHTMLWithText(toEmail, "Verify your Atlantic Express email", plain, body)
+	return e.sendHTMLWithText(toEmail, "Verify your Atlantic Express email", plain, body, messageID)
 }
 
 func (e *EmailService) SendWelcomeEmail(toEmail, toName string) error {
+	return e.sendWelcomeEmail(toEmail, toName, "")
+}
+
+func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID string) error {
 	plainName := strings.TrimSpace(toName)
 	if plainName == "" {
 		plainName = "there"
@@ -55,7 +69,44 @@ func (e *EmailService) SendWelcomeEmail(toEmail, toName string) error {
 </tr></table>
 <p style="margin:24px 0 4px;text-align:center;"><a href="%s" style="display:inline-block;background:#0F3D35;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">Explore Atlantic Express</a></p>`, name, website))
 	plain := fmt.Sprintf("Hello %s,\n\nWelcome to Atlantic Express. Your account is ready, and you received 100 XP worth N100 in discounts.\n\nShop international products, pay securely in Naira, and track every delivery stage.\n\n%s", plainName, strings.TrimSpace(e.cfg.WebsiteURL))
-	return e.SendHTMLWithText(toEmail, "Welcome to Atlantic Express", plain, body)
+	return e.sendHTMLWithText(toEmail, "Welcome to Atlantic Express", plain, body, messageID)
+}
+
+func (e *EmailService) sendPasswordResetEmail(toEmail, toName, resetURL, messageID string) error {
+	plainName := strings.TrimSpace(toName)
+	if plainName == "" {
+		plainName = "there"
+	}
+	name := html.EscapeString(plainName)
+	link := html.EscapeString(strings.TrimSpace(resetURL))
+	body := e.layout("Reset your password", "Use this secure link to choose a new Atlantic Express password.", fmt.Sprintf(`
+<p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Hello %s,</p>
+<p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">We received a request to reset your Atlantic Express password.</p>
+<p style="margin:24px 0;text-align:center;"><a href="%s" style="display:inline-block;background:#FF4747;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">Choose a new password</a></p>
+<p style="margin:0 0 8px;color:#66736F;font-size:13px;line-height:1.5;">This secure, single-use link expires in 30 minutes. If you did not request a reset, you can safely ignore this email.</p>
+<p style="margin:18px 0 0;color:#7B8783;font-size:12px;line-height:1.5;word-break:break-all;">Button not working? Copy and paste this link into your browser:<br><a href="%s" style="color:#0F6B5A;">%s</a></p>`, name, link, link, link))
+	plain := fmt.Sprintf("Hello %s,\n\nUse this secure link to reset your Atlantic Express password:\n%s\n\nThe single-use link expires in 30 minutes. If you did not request a reset, you can safely ignore this email.", plainName, strings.TrimSpace(resetURL))
+	return e.sendHTMLWithText(toEmail, "Reset your Atlantic Express password", plain, body, messageID)
+}
+
+func (e *EmailService) SendOutboxTemplate(toEmail, toName, templateType string, payload json.RawMessage, outboxID string) error {
+	var values map[string]string
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &values); err != nil {
+			return fmt.Errorf("decode %s email payload: %w", templateType, err)
+		}
+	}
+	messageID := strings.TrimSpace(outboxID)
+	switch templateType {
+	case "verification":
+		return e.sendVerificationEmail(toEmail, toName, values["verification_url"], messageID)
+	case "welcome":
+		return e.sendWelcomeEmail(toEmail, toName, messageID)
+	case "password_reset":
+		return e.sendPasswordResetEmail(toEmail, toName, values["reset_url"], messageID)
+	default:
+		return fmt.Errorf("unsupported email template %q", templateType)
+	}
 }
 
 func (e *EmailService) layout(title, preheader, content string) string {
@@ -80,17 +131,28 @@ func (e *EmailService) SendHTML(toEmail, subject, htmlBody string) error {
 }
 
 func (e *EmailService) SendHTMLWithText(toEmail, subject, textBody, htmlBody string) error {
+	return e.sendHTMLWithText(toEmail, subject, textBody, htmlBody, "")
+}
+
+func (e *EmailService) sendHTMLWithText(toEmail, subject, textBody, htmlBody, messageID string) error {
 	if strings.TrimSpace(e.cfg.SMTPHost) == "" || strings.TrimSpace(e.cfg.SMTPUsername) == "" {
-		return nil
+		return ErrEmailNotConfigured
 	}
 	subject = strings.ReplaceAll(strings.ReplaceAll(subject, "\r", ""), "\n", "")
 	fromName := strings.ReplaceAll(strings.ReplaceAll(e.cfg.SMTPFromName, "\r", ""), "\n", "")
+	if messageID == "" {
+		messageID = fmt.Sprintf("%d.%s", time.Now().UnixNano(), strings.ReplaceAll(toEmail, "@", "."))
+	}
+	messageDomain := "sportbanter.online"
+	if index := strings.LastIndex(e.cfg.SMTPFromEmail, "@"); index >= 0 && index < len(e.cfg.SMTPFromEmail)-1 {
+		messageDomain = e.cfg.SMTPFromEmail[index+1:]
+	}
 	headers := []string{
 		"From: " + fromName + " <" + e.cfg.SMTPFromEmail + ">",
 		"To: " + toEmail,
 		"Subject: " + subject,
 		"Date: " + time.Now().Format(time.RFC1123Z),
-		fmt.Sprintf("Message-ID: <%d.%s@%s>", time.Now().UnixNano(), strings.ReplaceAll(toEmail, "@", "."), strings.TrimPrefix(e.cfg.SMTPFromEmail[strings.LastIndex(e.cfg.SMTPFromEmail, "@")+1:], "@")),
+		fmt.Sprintf("Message-ID: <%s@%s>", strings.ReplaceAll(messageID, "@", "."), messageDomain),
 		"Auto-Submitted: auto-generated",
 	}
 	if replyTo := strings.TrimSpace(e.cfg.SMTPReplyTo); replyTo != "" {
@@ -126,7 +188,49 @@ func (e *EmailService) SendHTMLWithText(toEmail, subject, textBody, htmlBody str
 		return err
 	}
 	message := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + body.String())
-	address := e.cfg.SMTPHost + ":" + e.cfg.SMTPPort
+	return e.sendSMTP(toEmail, message)
+}
+
+func (e *EmailService) sendSMTP(toEmail string, message []byte) error {
+	address := net.JoinHostPort(e.cfg.SMTPHost, e.cfg.SMTPPort)
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	connection, err := dialer.Dial("tcp", address)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
+	client, err := smtp.NewClient(connection, e.cfg.SMTPHost)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if ok, _ := client.Extension("STARTTLS"); !ok {
+		return errors.New("SMTP server does not advertise STARTTLS")
+	}
+	if err := client.StartTLS(&tls.Config{ServerName: e.cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+		return err
+	}
 	auth := smtp.PlainAuth("", e.cfg.SMTPUsername, e.cfg.SMTPPassword, e.cfg.SMTPHost)
-	return smtp.SendMail(address, auth, e.cfg.SMTPFromEmail, []string{toEmail}, message)
+	if err := client.Auth(auth); err != nil {
+		return err
+	}
+	if err := client.Mail(e.cfg.SMTPFromEmail); err != nil {
+		return err
+	}
+	if err := client.Rcpt(toEmail); err != nil {
+		return err
+	}
+	data, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := data.Write(message); err != nil {
+		_ = data.Close()
+		return err
+	}
+	if err := data.Close(); err != nil {
+		return err
+	}
+	return client.Quit()
 }

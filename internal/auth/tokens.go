@@ -11,13 +11,18 @@ import (
 )
 
 type Claims struct {
-	UserID    string `json:"sub"`
-	ExpiresAt int64  `json:"exp"`
+	UserID         string `json:"sub"`
+	ExpiresAt      int64  `json:"exp"`
+	SessionVersion int    `json:"ver,omitempty"`
 }
 
 func Sign(userID, secret string, ttl time.Duration) (string, int64, error) {
+	return SignWithVersion(userID, secret, ttl, 0)
+}
+
+func SignWithVersion(userID, secret string, ttl time.Duration, sessionVersion int) (string, int64, error) {
 	expiresAt := time.Now().Add(ttl).Unix()
-	claims := Claims{UserID: userID, ExpiresAt: expiresAt}
+	claims := Claims{UserID: userID, ExpiresAt: expiresAt, SessionVersion: sessionVersion}
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", 0, err

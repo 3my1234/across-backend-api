@@ -5,8 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -61,7 +64,6 @@ type jwksCache struct {
 type AuthController struct {
 	db                   *pgxpool.Pool
 	cfg                  config.Config
-	email                *services.EmailService
 	httpClient           *http.Client
 	privyKeyMu           sync.RWMutex
 	privyVerificationKey string
@@ -75,7 +77,6 @@ func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
 	return &AuthController{
 		db:         db,
 		cfg:        cfg,
-		email:      services.NewEmailService(cfg),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		identities: NewIdentityService(db),
 		rewards:    NewRewardService(db),
@@ -113,8 +114,13 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	}
 	expiresAt := time.Now().Add(24 * time.Hour)
 
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
+	}
+	defer tx.Rollback(c.Context())
 	var userID string
-	err = a.db.QueryRow(c.Context(), `
+	err = tx.QueryRow(c.Context(), `
 		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at, verification_sent_at, verification_resend_count)
 		VALUES ($1, $2, NULLIF($3, ''), $4, $5, false, false, $6, $7, now(), 0)
 		RETURNING id
@@ -130,20 +136,19 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		log.Printf("signup insert failed: %v", err)
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
-
-	deliveryPending := false
-	if err := a.sendVerificationEmail(req.Email, req.FullName, verificationToken); err != nil {
-		deliveryPending = true
-		log.Printf("verification email delivery failed user_id=%s: %v", userID, err)
+	if err := services.QueueVerificationEmail(c.Context(), tx, userID, req.Email, req.FullName, verificationToken, a.cfg.PublicBaseURL); err != nil {
+		if errors.Is(err, services.ErrRecipientSuppressed) {
+			return fiber.NewError(fiber.StatusBadRequest, "this email address cannot receive account messages; use another email")
+		}
+		log.Printf("verification email queue failed user_id=%s: %v", userID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "could not queue account verification")
 	}
-
-	message := "Account created. Check your email to activate it."
-	if deliveryPending {
-		message = "Account created, but email delivery is delayed. Use Resend verification shortly."
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"message": message, "requires_email_verification": true,
-		"verification_delivery_pending": deliveryPending, "user_id": userID,
+		"message": "Account created. Check your email shortly to activate it.", "requires_email_verification": true,
+		"verification_delivery_pending": true, "user_id": userID,
 	})
 }
 
@@ -207,7 +212,9 @@ func (a *AuthController) Gmail(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	_ = a.email.SendWelcomeEmail(req.Email, req.FullName)
+	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID, req.Email, req.FullName); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+		log.Printf("welcome email queue failed user_id=%s: %v", userID, err)
+	}
 	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
 		"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
 	return a.respondSession(c, userID)
@@ -246,7 +253,7 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	userID, created, err := a.identities.ResolvePrivy(c.Context(), countryID, privyUserID, email, name)
+	userID, _, err := a.identities.ResolvePrivy(c.Context(), countryID, privyUserID, email, name)
 	if err != nil {
 		log.Printf("privy identity resolution failed subject=%s: %v", privyUserID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "Google account could not be linked")
@@ -255,8 +262,8 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	if rewardErr != nil {
 		log.Printf("welcome reward failed user_id=%s: %v", userID, rewardErr)
 	}
-	if created {
-		_ = a.email.SendWelcomeEmail(email, name)
+	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID, email, name); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+		log.Printf("welcome email queue failed user_id=%s: %v", userID, err)
 	}
 	if awarded {
 		log.Printf("welcome reward awarded user_id=%s", userID)
@@ -823,8 +830,13 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "verification token required")
 	}
 
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(c.Context())
 	var userID, email, fullName string
-	err := a.db.QueryRow(c.Context(), `
+	err = tx.QueryRow(c.Context(), `
 		UPDATE users
 		SET email_verified = true,
 			is_active = true,
@@ -842,8 +854,12 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		c.Type("html", "utf-8")
 		return c.SendString(a.verificationResultPage(false, "Verification link unavailable", "This link is invalid or has expired. Return to the app and request a new verification email."))
 	}
-
-	_ = a.email.SendWelcomeEmail(email, fullName)
+	if err := services.QueueWelcomeEmail(c.Context(), tx, userID, email, fullName); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+		return err
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return err
+	}
 	if _, err := a.rewards.AwardWelcome(c.Context(), userID); err != nil {
 		log.Printf("welcome reward failed user_id=%s: %v", userID, err)
 	}
@@ -864,11 +880,16 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "email required")
 	}
 
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
+	}
+	defer tx.Rollback(c.Context())
 	var userID, fullName string
 	var emailVerified bool
 	var sentAt *time.Time
 	var resendCount int
-	err := a.db.QueryRow(c.Context(), `
+	err = tx.QueryRow(c.Context(), `
 		SELECT id, full_name, email_verified, verification_sent_at, verification_resend_count
 		FROM users
 		WHERE email = $1
@@ -888,7 +909,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		return err
 	}
 	expiresAt := time.Now().Add(24 * time.Hour)
-	_, err = a.db.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		UPDATE users
 		SET verification_token = $2,
 			verification_token_expires_at = $3,
@@ -900,15 +921,165 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
 	}
-	if err := a.sendVerificationEmail(email, fullName, verificationToken); err != nil {
-		return err
+	if err := services.QueueVerificationEmail(c.Context(), tx, userID, email, fullName, verificationToken, a.cfg.PublicBaseURL); err != nil {
+		if errors.Is(err, services.ErrRecipientSuppressed) {
+			return c.JSON(fiber.Map{"message": "if the email exists, a verification message will be sent"})
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, "could not queue verification email")
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
 	}
 
-	return c.JSON(fiber.Map{"message": "verification email sent"})
+	return c.JSON(fiber.Map{"message": "verification email queued"})
+}
+
+func (a *AuthController) ForgotPassword(c *fiber.Ctx) error {
+	const responseMessage = "If an account exists for that email, a password reset link will be sent shortly."
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	email, valid := normalizeEmail(req.Email)
+	if !valid {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
+	}
+	tx, err := a.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	defer tx.Rollback(c.Context())
+	var userID, fullName string
+	var requestedAt *time.Time
+	err = tx.QueryRow(c.Context(), `
+		SELECT id, full_name, password_reset_requested_at
+		FROM users
+		WHERE email = $1
+		FOR UPDATE
+	`, email).Scan(&userID, &fullName, &requestedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
+	}
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	if requestedAt != nil && time.Since(*requestedAt) < 5*time.Minute {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
+	}
+	token, err := newVerificationToken()
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	digest := resetTokenDigest(token)
+	if _, err := tx.Exec(c.Context(), `
+		UPDATE users
+		SET password_reset_token_hash = $2,
+			password_reset_expires_at = now() + interval '30 minutes',
+			password_reset_requested_at = now(), updated_at = now()
+		WHERE id = $1
+	`, userID, digest); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	if err := services.QueuePasswordResetEmail(c.Context(), tx, userID, email, fullName, token, a.cfg.PublicBaseURL); err != nil {
+		if errors.Is(err, services.ErrRecipientSuppressed) {
+			return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
+		}
+		log.Printf("password reset email queue failed user_id=%s: %v", userID, err)
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
+}
+
+func (a *AuthController) ResetPasswordPage(c *fiber.Ctx) error {
+	token := strings.TrimSpace(c.Query("token"))
+	valid := false
+	if token != "" {
+		_ = a.db.QueryRow(c.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM users
+				WHERE password_reset_token_hash = $1 AND password_reset_expires_at >= now()
+			)
+		`, resetTokenDigest(token)).Scan(&valid)
+	}
+	c.Set(fiber.HeaderCacheControl, "private, no-store")
+	c.Set("Referrer-Policy", "no-referrer")
+	c.Type("html", "utf-8")
+	if !valid {
+		c.Status(fiber.StatusBadRequest)
+		return c.SendString(a.verificationResultPage(false, "Reset link unavailable", "This password reset link is invalid, expired, or has already been used. Return to the app and request a new one."))
+	}
+	brand := `<div style="font-size:22px;font-weight:800;color:#0F3D35;">Atlantic Express</div>`
+	if logoURL := strings.TrimSpace(a.cfg.BrandLogoURL); logoURL != "" {
+		brand = `<img src="` + html.EscapeString(logoURL) + `" width="170" alt="Atlantic Express" style="max-width:170px;height:auto;">`
+	}
+	return c.SendString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Reset your Atlantic Express password</title></head><body style="margin:0;background:#F3F7F6;font-family:Arial,Helvetica,sans-serif;color:#142522;"><main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;"><section style="width:100%;max-width:520px;background:#FFFFFF;border:1px solid #E2EBE8;border-radius:18px;padding:36px;box-sizing:border-box;box-shadow:0 12px 40px rgba(15,61,53,.08);"><div style="text-align:center;">` + brand + `</div><h1 style="font-size:26px;margin:28px 0 10px;">Choose a new password</h1><p style="font-size:15px;line-height:1.6;color:#52625E;margin:0 0 24px;">Use at least eight characters. Completing this reset signs out your existing buyer sessions.</p><form method="post" action="/api/v1/auth/reset-password"><input type="hidden" name="token" value="` + html.EscapeString(token) + `"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">New password</label><input name="password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:16px;"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">Confirm password</label><input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:22px;"><button type="submit" style="width:100%;border:0;border-radius:8px;background:#FF4747;color:#FFFFFF;font-size:16px;font-weight:700;padding:14px;cursor:pointer;">Reset password</button></form><p style="margin:24px 0 0;text-align:center;font-size:12px;color:#84918E;">ATLANTIC SHANSU LOGISTICS LIMITED</p></section></main></body></html>`)
+}
+
+func (a *AuthController) ResetPassword(c *fiber.Ctx) error {
+	var req struct {
+		Token           string `json:"token" form:"token"`
+		Password        string `json:"password" form:"password"`
+		ConfirmPassword string `json:"confirm_password" form:"confirm_password"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" || len(req.Password) < 8 || req.Password != req.ConfirmPassword {
+		return a.resetPasswordFailure(c, "The passwords must match and contain at least eight characters.")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not reset password")
+	}
+	var userID string
+	err = a.db.QueryRow(c.Context(), `
+		UPDATE users
+		SET password_hash = $2,
+			password_reset_token_hash = NULL,
+			password_reset_expires_at = NULL,
+			password_reset_requested_at = NULL,
+			session_version = session_version + 1,
+			updated_at = now()
+		WHERE password_reset_token_hash = $1
+		  AND password_reset_expires_at >= now()
+		RETURNING id
+	`, resetTokenDigest(req.Token), string(hash)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return a.resetPasswordFailure(c, "This password reset link is invalid, expired, or has already been used.")
+	}
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not reset password")
+	}
+	c.Set(fiber.HeaderCacheControl, "private, no-store")
+	if strings.Contains(strings.ToLower(c.Get(fiber.HeaderContentType)), "application/x-www-form-urlencoded") {
+		c.Type("html", "utf-8")
+		return c.SendString(a.verificationResultPage(true, "Password reset complete", "Your password has been changed and existing buyer sessions were signed out. Return to the app and sign in with your new password."))
+	}
+	return c.JSON(fiber.Map{"message": "password reset complete; sign in with your new password"})
+}
+
+func (a *AuthController) resetPasswordFailure(c *fiber.Ctx, message string) error {
+	c.Set(fiber.HeaderCacheControl, "private, no-store")
+	if strings.Contains(strings.ToLower(c.Get(fiber.HeaderContentType)), "application/x-www-form-urlencoded") {
+		c.Status(fiber.StatusBadRequest)
+		c.Type("html", "utf-8")
+		return c.SendString(a.verificationResultPage(false, "Password reset failed", message))
+	}
+	return fiber.NewError(fiber.StatusBadRequest, message)
 }
 
 func (a *AuthController) respondSession(c *fiber.Ctx, userID string) error {
-	token, expiresAt, err := auth.Sign(userID, a.cfg.JWTSecret, 24*30*time.Hour)
+	var sessionVersion int
+	if err := a.db.QueryRow(c.Context(), `SELECT session_version FROM users WHERE id = $1`, userID).Scan(&sessionVersion); err != nil {
+		return err
+	}
+	token, expiresAt, err := auth.SignWithVersion(userID, a.cfg.JWTSecret, 24*30*time.Hour, sessionVersion)
 	if err != nil {
 		return err
 	}
@@ -919,17 +1090,9 @@ func (a *AuthController) respondSession(c *fiber.Ctx, userID string) error {
 	})
 }
 
-func (a *AuthController) sendVerificationEmail(toEmail, toName, token string) error {
-	baseURL := strings.TrimRight(strings.TrimSpace(a.cfg.PublicBaseURL), "/")
-	if baseURL == "" {
-		baseURL = "http://localhost:8080"
-	}
-	link := baseURL + "/api/v1/auth/verify-email?token=" + token
-	if err := a.email.SendVerificationEmail(toEmail, toName, link); err != nil {
-		return err
-	}
-
-	return nil
+func resetTokenDigest(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
 }
 
 func (a *AuthController) verificationResultPage(success bool, title, message string) string {

@@ -22,6 +22,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	ops := controllers.NewOpsController(db)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
+	sesController := controllers.NewSESController(db, cfg)
 	xpController := controllers.NewXPController(db)
 	supportController := controllers.NewSupportController(db)
 	analyticsController := controllers.NewAnalyticsController(db)
@@ -59,7 +60,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 		databaseReady := db.Ping(c.Context()) == nil
 		privyReady := authController.PrivyReady(c.Context()) == nil
 		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
-		ready := databaseReady && privyReady && storageReady
+		emailReady := strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "" && strings.TrimSpace(cfg.SMTPFromEmail) != ""
+		ready := databaseReady && privyReady && storageReady && emailReady
 		status := fiber.StatusOK
 		if !ready {
 			status = fiber.StatusServiceUnavailable
@@ -68,6 +70,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 			"ok": ready,
 			"checks": fiber.Map{
 				"database":        databaseReady,
+				"email_delivery":  emailReady,
 				"google_auth":     privyReady,
 				"profile_uploads": storageReady,
 			},
@@ -84,6 +87,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Post("/auth/privy/verify", countryGuard, authController.VerifyPrivy)
 	v1.Post("/auth/resend-verification", countryGuard, authController.ResendVerification)
 	v1.Get("/auth/verify-email", authController.VerifyEmail)
+	v1.Post("/auth/forgot-password", authController.ForgotPassword)
+	v1.Get("/auth/reset-password", authController.ResetPasswordPage)
+	v1.Post("/auth/reset-password", authController.ResetPassword)
+	v1.Post("/webhooks/ses", sesController.Webhook)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
 	v1.Post("/admin/login", admin.Login)
@@ -130,7 +137,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	// Auto-confirm expired deliveries (can be called by cron)
 	adminRoutes.Post("/deliveries/auto-confirm", courierOnly, ops.AutoConfirmDeliveries)
 
-	authed := v1.Group("", middleware.RequireAuth(cfg))
+	authed := v1.Group("", middleware.RequireAuth(cfg, db))
 	authed.Get("/auth/session", authController.Session)
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
 	authed.Post("/checkout/quote", countryGuard, orders.QuoteCheckout)
