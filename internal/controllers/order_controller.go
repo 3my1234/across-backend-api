@@ -59,12 +59,13 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cart")
 	}
 
-	var email, fullName, phone string
+	var email, fullName, phone, address, city, state, postalCode string
 	if err := o.db.QueryRow(c.Context(), `
-		SELECT COALESCE(email, ''), COALESCE(full_name, ''), COALESCE(phone, '')
+		SELECT COALESCE(email, ''), COALESCE(full_name, ''), COALESCE(phone, ''),
+			COALESCE(address, ''), COALESCE(city, ''), COALESCE(state, ''), COALESCE(postal_code, '')
 		FROM users
 		WHERE id = $1 AND is_active = true
-	`, userID).Scan(&email, &fullName, &phone); err != nil {
+	`, userID).Scan(&email, &fullName, &phone, &address, &city, &state, &postalCode); err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
 	}
 	if missing := missingPurchasingProfileFields(email, fullName, phone); len(missing) > 0 {
@@ -110,13 +111,20 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	vatFee := 100.0
 	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
 	deliveryPromise := time.Now().UTC().Add(21 * 24 * time.Hour)
+	contactSnapshot, err := json.Marshal(fiber.Map{
+		"full_name": fullName, "email": email, "phone": phone,
+		"address": address, "city": city, "state": state, "postal_code": postalCode,
+	})
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not prepare fulfillment contact")
+	}
 
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at)
-		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7)
+		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at, fulfillment_contact_snapshot)
+		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7, $8::jsonb)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot).Scan(&orderID); err != nil {
 		return err
 	}
 

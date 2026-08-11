@@ -172,7 +172,14 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 			oi.purchase_status, oi.purchase_notes, oi.exception_resolution,
 			oi.variant, COALESCE(p.description, ''), p.cost_price_rmb, p.image_urls, p.factory_details, oi.product_snapshot,
 			COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, ''),
-			u.id, u.full_name, COALESCE(u.email, ''), COALESCE(u.phone, ''),
+			u.id,
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'full_name', ''), u.full_name),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'email', ''), u.email::text, ''),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'phone', ''), u.phone, ''),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'address', ''), u.address, ''),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'city', ''), u.city, ''),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'state', ''), u.state, ''),
+			COALESCE(NULLIF(o.fulfillment_contact_snapshot->>'postal_code', ''), u.postal_code, ''),
 			o.id, COALESCE(o.package_label, ''), oi.created_at,
 			COUNT(*) OVER() AS total_count
 		FROM order_items oi
@@ -185,7 +192,8 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 			OR u.full_name ILIKE '%' || $2 || '%' OR u.email ILIKE '%' || $2 || '%'
 			OR oi.purchase_status ILIKE '%' || $2 || '%' OR o.package_label ILIKE '%' || $2 || '%'
 			OR p.factory_details::text ILIKE '%' || $2 || '%' OR oi.product_snapshot::text ILIKE '%' || $2 || '%' OR lh.code ILIKE '%' || $2 || '%'
-			OR lh.name ILIKE '%' || $2 || '%' OR lh.city ILIKE '%' || $2 || '%')
+			OR lh.name ILIKE '%' || $2 || '%' OR lh.city ILIKE '%' || $2 || '%'
+			OR o.fulfillment_contact_snapshot::text ILIKE '%' || $2 || '%')
 		  AND ($3::timestamptz IS NULL OR (oi.created_at, oi.id) < ($3, $4::uuid))
 		ORDER BY oi.created_at DESC, oi.id DESC
 		LIMIT $5
@@ -200,6 +208,10 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 		BuyerName           string         `json:"buyer_name"`
 		BuyerEmail          string         `json:"buyer_email"`
 		BuyerPhone          string         `json:"buyer_phone"`
+		BuyerAddress        string         `json:"buyer_address"`
+		BuyerCity           string         `json:"buyer_city"`
+		BuyerState          string         `json:"buyer_state"`
+		BuyerPostalCode     string         `json:"buyer_postal_code"`
 		OrderID             string         `json:"order_id"`
 		PackageLabel        string         `json:"package_label"`
 		ItemID              string         `json:"item_id"`
@@ -232,6 +244,7 @@ func (o *OpsController) GetPurchaseManifest(c *fiber.Ctx) error {
 			&variantRaw, &item.Description, &item.SupplierCostRMB, &item.ImageURLs, &factoryRaw, &snapshotRaw,
 			&item.OriginHubCode, &item.OriginHubName, &item.OriginHubCity, &item.OriginHubAddress,
 			&item.BuyerID, &item.BuyerName, &item.BuyerEmail, &item.BuyerPhone,
+			&item.BuyerAddress, &item.BuyerCity, &item.BuyerState, &item.BuyerPostalCode,
 			&item.OrderID, &item.PackageLabel, &item.CreatedAt, &totalCount); err != nil {
 			return err
 		}

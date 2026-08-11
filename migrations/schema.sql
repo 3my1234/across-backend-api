@@ -169,6 +169,7 @@ CREATE TABLE orders (
   current_tracking_stage tracking_stage NOT NULL DEFAULT 'Order Placed',
   ready_for_manual_settlement BOOLEAN NOT NULL DEFAULT false,
   package_label TEXT,
+  fulfillment_contact_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   delivery_promised_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

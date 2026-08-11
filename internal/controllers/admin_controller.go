@@ -741,7 +741,23 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			WHERE manifest_order.batch_id = b.id
 		) ms ON true
 		WHERE ($1 = '' OR b.batch_code ILIKE '%' || $1 || '%' OR b.status::text ILIKE '%' || $1 || '%'
-			OR b.transport_mode ILIKE '%' || $1 || '%' OR b.current_location ILIKE '%' || $1 || '%')
+			OR b.transport_mode ILIKE '%' || $1 || '%' OR b.current_location ILIKE '%' || $1 || '%'
+			OR EXISTS (
+				SELECT 1
+				FROM orders search_order
+				JOIN order_items search_item ON search_item.order_id = search_order.id
+				JOIN users search_buyer ON search_buyer.id = search_order.user_id
+				WHERE search_order.batch_id = b.id
+				  AND (
+					COALESCE(search_order.package_label, '') ILIKE '%' || $1 || '%'
+					OR search_item.sku ILIKE '%' || $1 || '%'
+					OR search_item.title ILIKE '%' || $1 || '%'
+					OR search_buyer.full_name ILIKE '%' || $1 || '%'
+					OR COALESCE(search_buyer.email, '') ILIKE '%' || $1 || '%'
+					OR COALESCE(search_buyer.phone, '') ILIKE '%' || $1 || '%'
+					OR search_order.fulfillment_contact_snapshot::text ILIKE '%' || $1 || '%'
+				  )
+			))
 		  AND ($2::timestamptz IS NULL OR (b.created_at, b.id) < ($2, $3::uuid))
 		GROUP BY b.id, ms.pending_items, ms.purchased_items, ms.failed_items
 		ORDER BY b.created_at DESC, b.id DESC
