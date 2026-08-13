@@ -469,6 +469,8 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 		CompareAtPrice       float64        `json:"compare_at_price"`
 		ExchangeRateSnapshot float64        `json:"exchange_rate_snapshot"`
 		InventoryCount       int            `json:"inventory_count"`
+		IsFlashSale          bool           `json:"is_flash_sale"`
+		FlashSalePrice       float64        `json:"flash_sale_price"`
 		FactoryName          string         `json:"factory_name"`
 		FactoryContact       string         `json:"factory_contact"`
 		FactoryLocation      string         `json:"factory_location"`
@@ -481,6 +483,9 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" || req.LocalSellingPrice <= 0 || req.ExchangeRateSnapshot <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "title, price, and exchange rate are required")
+	}
+	if req.IsFlashSale && (req.FlashSalePrice <= 0 || req.FlashSalePrice >= req.LocalSellingPrice) {
+		return fiber.NewError(fiber.StatusBadRequest, "flash sale price must be greater than zero and lower than the selling price")
 	}
 	if req.CategoryPath == nil {
 		req.CategoryPath = []string{}
@@ -513,13 +518,13 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 		INSERT INTO products(
 			origin_hub_id, sku, title, description, category_path, variants, image_urls,
 			cost_price_rmb, local_selling_price, compare_at_price, exchange_rate_snapshot,
-			inventory_count, factory_details
+			inventory_count, factory_details, is_flash_sale, flash_sale_price
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), $11, $12, $13)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), $11, $12, $13, $14, CASE WHEN $14 THEN $15 ELSE NULL END)
 		RETURNING id
 	`, req.OriginHubID, req.SKU, req.Title, req.Description, req.CategoryPath, variants, req.ImageURLs,
 		req.CostPriceRMB, req.LocalSellingPrice, req.CompareAtPrice, req.ExchangeRateSnapshot,
-		req.InventoryCount, factoryJSON).Scan(&id)
+		req.InventoryCount, factoryJSON, req.IsFlashSale, req.FlashSalePrice).Scan(&id)
 	if err != nil {
 		log.Printf("create product failed: sku=%s title=%q category=%v price=%.2f compare_at=%.2f cost_rmb=%.2f exchange_rate=%.2f inventory=%d err=%v",
 			req.SKU, req.Title, req.CategoryPath, req.LocalSellingPrice, req.CompareAtPrice, req.CostPriceRMB, req.ExchangeRateSnapshot, req.InventoryCount, err)
@@ -541,7 +546,7 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 	rows, err := a.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0),
-			p.inventory_count, p.is_active, p.created_at, p.updated_at,
+			p.inventory_count, p.is_active, p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.created_at, p.updated_at,
 			COUNT(*) OVER() AS total_count
 		FROM products p
 		WHERE ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
@@ -560,11 +565,11 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency string
 		var categories, images []string
-		var price, compareAtPrice float64
+		var price, compareAtPrice, flashSalePrice float64
 		var inventory int
-		var isActive bool
+		var isActive, isFlashSale bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &isActive, &createdAt, &updatedAt, &totalCount); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &isActive, &isFlashSale, &flashSalePrice, &createdAt, &updatedAt, &totalCount); err != nil {
 			return err
 		}
 		products = append(products, fiber.Map{
@@ -579,6 +584,8 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 			"compare_at_price":    compareAtPrice,
 			"inventory_count":     inventory,
 			"is_active":           isActive,
+			"is_flash_sale":       isFlashSale,
+			"flash_sale_price":    flashSalePrice,
 			"created_at":          createdAt,
 			"updated_at":          updatedAt,
 		})
@@ -601,12 +608,14 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 		CompareAtPrice    *float64 `json:"compare_at_price"`
 		InventoryCount    *int     `json:"inventory_count"`
 		IsActive          *bool    `json:"is_active"`
+		IsFlashSale       *bool    `json:"is_flash_sale"`
+		FlashSalePrice    *float64 `json:"flash_sale_price"`
 		ImageURLs         []string `json:"image_urls"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
-	if req.Title == nil && req.Description == nil && req.LocalSellingPrice == nil && req.CompareAtPrice == nil && req.InventoryCount == nil && req.IsActive == nil && req.ImageURLs == nil {
+	if req.Title == nil && req.Description == nil && req.LocalSellingPrice == nil && req.CompareAtPrice == nil && req.InventoryCount == nil && req.IsActive == nil && req.IsFlashSale == nil && req.FlashSalePrice == nil && req.ImageURLs == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "no fields to update")
 	}
 	if req.LocalSellingPrice != nil && *req.LocalSellingPrice <= 0 {
@@ -614,6 +623,26 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	}
 	if req.InventoryCount != nil && *req.InventoryCount < 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "inventory cannot be negative")
+	}
+	var currentPrice, currentFlashPrice float64
+	var currentIsFlashSale bool
+	if err := a.db.QueryRow(c.Context(), `SELECT local_selling_price, is_flash_sale, COALESCE(flash_sale_price, 0) FROM products WHERE id = $1`, productID).Scan(&currentPrice, &currentIsFlashSale, &currentFlashPrice); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+	nextPrice := currentPrice
+	if req.LocalSellingPrice != nil {
+		nextPrice = *req.LocalSellingPrice
+	}
+	nextIsFlashSale := currentIsFlashSale
+	if req.IsFlashSale != nil {
+		nextIsFlashSale = *req.IsFlashSale
+	}
+	nextFlashPrice := currentFlashPrice
+	if req.FlashSalePrice != nil {
+		nextFlashPrice = *req.FlashSalePrice
+	}
+	if nextIsFlashSale && (nextFlashPrice <= 0 || nextFlashPrice >= nextPrice) {
+		return fiber.NewError(fiber.StatusBadRequest, "flash sale price must be greater than zero and lower than the selling price")
 	}
 	if req.Title != nil {
 		trimmed := strings.TrimSpace(*req.Title)
@@ -642,9 +671,11 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 			inventory_count = COALESCE($6, inventory_count),
 			is_active = COALESCE($7, is_active),
 			image_urls = COALESCE($8, image_urls),
+			is_flash_sale = $9,
+			flash_sale_price = CASE WHEN $9 THEN $10 ELSE NULL END,
 			updated_at = now()
 		WHERE id = $1
-	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs)
+	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs, nextIsFlashSale, nextFlashPrice)
 	if err != nil {
 		log.Printf("update product failed: id=%s err=%v", productID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())

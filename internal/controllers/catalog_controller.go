@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +24,10 @@ func NewCatalogController(db *pgxpool.Pool, cfg config.Config) *CatalogControlle
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
-			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0), p.inventory_count,
+			p.local_currency_code,
+			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
+			CASE WHEN p.is_flash_sale THEN GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price) ELSE COALESCE(p.compare_at_price, 0) END,
+			p.inventory_count,
 			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
@@ -78,22 +82,92 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"products": products})
 }
 
+// ListFlashSales is deliberately separate from the general catalogue. It keeps
+// the query bounded and cursor-paginated even when the catalogue grows to
+// millions of products.
+func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
+	rows, err := cc.db.Query(c.Context(), `
+		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
+			p.local_currency_code, p.flash_sale_price,
+			GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price), p.inventory_count,
+			p.factory_details, COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			p.created_at, COUNT(*) OVER() AS total_count
+		FROM products p
+		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
+		WHERE p.is_active = true AND p.is_flash_sale = true AND p.inventory_count > 0
+		  AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
+		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
+			OR p.description ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (p.created_at, p.id) < ($2, $3::uuid))
+		ORDER BY p.created_at DESC, p.id DESC LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "flash sales unavailable")
+	}
+	defer rows.Close()
+	products := make([]fiber.Map, 0, page.Limit+1)
+	var total int64
+	for rows.Next() {
+		var id, sku, title, description, currency, hubID, hubName, hubCity string
+		var categories, images []string
+		var price, compareAt float64
+		var inventory int
+		var factoryRaw []byte
+		var createdAt time.Time
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total); err != nil {
+			return err
+		}
+		factory := map[string]any{}
+		_ = json.Unmarshal(factoryRaw, &factory)
+		products = append(products, fiber.Map{
+			"id": id, "sku": sku, "title": title, "description": description,
+			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
+			"price": price, "compare_at_price": compareAt, "inventory_count": inventory,
+			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt,
+			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
+		})
+	}
+	nextCursor := ""
+	if len(products) > page.Limit {
+		products = products[:page.Limit]
+		last := products[len(products)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
+	}
+	for _, product := range products {
+		delete(product, "created_at")
+	}
+	return c.JSON(fiber.Map{"products": products, "page": adminPageMeta(page, total, len(products), nextCursor)})
+}
+
 func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 	productID := c.Params("product_id")
 	var id, sku, title, description, currency, hubID, hubName, hubCity string
 	var categories, images []string
-	var price, compareAtPrice float64
+	var price, compareAtPrice, flashSalePrice float64
 	var inventory int
 	var factoryRaw []byte
+	var isFlashSale bool
 	err := cc.db.QueryRow(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
-			p.local_currency_code, p.local_selling_price, COALESCE(p.compare_at_price, 0), p.inventory_count,
+			p.local_currency_code,
+			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
+			CASE WHEN p.is_flash_sale THEN GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price) ELSE COALESCE(p.compare_at_price, 0) END,
+			p.inventory_count,
 			p.factory_details,
-			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, '')
+			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true
-	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity)
+	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
@@ -117,6 +191,13 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 				"name": hubName,
 				"city": hubCity,
 			},
+			"is_flash_sale": isFlashSale,
+			"flash_sale_price": func() float64 {
+				if isFlashSale {
+					return flashSalePrice
+				}
+				return 0
+			}(),
 		},
 	})
 }

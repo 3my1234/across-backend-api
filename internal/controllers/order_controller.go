@@ -98,7 +98,8 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		}
 		var unitPrice float64
 		if err := tx.QueryRow(c.Context(), `
-			SELECT local_selling_price
+			SELECT CASE WHEN is_flash_sale AND flash_sale_price > 0 AND flash_sale_price < local_selling_price
+				THEN flash_sale_price ELSE local_selling_price END
 			FROM products
 			WHERE id = $1 AND sku = $2 AND is_active = true AND inventory_count >= $3
 		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice); err != nil {
@@ -134,7 +135,10 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		var imageURLs []string
 		var factoryRaw []byte
 		if err := tx.QueryRow(c.Context(), `
-			SELECT p.title, p.description, p.local_selling_price, p.cost_price_rmb,
+			SELECT p.title, p.description,
+				CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
+					THEN p.flash_sale_price ELSE p.local_selling_price END,
+				p.cost_price_rmb,
 				p.image_urls, p.factory_details,
 				COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, '')
 			FROM products p

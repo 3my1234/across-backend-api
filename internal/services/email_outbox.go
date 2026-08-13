@@ -33,6 +33,7 @@ type emailQueryer interface {
 
 type emailDelivery struct {
 	ID             string
+	UserID         string
 	RecipientEmail string
 	RecipientName  string
 	TemplateType   string
@@ -40,7 +41,7 @@ type emailDelivery struct {
 	Attempts       int
 }
 
-func QueueVerificationEmail(ctx context.Context, db emailQueryer, userID, email, name, token, publicBaseURL string) error {
+func QueueVerificationEmail(ctx context.Context, db emailQueryer, userID, token, publicBaseURL string) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
@@ -48,14 +49,14 @@ func QueueVerificationEmail(ctx context.Context, db emailQueryer, userID, email,
 	payload := map[string]string{
 		"verification_url": baseURL + "/api/v1/auth/verify-email?token=" + url.QueryEscape(token),
 	}
-	return queueEmail(ctx, db, "verification:"+userID+":"+tokenDigest(token), email, name, "verification", payload)
+	return queueUserEmail(ctx, db, userID, "verification:"+userID+":"+tokenDigest(token), "verification", payload)
 }
 
-func QueueWelcomeEmail(ctx context.Context, db emailQueryer, userID, email, name string) error {
-	return queueEmail(ctx, db, "welcome:"+userID, email, name, "welcome", map[string]string{})
+func QueueWelcomeEmail(ctx context.Context, db emailQueryer, userID string) error {
+	return queueUserEmail(ctx, db, userID, "welcome:"+userID, "welcome", map[string]string{})
 }
 
-func QueuePasswordResetEmail(ctx context.Context, db emailQueryer, userID, email, name, token, publicBaseURL string) error {
+func QueuePasswordResetEmail(ctx context.Context, db emailQueryer, userID, token, publicBaseURL string) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
@@ -63,23 +64,34 @@ func QueuePasswordResetEmail(ctx context.Context, db emailQueryer, userID, email
 	payload := map[string]string{
 		"reset_url": baseURL + "/api/v1/auth/reset-password?token=" + url.QueryEscape(token),
 	}
-	return queueEmail(ctx, db, "password-reset:"+userID+":"+tokenDigest(token), email, name, "password_reset", payload)
+	return queueUserEmail(ctx, db, userID, "password-reset:"+userID+":"+tokenDigest(token), "password_reset", payload)
 }
 
-func queueEmail(ctx context.Context, db emailQueryer, dedupeKey, recipientEmail, recipientName, templateType string, payload any) error {
-	email := strings.ToLower(strings.TrimSpace(recipientEmail))
+func queueUserEmail(ctx context.Context, db emailQueryer, userID, dedupeKey, templateType string, payload any) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	var status string
 	err = db.QueryRow(ctx, `
-		INSERT INTO email_outbox(dedupe_key, recipient_email, recipient_name, template_type, payload, status)
-		VALUES ($1, $2, $3, $4, $5::jsonb,
-			CASE WHEN EXISTS (SELECT 1 FROM email_suppressions WHERE email = $2) THEN 'suppressed' ELSE 'pending' END)
-		ON CONFLICT (dedupe_key) DO UPDATE SET dedupe_key = EXCLUDED.dedupe_key
-		RETURNING status
-	`, dedupeKey, email, strings.TrimSpace(recipientName), templateType, encoded).Scan(&status)
+		WITH account AS (
+			SELECT id, lower(btrim(email)) AS email, btrim(full_name) AS full_name
+			FROM users WHERE id = $1::uuid
+		), inserted AS (
+			INSERT INTO email_outbox(user_id, dedupe_key, recipient_email, recipient_name, template_type, payload, status)
+			SELECT id, $2, email, full_name, $3, $4::jsonb,
+				CASE WHEN EXISTS (SELECT 1 FROM email_suppressions WHERE email = account.email) THEN 'suppressed' ELSE 'pending' END
+			FROM account
+			ON CONFLICT (dedupe_key) DO NOTHING
+			RETURNING status
+		)
+		SELECT status FROM inserted
+		UNION ALL
+		SELECT status FROM email_outbox
+		WHERE dedupe_key = $2 AND user_id = $1::uuid
+		  AND recipient_email = (SELECT email FROM account)
+		LIMIT 1
+	`, userID, dedupeKey, templateType, encoded).Scan(&status)
 	if err != nil {
 		return err
 	}
@@ -117,7 +129,7 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, recipient_email, recipient_name, template_type, payload, attempts
+		SELECT id::text, user_id::text, recipient_email, recipient_name, template_type, payload, attempts
 		FROM email_outbox
 		WHERE status IN ('pending', 'retry') AND next_attempt_at <= now()
 		ORDER BY next_attempt_at, created_at, id
@@ -130,7 +142,7 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 	items := make([]emailDelivery, 0, emailBatchLimit)
 	for rows.Next() {
 		var item emailDelivery
-		if err := rows.Scan(&item.ID, &item.RecipientEmail, &item.RecipientName, &item.TemplateType, &item.Payload, &item.Attempts); err != nil {
+		if err := rows.Scan(&item.ID, &item.UserID, &item.RecipientEmail, &item.RecipientName, &item.TemplateType, &item.Payload, &item.Attempts); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -193,6 +205,15 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 }
 
 func deliverEmail(ctx context.Context, db *pgxpool.Pool, sender *EmailService, item emailDelivery) error {
+	var currentEmail, currentName string
+	if err := db.QueryRow(ctx, `SELECT lower(btrim(email)), btrim(full_name) FROM users WHERE id = $1::uuid`, item.UserID).Scan(&currentEmail, &currentName); err != nil {
+		return failEmail(ctx, db, item, "email owner no longer exists")
+	}
+	if currentEmail != strings.ToLower(strings.TrimSpace(item.RecipientEmail)) {
+		return failEmail(ctx, db, item, "email recipient no longer belongs to the queued account")
+	}
+	item.RecipientEmail = currentEmail
+	item.RecipientName = currentName
 	var suppressed bool
 	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM email_suppressions WHERE email = $1)`, item.RecipientEmail).Scan(&suppressed); err != nil {
 		return retryEmail(ctx, db, item, err.Error())
@@ -208,11 +229,22 @@ func deliverEmail(ctx context.Context, db *pgxpool.Pool, sender *EmailService, i
 	if err := sender.SendOutboxTemplate(item.RecipientEmail, item.RecipientName, item.TemplateType, item.Payload, item.ID); err != nil {
 		return retryEmail(ctx, db, item, err.Error())
 	}
+	recipientDigest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(item.RecipientEmail))))
+	log.Printf("email outbox delivered id=%s user_id=%s template=%s recipient_hash=%s", item.ID, item.UserID, item.TemplateType, hex.EncodeToString(recipientDigest[:8]))
 	_, err := db.Exec(ctx, `
 		UPDATE email_outbox SET status = 'sent', sent_at = now(), locked_at = NULL,
 			last_error = '', updated_at = now()
 		WHERE id = $1::uuid
 	`, item.ID)
+	return err
+}
+
+func failEmail(ctx context.Context, db *pgxpool.Pool, item emailDelivery, message string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE email_outbox
+		SET status = 'failed', locked_at = NULL, last_error = left($2::text, 500), updated_at = now()
+		WHERE id = $1::uuid
+	`, item.ID, message)
 	return err
 }
 

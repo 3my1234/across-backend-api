@@ -48,6 +48,14 @@ type Config struct {
 
 func Load() Config {
 	loadDotEnv(".env")
+	publicBaseURL := strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/")
+	brandLogoURL := strings.TrimSpace(env("BRAND_LOGO_URL", ""))
+	if brandLogoURL == "" || strings.Contains(brandLogoURL, "raw.githubusercontent.com/3my1234/across-mobile-app") {
+		if publicBaseURL == "" {
+			publicBaseURL = "https://atlanticexpress-api.sportbanter.online"
+		}
+		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png"
+	}
 
 	return Config{
 		AppEnv:                   env("APP_ENV", "development"),
@@ -74,7 +82,7 @@ func Load() Config {
 		AWSSecretAccessKey:       env("AWS_SECRET_ACCESS_KEY", ""),
 		S3BucketName:             firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
 		AssetsCDNBase:            env("ASSETS_CDN_BASE", ""),
-		PublicBaseURL:            env("PUBLIC_BASE_URL", ""),
+		PublicBaseURL:            publicBaseURL,
 		SMTPHost:                 env("SMTP_HOST", ""),
 		SMTPPort:                 env("SMTP_PORT", "587"),
 		SMTPUsername:             env("SMTP_USERNAME", ""),
@@ -83,7 +91,7 @@ func Load() Config {
 		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
 		SMTPReplyTo:              env("SMTP_REPLY_TO", ""),
 		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
-		BrandLogoURL:             env("BRAND_LOGO_URL", "https://raw.githubusercontent.com/3my1234/across-mobile-app/main/assets/atlantic-express-logo.png"),
+		BrandLogoURL:             brandLogoURL,
 		WebsiteURL:               env("WEBSITE_URL", "https://atlanticexpress-web.sportbanter.online"),
 	}
 }

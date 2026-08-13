@@ -136,7 +136,7 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		log.Printf("signup insert failed: %v", err)
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
-	if err := services.QueueVerificationEmail(c.Context(), tx, userID, req.Email, req.FullName, verificationToken, a.cfg.PublicBaseURL); err != nil {
+	if err := services.QueueVerificationEmail(c.Context(), tx, userID, verificationToken, a.cfg.PublicBaseURL); err != nil {
 		if errors.Is(err, services.ErrRecipientSuppressed) {
 			return fiber.NewError(fiber.StatusBadRequest, "this email address cannot receive account messages; use another email")
 		}
@@ -212,7 +212,7 @@ func (a *AuthController) Gmail(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID, req.Email, req.FullName); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
 		log.Printf("welcome email queue failed user_id=%s: %v", userID, err)
 	}
 	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
@@ -262,7 +262,7 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	if rewardErr != nil {
 		log.Printf("welcome reward failed user_id=%s: %v", userID, rewardErr)
 	}
-	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID, email, name); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
 		log.Printf("welcome email queue failed user_id=%s: %v", userID, err)
 	}
 	if awarded {
@@ -854,7 +854,7 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		c.Type("html", "utf-8")
 		return c.SendString(a.verificationResultPage(false, "Verification link unavailable", "This link is invalid or has expired. Return to the app and request a new verification email."))
 	}
-	if err := services.QueueWelcomeEmail(c.Context(), tx, userID, email, fullName); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+	if err := services.QueueWelcomeEmail(c.Context(), tx, userID); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
 		return err
 	}
 	if err := tx.Commit(c.Context()); err != nil {
@@ -921,7 +921,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
 	}
-	if err := services.QueueVerificationEmail(c.Context(), tx, userID, email, fullName, verificationToken, a.cfg.PublicBaseURL); err != nil {
+	if err := services.QueueVerificationEmail(c.Context(), tx, userID, verificationToken, a.cfg.PublicBaseURL); err != nil {
 		if errors.Is(err, services.ErrRecipientSuppressed) {
 			return c.JSON(fiber.Map{"message": "if the email exists, a verification message will be sent"})
 		}
@@ -982,7 +982,7 @@ func (a *AuthController) ForgotPassword(c *fiber.Ctx) error {
 	`, userID, digest); err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "password recovery is temporarily unavailable")
 	}
-	if err := services.QueuePasswordResetEmail(c.Context(), tx, userID, email, fullName, token, a.cfg.PublicBaseURL); err != nil {
+	if err := services.QueuePasswordResetEmail(c.Context(), tx, userID, token, a.cfg.PublicBaseURL); err != nil {
 		if errors.Is(err, services.ErrRecipientSuppressed) {
 			return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": responseMessage})
 		}

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	_ "embed"
 	"strings"
 
 	"across/backend/internal/config"
@@ -10,6 +11,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed atlantic-express-logo.png
+var atlanticExpressLogo []byte
 
 func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
@@ -77,6 +81,12 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 		})
 	})
 	v1.Get("/products", catalog.ListProducts)
+	v1.Get("/products/flash-sale", catalog.ListFlashSales)
+	v1.Get("/public/brand/logo.png", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "public, max-age=604800, immutable")
+		c.Type("png")
+		return c.Send(atlanticExpressLogo)
+	})
 	v1.Get("/products/:product_id", catalog.GetProduct)
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
