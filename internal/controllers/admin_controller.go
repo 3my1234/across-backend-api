@@ -456,6 +456,48 @@ func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"transactions": transactions, "page": adminPageMeta(page, totalCount, len(transactions), nextCursor)})
 }
+
+const createProductInsertSQL = `
+	INSERT INTO products(
+		origin_hub_id, sku, title, description, category_path, variants, image_urls,
+		cost_price_rmb, local_selling_price, compare_at_price, exchange_rate_snapshot,
+		inventory_count, factory_details, is_flash_sale, flash_sale_price
+	)
+	VALUES (
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10::numeric, 0), $11, $12, $13,
+		$14::boolean, CASE WHEN $14::boolean THEN $15::numeric ELSE NULL::numeric END
+	)
+	RETURNING id
+`
+
+const updateProductSQL = `
+	UPDATE products
+	SET title = COALESCE($2, title),
+		description = COALESCE($3, description),
+		local_selling_price = COALESCE($4, local_selling_price),
+		compare_at_price = CASE WHEN $5::numeric IS NULL THEN compare_at_price ELSE NULLIF($5::numeric, 0) END,
+		inventory_count = COALESCE($6, inventory_count),
+		is_active = COALESCE($7, is_active),
+		image_urls = COALESCE($8, image_urls),
+		is_flash_sale = $9::boolean,
+		flash_sale_price = CASE WHEN $9::boolean THEN $10::numeric ELSE NULL::numeric END,
+		updated_at = now()
+	WHERE id = $1
+`
+
+func validateProductPrices(regularPrice, compareAtPrice float64, isFlashSale bool, flashSalePrice float64) error {
+	if regularPrice <= 0 {
+		return fmt.Errorf("regular price must be greater than zero")
+	}
+	if compareAtPrice > 0 && compareAtPrice <= regularPrice {
+		return fmt.Errorf("original price must be greater than the regular price")
+	}
+	if isFlashSale && (flashSalePrice <= 0 || flashSalePrice >= regularPrice) {
+		return fmt.Errorf("flash sale price must be greater than zero and lower than the regular price")
+	}
+	return nil
+}
+
 func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	var req struct {
 		SKU                  string         `json:"sku"`
@@ -484,8 +526,8 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	if req.Title == "" || req.LocalSellingPrice <= 0 || req.ExchangeRateSnapshot <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "title, price, and exchange rate are required")
 	}
-	if req.IsFlashSale && (req.FlashSalePrice <= 0 || req.FlashSalePrice >= req.LocalSellingPrice) {
-		return fiber.NewError(fiber.StatusBadRequest, "flash sale price must be greater than zero and lower than the selling price")
+	if err := validateProductPrices(req.LocalSellingPrice, req.CompareAtPrice, req.IsFlashSale, req.FlashSalePrice); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 	if req.CategoryPath == nil {
 		req.CategoryPath = []string{}
@@ -514,21 +556,13 @@ func (a *AdminController) CreateProduct(c *fiber.Ctx) error {
 	factoryJSON, _ := json.Marshal(factory)
 
 	var id string
-	err := a.db.QueryRow(c.Context(), `
-		INSERT INTO products(
-			origin_hub_id, sku, title, description, category_path, variants, image_urls,
-			cost_price_rmb, local_selling_price, compare_at_price, exchange_rate_snapshot,
-			inventory_count, factory_details, is_flash_sale, flash_sale_price
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), $11, $12, $13, $14, CASE WHEN $14 THEN $15 ELSE NULL END)
-		RETURNING id
-	`, req.OriginHubID, req.SKU, req.Title, req.Description, req.CategoryPath, variants, req.ImageURLs,
+	err := a.db.QueryRow(c.Context(), createProductInsertSQL, req.OriginHubID, req.SKU, req.Title, req.Description, req.CategoryPath, variants, req.ImageURLs,
 		req.CostPriceRMB, req.LocalSellingPrice, req.CompareAtPrice, req.ExchangeRateSnapshot,
 		req.InventoryCount, factoryJSON, req.IsFlashSale, req.FlashSalePrice).Scan(&id)
 	if err != nil {
 		log.Printf("create product failed: sku=%s title=%q category=%v price=%.2f compare_at=%.2f cost_rmb=%.2f exchange_rate=%.2f inventory=%d err=%v",
 			req.SKU, req.Title, req.CategoryPath, req.LocalSellingPrice, req.CompareAtPrice, req.CostPriceRMB, req.ExchangeRateSnapshot, req.InventoryCount, err)
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return fiber.NewError(fiber.StatusInternalServerError, "product could not be created")
 	}
 	log.Printf("create product succeeded: id=%s sku=%s title=%q", id, req.SKU, req.Title)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "sku": req.SKU})
@@ -624,14 +658,18 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	if req.InventoryCount != nil && *req.InventoryCount < 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "inventory cannot be negative")
 	}
-	var currentPrice, currentFlashPrice float64
+	var currentPrice, currentCompareAtPrice, currentFlashPrice float64
 	var currentIsFlashSale bool
-	if err := a.db.QueryRow(c.Context(), `SELECT local_selling_price, is_flash_sale, COALESCE(flash_sale_price, 0) FROM products WHERE id = $1`, productID).Scan(&currentPrice, &currentIsFlashSale, &currentFlashPrice); err != nil {
+	if err := a.db.QueryRow(c.Context(), `SELECT local_selling_price, COALESCE(compare_at_price, 0), is_flash_sale, COALESCE(flash_sale_price, 0) FROM products WHERE id = $1`, productID).Scan(&currentPrice, &currentCompareAtPrice, &currentIsFlashSale, &currentFlashPrice); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
 	nextPrice := currentPrice
 	if req.LocalSellingPrice != nil {
 		nextPrice = *req.LocalSellingPrice
+	}
+	nextCompareAtPrice := currentCompareAtPrice
+	if req.CompareAtPrice != nil {
+		nextCompareAtPrice = *req.CompareAtPrice
 	}
 	nextIsFlashSale := currentIsFlashSale
 	if req.IsFlashSale != nil {
@@ -641,8 +679,8 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	if req.FlashSalePrice != nil {
 		nextFlashPrice = *req.FlashSalePrice
 	}
-	if nextIsFlashSale && (nextFlashPrice <= 0 || nextFlashPrice >= nextPrice) {
-		return fiber.NewError(fiber.StatusBadRequest, "flash sale price must be greater than zero and lower than the selling price")
+	if err := validateProductPrices(nextPrice, nextCompareAtPrice, nextIsFlashSale, nextFlashPrice); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 	if req.Title != nil {
 		trimmed := strings.TrimSpace(*req.Title)
@@ -662,23 +700,10 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 		}
 	}
 
-	tag, err := a.db.Exec(c.Context(), `
-		UPDATE products
-		SET title = COALESCE($2, title),
-			description = COALESCE($3, description),
-			local_selling_price = COALESCE($4, local_selling_price),
-			compare_at_price = CASE WHEN $5::numeric IS NULL THEN compare_at_price ELSE NULLIF($5, 0) END,
-			inventory_count = COALESCE($6, inventory_count),
-			is_active = COALESCE($7, is_active),
-			image_urls = COALESCE($8, image_urls),
-			is_flash_sale = $9,
-			flash_sale_price = CASE WHEN $9 THEN $10 ELSE NULL END,
-			updated_at = now()
-		WHERE id = $1
-	`, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs, nextIsFlashSale, nextFlashPrice)
+	tag, err := a.db.Exec(c.Context(), updateProductSQL, productID, req.Title, req.Description, req.LocalSellingPrice, req.CompareAtPrice, req.InventoryCount, req.IsActive, req.ImageURLs, nextIsFlashSale, nextFlashPrice)
 	if err != nil {
 		log.Printf("update product failed: id=%s err=%v", productID, err)
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return fiber.NewError(fiber.StatusInternalServerError, "product could not be updated")
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")

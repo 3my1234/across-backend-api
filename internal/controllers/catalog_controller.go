@@ -26,7 +26,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code,
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
-			CASE WHEN p.is_flash_sale THEN GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price) ELSE COALESCE(p.compare_at_price, 0) END,
+			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count,
 			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
@@ -97,7 +97,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code, p.flash_sale_price,
-			GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price), p.inventory_count,
+			p.local_selling_price, p.inventory_count,
 			p.factory_details, COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.created_at, COUNT(*) OVER() AS total_count
 		FROM products p
@@ -159,7 +159,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code,
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
-			CASE WHEN p.is_flash_sale THEN GREATEST(COALESCE(p.compare_at_price, 0), p.local_selling_price) ELSE COALESCE(p.compare_at_price, 0) END,
+			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count,
 			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
