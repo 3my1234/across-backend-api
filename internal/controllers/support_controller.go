@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -23,12 +24,25 @@ func (s *SupportController) CreateTicket(c *fiber.Ctx) error {
 		Subject string `json:"subject"`
 		Message string `json:"message"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.Subject == "" || req.Message == "" {
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request")
+	}
+	req.Subject = strings.TrimSpace(req.Subject)
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Subject == "" || req.Message == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "subject and message required")
 	}
+	if len(req.Subject) > 200 || len(req.Message) > 5000 {
+		return fiber.NewError(fiber.StatusBadRequest, "subject or message is too long")
+	}
 
+	tx, err := s.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to create ticket")
+	}
+	defer tx.Rollback(c.Context())
 	var ticketID string
-	err := s.db.QueryRow(c.Context(), `
+	err = tx.QueryRow(c.Context(), `
 		INSERT INTO support_tickets(user_id, subject, message)
 		VALUES ($1, $2, $3)
 		RETURNING id
@@ -38,12 +52,15 @@ func (s *SupportController) CreateTicket(c *fiber.Ctx) error {
 	}
 
 	// Add initial message
-	_, err = s.db.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		INSERT INTO support_messages(ticket_id, sender_type, sender_id, message)
 		VALUES ($1, 'user', $2, $3)
 	`, ticketID, userID, req.Message)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to save message")
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to create ticket")
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -129,6 +146,40 @@ func (s *SupportController) GetTicketMessages(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"messages": messages})
 }
 
+// AdminGetTicketMessages returns a complete ticket conversation to authorized support admins.
+func (s *SupportController) AdminGetTicketMessages(c *fiber.Ctx) error {
+	ticketID := c.Params("ticket_id")
+	rows, err := s.db.Query(c.Context(), `
+		SELECT sender_type, sender_id, message, created_at
+		FROM support_messages
+		WHERE ticket_id = $1
+		ORDER BY created_at ASC
+	`, ticketID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
+	}
+	defer rows.Close()
+
+	messages := make([]fiber.Map, 0)
+	for rows.Next() {
+		var senderType, senderID, message string
+		var createdAt time.Time
+		if err := rows.Scan(&senderType, &senderID, &message, &createdAt); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to read messages")
+		}
+		messages = append(messages, fiber.Map{
+			"sender_type": senderType,
+			"sender_id":   senderID,
+			"message":     message,
+			"created_at":  createdAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to read messages")
+	}
+	return c.JSON(fiber.Map{"messages": messages})
+}
+
 // AdminListTickets - Admin lists all open tickets
 func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 	rows, err := s.db.Query(c.Context(), `
@@ -171,21 +222,37 @@ func (s *SupportController) AdminReply(c *fiber.Ctx) error {
 	var req struct {
 		Message string `json:"message"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.Message == "" {
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request")
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "message required")
 	}
+	if len(req.Message) > 5000 {
+		return fiber.NewError(fiber.StatusBadRequest, "message is too long")
+	}
 
-	// Get the user_id for this ticket
-	var userID string
-	err := s.db.QueryRow(c.Context(), `
-		SELECT user_id FROM support_tickets WHERE id = $1
-	`, ticketID).Scan(&userID)
+	tx, err := s.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to send reply")
+	}
+	defer tx.Rollback(c.Context())
+
+	// Lock the ticket so concurrent replies and closure cannot produce a partial state.
+	var userID, status string
+	err = tx.QueryRow(c.Context(), `
+		SELECT user_id, status FROM support_tickets WHERE id = $1 FOR UPDATE
+	`, ticketID).Scan(&userID, &status)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "ticket not found")
 	}
+	if status == "closed" {
+		return fiber.NewError(fiber.StatusConflict, "ticket is closed")
+	}
 
 	// Add admin message
-	_, err = s.db.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		INSERT INTO support_messages(ticket_id, sender_type, sender_id, message)
 		VALUES ($1, 'admin', $2, $3)
 	`, ticketID, adminID, req.Message)
@@ -194,12 +261,15 @@ func (s *SupportController) AdminReply(c *fiber.Ctx) error {
 	}
 
 	// Update ticket status
-	_, err = s.db.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		UPDATE support_tickets SET status = 'responded', updated_at = now()
-		WHERE id = $1 AND status = 'open'
+		WHERE id = $1 AND status <> 'closed'
 	`, ticketID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to update ticket")
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to send reply")
 	}
 
 	// Notify the user

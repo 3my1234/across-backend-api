@@ -183,6 +183,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 
 	// Admin Support Tickets
 	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)
+	adminRoutes.Get("/support/tickets/:ticket_id/messages", catalogOnly, supportController.AdminGetTicketMessages)
 	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
 	adminRoutes.Post("/support/tickets/:ticket_id/close", catalogOnly, supportController.AdminCloseTicket)
 
