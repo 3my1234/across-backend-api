@@ -1,16 +1,23 @@
 package controllers
 
 import (
+	"bytes"
+	"fmt"
+	"image/jpeg"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"across/backend/internal/config"
 	"across/backend/internal/storage"
+	"github.com/gen2brain/avif"
 	"github.com/gofiber/fiber/v2"
 )
+
+const maxImageProxyBytes = 20 << 20
 
 type UploadController struct {
 	s3 *storage.S3
@@ -132,6 +139,7 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid media key")
 	}
+	isAVIF := strings.EqualFold(filepath.Ext(key), ".avif")
 	getURL, err := u.s3.ObjectGetURL(key, 10*time.Minute)
 	if err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "media storage is not configured")
@@ -140,7 +148,9 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if rangeHeader := c.Get("Range"); rangeHeader != "" {
+	// AVIF objects must be fetched whole before transcoding. Forwarding a client
+	// range would leave the decoder with an incomplete image payload.
+	if rangeHeader := c.Get("Range"); rangeHeader != "" && !isAVIF {
 		req.Header.Set("Range", rangeHeader)
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -152,6 +162,17 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if resp.StatusCode >= 400 {
 		return fiber.NewError(resp.StatusCode, "media unavailable")
 	}
+	if isAVIF || strings.EqualFold(resp.Header.Get("Content-Type"), "image/avif") {
+		converted, err := transcodeAVIFToJPEG(io.LimitReader(resp.Body, maxImageProxyBytes+1))
+		if err != nil {
+			log.Printf("public AVIF conversion failed: key=%s err=%v", key, err)
+			return fiber.NewError(fiber.StatusBadGateway, "media conversion failed")
+		}
+		c.Set("Content-Type", "image/jpeg")
+		c.Set("Content-Length", fmt.Sprintf("%d", len(converted)))
+		c.Set("Cache-Control", "public, max-age=2592000, immutable")
+		return c.Send(converted)
+	}
 	for _, header := range []string{"Content-Type", "Content-Length", "ETag", "Last-Modified", "Accept-Ranges", "Content-Range"} {
 		if value := resp.Header.Get(header); value != "" {
 			c.Set(header, value)
@@ -161,6 +182,25 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	c.Status(resp.StatusCode)
 	_, err = io.Copy(c.Response().BodyWriter(), resp.Body)
 	return err
+}
+
+func transcodeAVIFToJPEG(reader io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxImageProxyBytes {
+		return nil, fiber.ErrRequestEntityTooLarge
+	}
+	decoded, err := avif.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, decoded, &jpeg.Options{Quality: 88}); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
 }
 
 func normalizeS3ViewKey(raw string) (string, error) {
