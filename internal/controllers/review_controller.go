@@ -19,24 +19,32 @@ func NewReviewController(db *pgxpool.Pool) *ReviewController {
 func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
 	productID := c.Params("product_id")
 	userID, _ := c.Locals("user_id").(string)
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	var cursorID any
+	if page.CursorTime != nil {
+		cursorID = page.CursorID
+	}
 
 	rows, err := rc.db.Query(c.Context(), `
 		SELECT r.id, r.rating, r.review_text, r.media_urls, r.created_at,
 			COALESCE(NULLIF(u.full_name, ''), 'Verified buyer'),
-			(r.user_id = $2)
+			(r.user_id::text = $2)
 		FROM reviews r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.product_id = $1
-		ORDER BY r.created_at DESC
-		LIMIT 100
-	`, productID, userID)
+		  AND ($3::timestamptz IS NULL OR (r.created_at, r.id) < ($3, $4::uuid))
+		ORDER BY r.created_at DESC, r.id DESC
+		LIMIT $5
+	`, productID, userID, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "reviews unavailable")
 	}
 	defer rows.Close()
 
-	reviews := make([]fiber.Map, 0)
-	var totalRating int
+	reviews := make([]fiber.Map, 0, page.Limit+1)
 	for rows.Next() {
 		var id, reviewText, author string
 		var mediaURLs []string
@@ -46,7 +54,6 @@ func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
 		if err := rows.Scan(&id, &rating, &reviewText, &mediaURLs, &createdAt, &author, &isMine); err != nil {
 			return err
 		}
-		totalRating += rating
 		reviews = append(reviews, fiber.Map{
 			"id":          id,
 			"rating":      rating,
@@ -58,11 +65,31 @@ func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
 		})
 	}
 
-	summary := fiber.Map{"count": len(reviews), "average_rating": 0.0}
-	if len(reviews) > 0 {
-		summary["average_rating"] = float64(totalRating) / float64(len(reviews))
+	nextCursor := ""
+	if len(reviews) > page.Limit {
+		reviews = reviews[:page.Limit]
+		last := reviews[len(reviews)-1]
+		nextCursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
 	}
-	return c.JSON(fiber.Map{"reviews": reviews, "summary": summary})
+	total := int64(0)
+	payload := fiber.Map{
+		"reviews": reviews,
+		"page":    adminPageMeta(page, total, len(reviews), nextCursor),
+	}
+	// The exact aggregate is only needed on the first page. Cursor requests stay
+	// O(page size) even for products with millions of reviews.
+	if page.CursorTime == nil {
+		var average float64
+		if err := rc.db.QueryRow(c.Context(), `
+			SELECT COUNT(*), COALESCE(AVG(rating), 0)::float8
+			FROM reviews WHERE product_id = $1
+		`, productID).Scan(&total, &average); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "review summary unavailable")
+		}
+		payload["summary"] = fiber.Map{"count": total, "average_rating": average}
+		payload["page"] = adminPageMeta(page, total, len(reviews), nextCursor)
+	}
+	return c.JSON(payload)
 }
 
 func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {

@@ -86,6 +86,10 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 // the query bounded and cursor-paginated even when the catalogue grows to
 // millions of products.
 func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
+	// Deals change during the day. A short edge TTL keeps the Home rail fresh
+	// without turning every buyer refresh into a database request.
+	c.Set(fiber.HeaderCacheControl, "public, max-age=5, stale-while-revalidate=15")
+	c.Vary(fiber.HeaderAcceptEncoding)
 	page, err := parseAdminPage(c)
 	if err != nil {
 		return err

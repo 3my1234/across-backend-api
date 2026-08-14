@@ -40,6 +40,9 @@ func (u *UploadController) AdminPresign(c *fiber.Ctx) error {
 	if !isImage && !isVideo {
 		return fiber.NewError(fiber.StatusBadRequest, "mimeType must be image/* or video/*")
 	}
+	if isImage && !supportedPortableImageMime(mime) {
+		return fiber.NewError(fiber.StatusBadRequest, "product images must be JPG, PNG, or WebP")
+	}
 	if !u.s3.Configured() {
 		log.Printf("admin presign rejected: s3 not configured region=%q bucket=%q access_key_set=%t secret_set=%t", u.s3.Region(), u.s3.Bucket(), u.s3.AccessKeySet(), u.s3.SecretKeySet())
 		return fiber.NewError(fiber.StatusServiceUnavailable, "s3 upload is not configured")
@@ -66,6 +69,15 @@ func (u *UploadController) AdminPresign(c *fiber.Ctx) error {
 		"viewUrl":   viewURL,
 		"publicUrl": viewURL,
 	})
+}
+
+func supportedPortableImageMime(mime string) bool {
+	switch mime {
+	case "image/jpeg", "image/png", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func (u *UploadController) UserPresign(c *fiber.Ctx) error {
