@@ -5,6 +5,7 @@ import (
 	"across/backend/internal/storage"
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,6 +205,90 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			}(),
 		},
 	})
+}
+
+// ListRecommendations returns a deliberately small, server-selected set. The
+// query uses the existing category_path GIN index and never transfers the full
+// catalogue to a device for client-side filtering.
+func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
+	productID := c.Params("product_id")
+	limit := 10
+	if requested, err := strconv.Atoi(c.Query("limit", "10")); err == nil {
+		if requested < 1 {
+			requested = 1
+		}
+		if requested > 20 {
+			requested = 20
+		}
+		limit = requested
+	}
+	c.Set(fiber.HeaderCacheControl, "public, max-age=60, stale-while-revalidate=300")
+	c.Vary(fiber.HeaderAcceptEncoding)
+
+	var sourceCategories []string
+	if err := cc.db.QueryRow(c.Context(), `
+		SELECT category_path
+		FROM products
+		WHERE id = $1 AND is_active = true
+	`, productID).Scan(&sourceCategories); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+
+	categoryClause := "AND p.category_path && $2::text[]"
+	limitPlaceholder := "$3"
+	queryArgs := []any{productID, sourceCategories, limit}
+	if len(sourceCategories) == 0 {
+		// Products without a category use the created_at cursor index rather than
+		// forcing an unindexed category comparison across the catalogue.
+		categoryClause = ""
+		limitPlaceholder = "$2"
+		queryArgs = []any{productID, limit}
+	}
+	query := `
+		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
+			p.local_currency_code,
+			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
+			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
+			p.inventory_count, p.factory_details,
+			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
+		FROM products p
+		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
+		WHERE p.id <> $1
+			AND p.is_active = true
+			AND p.inventory_count > 0
+			` + categoryClause + `
+		ORDER BY p.created_at DESC, p.id DESC
+		LIMIT ` + limitPlaceholder + `
+	`
+	rows, err := cc.db.Query(c.Context(), query, queryArgs...)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
+	}
+	defer rows.Close()
+
+	products := make([]fiber.Map, 0, limit)
+	for rows.Next() {
+		var id, sku, title, description, currency, hubID, hubName, hubCity string
+		var categories, images []string
+		var price, compareAtPrice, flashSalePrice float64
+		var inventory int
+		var factoryRaw []byte
+		var isFlashSale bool
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
+		}
+		factory := map[string]any{}
+		_ = json.Unmarshal(factoryRaw, &factory)
+		products = append(products, fiber.Map{
+			"id": id, "sku": sku, "title": title, "description": description,
+			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
+			"price": price, "compare_at_price": compareAtPrice, "inventory_count": inventory,
+			"is_flash_sale": isFlashSale, "flash_sale_price": flashSalePrice, "factory_details": factory,
+			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
+		})
+	}
+	return c.JSON(fiber.Map{"products": products})
 }
 
 func (cc *CatalogController) normalizeImageURLs(images []string) []string {

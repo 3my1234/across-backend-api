@@ -87,6 +87,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 		c.Type("png")
 		return c.Send(atlanticExpressLogo)
 	})
+	v1.Get("/products/:product_id/recommendations", catalog.ListRecommendations)
 	v1.Get("/products/:product_id", catalog.GetProduct)
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
