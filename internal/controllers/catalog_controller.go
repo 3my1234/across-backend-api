@@ -234,17 +234,31 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
 
-	categoryClause := "AND p.category_path && $2::text[]"
-	limitPlaceholder := "$3"
-	queryArgs := []any{productID, sourceCategories, limit}
-	if len(sourceCategories) == 0 {
-		// Products without a category use the created_at cursor index rather than
-		// forcing an unindexed category comparison across the catalogue.
-		categoryClause = ""
-		limitPlaceholder = "$2"
-		queryArgs = []any{productID, limit}
-	}
 	query := `
+		WITH related AS MATERIALIZED (
+			SELECT p.id
+			FROM products p
+			WHERE p.id <> $1
+				AND p.is_active = true
+				AND p.inventory_count > 0
+				AND cardinality($2::text[]) > 0
+				AND p.category_path && $2::text[]
+			ORDER BY p.created_at DESC, p.id DESC
+			LIMIT $3
+		), fallback AS MATERIALIZED (
+			SELECT p.id
+			FROM products p
+			WHERE p.id <> $1
+				AND p.is_active = true
+				AND p.inventory_count > 0
+				AND NOT EXISTS (SELECT 1 FROM related r WHERE r.id = p.id)
+			ORDER BY p.created_at DESC, p.id DESC
+			LIMIT $3
+		), candidates AS (
+			SELECT id, 0 AS recommendation_rank FROM related
+			UNION ALL
+			SELECT id, 1 AS recommendation_rank FROM fallback
+		)
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code,
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
@@ -252,16 +266,13 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			p.inventory_count, p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
-		FROM products p
+		FROM candidates candidate
+		JOIN products p ON p.id = candidate.id
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
-		WHERE p.id <> $1
-			AND p.is_active = true
-			AND p.inventory_count > 0
-			` + categoryClause + `
-		ORDER BY p.created_at DESC, p.id DESC
-		LIMIT ` + limitPlaceholder + `
+		ORDER BY candidate.recommendation_rank, p.created_at DESC, p.id DESC
+		LIMIT $3
 	`
-	rows, err := cc.db.Query(c.Context(), query, queryArgs...)
+	rows, err := cc.db.Query(c.Context(), query, productID, sourceCategories, limit)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
 	}
