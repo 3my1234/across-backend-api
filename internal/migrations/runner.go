@@ -142,29 +142,143 @@ func applyMigration(ctx context.Context, db *pgxpool.Pool, name string) error {
 }
 
 func splitSQLStatements(input string) []string {
-	lines := strings.Split(input, "\n")
 	var builder strings.Builder
 	statements := make([]string, 0)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "--") {
+	var dollarTag string
+	inSingleQuote := false
+	inDoubleQuote := false
+	inLineComment := false
+	blockCommentDepth := 0
+
+	flush := func() {
+		if statement := strings.TrimSpace(builder.String()); statement != "" {
+			statements = append(statements, statement)
+		}
+		builder.Reset()
+	}
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+
+		if inLineComment {
+			builder.WriteByte(ch)
+			if ch == '\n' {
+				inLineComment = false
+			}
 			continue
 		}
-		builder.WriteString(line)
-		builder.WriteString("\n")
-		if strings.HasSuffix(trimmed, ";") {
-			statement := strings.TrimSpace(builder.String())
-			statement = strings.TrimSuffix(statement, ";")
-			if statement != "" {
-				statements = append(statements, statement)
+
+		if blockCommentDepth > 0 {
+			builder.WriteByte(ch)
+			if ch == '/' && i+1 < len(input) && input[i+1] == '*' {
+				builder.WriteByte(input[i+1])
+				i++
+				blockCommentDepth++
+				continue
 			}
-			builder.Reset()
+			if ch == '*' && i+1 < len(input) && input[i+1] == '/' {
+				builder.WriteByte(input[i+1])
+				i++
+				blockCommentDepth--
+			}
+			continue
+		}
+
+		if dollarTag != "" {
+			if strings.HasPrefix(input[i:], dollarTag) {
+				builder.WriteString(dollarTag)
+				i += len(dollarTag) - 1
+				dollarTag = ""
+			} else {
+				builder.WriteByte(ch)
+			}
+			continue
+		}
+
+		if inSingleQuote {
+			builder.WriteByte(ch)
+			if ch == '\\' && i+1 < len(input) {
+				builder.WriteByte(input[i+1])
+				i++
+				continue
+			}
+			if ch == '\'' {
+				if i+1 < len(input) && input[i+1] == '\'' {
+					builder.WriteByte(input[i+1])
+					i++
+				} else {
+					inSingleQuote = false
+				}
+			}
+			continue
+		}
+
+		if inDoubleQuote {
+			builder.WriteByte(ch)
+			if ch == '"' {
+				if i+1 < len(input) && input[i+1] == '"' {
+					builder.WriteByte(input[i+1])
+					i++
+				} else {
+					inDoubleQuote = false
+				}
+			}
+			continue
+		}
+
+		switch ch {
+		case '\'':
+			inSingleQuote = true
+			builder.WriteByte(ch)
+		case '"':
+			inDoubleQuote = true
+			builder.WriteByte(ch)
+		case '-':
+			builder.WriteByte(ch)
+			if i+1 < len(input) && input[i+1] == '-' {
+				builder.WriteByte(input[i+1])
+				i++
+				inLineComment = true
+			}
+		case '/':
+			builder.WriteByte(ch)
+			if i+1 < len(input) && input[i+1] == '*' {
+				builder.WriteByte(input[i+1])
+				i++
+				blockCommentDepth = 1
+			}
+		case '$':
+			if tag, ok := scanDollarTag(input[i:]); ok {
+				dollarTag = tag
+				builder.WriteString(tag)
+				i += len(tag) - 1
+			} else {
+				builder.WriteByte(ch)
+			}
+		case ';':
+			flush()
+		default:
+			builder.WriteByte(ch)
 		}
 	}
-	if tail := strings.TrimSpace(builder.String()); tail != "" {
-		statements = append(statements, tail)
-	}
+	flush()
 	return statements
+}
+
+func scanDollarTag(input string) (string, bool) {
+	if len(input) < 2 || input[0] != '$' {
+		return "", false
+	}
+	for i := 1; i < len(input); i++ {
+		ch := input[i]
+		if ch == '$' {
+			return input[:i+1], true
+		}
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func coreSchemaExists(ctx context.Context, db *pgxpool.Pool) (bool, error) {
