@@ -150,6 +150,8 @@ CREATE TABLE products (
   exchange_rate_snapshot NUMERIC(18,6) NOT NULL CHECK (exchange_rate_snapshot > 0),
   inventory_count INTEGER NOT NULL DEFAULT 0 CHECK (inventory_count >= 0),
   factory_details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  review_count BIGINT NOT NULL DEFAULT 0,
+  review_rating_sum BIGINT NOT NULL DEFAULT 0,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -278,7 +280,7 @@ CREATE TABLE admin_activity_state (
 
 CREATE TABLE admin_activity_reads (
   admin_id UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
-  event_id UUID NOT NULL REFERENCES batch_events(id) ON DELETE CASCADE,
+  event_id UUID NOT NULL,
   read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (admin_id, event_id)
 );

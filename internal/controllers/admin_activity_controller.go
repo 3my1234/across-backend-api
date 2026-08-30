@@ -41,16 +41,29 @@ func (a *AdminController) Activity(c *fiber.Ctx) error {
 		cursorIDValue = cursorID
 	}
 	rows, err := a.db.Query(c.Context(), `
-		SELECT event.id::text, event.batch_id::text, batch.batch_code,
-			event.event_type, COALESCE(event.status::text, ''), event.location,
+		WITH activity_events AS (
+			SELECT event.id, event.batch_id, batch.batch_code, event.event_type,
+				COALESCE(event.status::text, '') AS status, event.location, event.notes,
+				event.created_at, event.actor_id, 'batch'::text AS source
+			FROM batch_events event
+			JOIN order_batches batch ON batch.id = event.batch_id
+			UNION ALL
+			SELECT ticket.id, NULL::uuid, 'Support · ' || ticket.subject,
+				'support_ticket_created', ticket.status, 'Support',
+				COALESCE(NULLIF(buyer.email, ''), 'Buyer') || ' · ' || LEFT(ticket.message, 160),
+				ticket.created_at, NULL::uuid, 'support'::text
+			FROM support_tickets ticket
+			JOIN users buyer ON buyer.id = ticket.user_id
+		)
+		SELECT event.id::text, COALESCE(event.batch_id::text, ''), event.batch_code,
+			event.event_type, event.status, event.location,
 			event.notes, event.created_at,
 			(
 				(state.read_through_created_at IS NOT NULL AND
 				 (event.created_at, event.id) <= (state.read_through_created_at, state.read_through_event_id))
 				OR receipt.event_id IS NOT NULL
 			) AS is_read
-		FROM batch_events event
-		JOIN order_batches batch ON batch.id = event.batch_id
+		FROM activity_events event
 		LEFT JOIN admin_activity_state state ON state.admin_id = $4::uuid
 		LEFT JOIN admin_activity_reads receipt
 			ON receipt.admin_id = $4::uuid AND receipt.event_id = event.id
@@ -98,9 +111,16 @@ func (a *AdminController) MarkActivityRead(c *fiber.Ctx) error {
 	role, _ := c.Locals("admin_role").(string)
 	eventID := c.Params("event_id")
 	result, err := a.db.Exec(c.Context(), `
+		WITH activity_events AS (
+			SELECT event.id, event.status::text AS status, event.actor_id, 'batch'::text AS source
+			FROM batch_events event
+			UNION ALL
+			SELECT ticket.id, ticket.status, NULL::uuid, 'support'::text
+			FROM support_tickets ticket
+		)
 		INSERT INTO admin_activity_reads(admin_id, event_id)
 		SELECT $1::uuid, event.id
-		FROM batch_events event
+		FROM activity_events event
 		WHERE event.id = $2::uuid
 		  AND (event.actor_id IS NULL OR event.actor_id <> $1::uuid)
 		  AND `+adminActivityVisibilitySQL+`
@@ -121,9 +141,16 @@ func (a *AdminController) MarkAllActivityRead(c *fiber.Ctx) error {
 	adminID, _ := c.Locals("admin_id").(string)
 	role, _ := c.Locals("admin_role").(string)
 	_, err := a.db.Exec(c.Context(), `
-		WITH latest AS (
-			SELECT event.created_at, event.id
+		WITH activity_events AS (
+			SELECT event.id, event.status::text AS status, event.actor_id,
+				event.created_at, 'batch'::text AS source
 			FROM batch_events event
+			UNION ALL
+			SELECT ticket.id, ticket.status, NULL::uuid, ticket.created_at, 'support'::text
+			FROM support_tickets ticket
+		), latest AS (
+			SELECT event.created_at, event.id
+			FROM activity_events event
 			WHERE (event.actor_id IS NULL OR event.actor_id <> $1::uuid)
 			  AND `+adminActivityVisibilityMarkAllSQL+`
 			ORDER BY event.created_at DESC, event.id DESC
@@ -152,16 +179,16 @@ func (a *AdminController) MarkAllActivityRead(c *fiber.Ctx) error {
 // completion. The actor exclusion above prevents self-notifications.
 const adminActivityVisibilitySQL = `(
 	$3::text IN ('super_admin', 'catalog_admin')
-	OR ($3::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
+	OR (event.source = 'batch' AND $3::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
 		('funds_sent_to_procurement', 'procurement_acknowledged'))
-	OR ($3::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
+	OR (event.source = 'batch' AND $3::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
 		('procurement_complete', 'enroute_nigeria', 'arrived_local', 'ready_for_pickup', 'completed'))
 )`
 
 const adminActivityVisibilityMarkAllSQL = `(
 	$2::text IN ('super_admin', 'catalog_admin')
-	OR ($2::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
+	OR (event.source = 'batch' AND $2::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
 		('funds_sent_to_procurement', 'procurement_acknowledged'))
-	OR ($2::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
+	OR (event.source = 'batch' AND $2::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
 		('procurement_complete', 'enroute_nigeria', 'arrived_local', 'ready_for_pickup', 'completed'))
 )`

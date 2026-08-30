@@ -1,10 +1,13 @@
 package controllers
 
 import (
+	"errors"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,6 +20,7 @@ func NewReviewController(db *pgxpool.Pool) *ReviewController {
 }
 
 func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
+	c.Set(fiber.HeaderCacheControl, "private, no-store")
 	productID := c.Params("product_id")
 	userID, _ := c.Locals("user_id").(string)
 	page, err := parseAdminPage(c)
@@ -76,13 +80,14 @@ func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
 		"reviews": reviews,
 		"page":    adminPageMeta(page, total, len(reviews), nextCursor),
 	}
-	// The exact aggregate is only needed on the first page. Cursor requests stay
-	// O(page size) even for products with millions of reviews.
+	// Aggregates are maintained transactionally on products, so the summary is
+	// constant-time even when a product has millions of reviews.
 	if page.CursorTime == nil {
 		var average float64
 		if err := rc.db.QueryRow(c.Context(), `
-			SELECT COUNT(*), COALESCE(AVG(rating), 0)::float8
-			FROM reviews WHERE product_id = $1
+			SELECT review_count,
+				CASE WHEN review_count > 0 THEN review_rating_sum::float8 / review_count ELSE 0 END
+			FROM products WHERE id = $1 AND is_active = true
 		`, productID).Scan(&total, &average); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "review summary unavailable")
 		}
@@ -140,7 +145,11 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, productID, userID).Scan(&reviewID)
-	if err != nil {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fiber.NewError(fiber.StatusInternalServerError, "review unavailable")
+	}
+	created := errors.Is(err, pgx.ErrNoRows)
+	if created {
 		err = rc.db.QueryRow(c.Context(), `
 			INSERT INTO reviews(product_id, user_id, order_id, rating, review_text, media_urls)
 			VALUES ($1, $2, $3, $4, $5, $6)
@@ -149,29 +158,28 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusConflict, "review could not be created")
 		}
-		rewardClaimed, rewardErr := creditReviewReward(c.Context(), rc.db, userID, orderID)
-		if rewardErr != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "review saved but reward could not be credited")
+	} else {
+		_, err = rc.db.Exec(c.Context(), `
+			UPDATE reviews
+			SET rating = $3, review_text = $4, media_urls = $5, order_id = COALESCE(order_id, $6)
+			WHERE id = $1 AND user_id = $2
+		`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, orderID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "review could not be updated")
 		}
-		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": reviewID, "created": true, "review_reward_claimed": rewardClaimed})
 	}
 
-	_, err = rc.db.Exec(c.Context(), `
-		UPDATE reviews
-		SET rating = $3, review_text = $4, media_urls = $5, order_id = COALESCE(order_id, $6)
-		WHERE id = $1 AND user_id = $2
-	`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, orderID)
-	if err != nil {
-		return err
-	}
 	rewardClaimed, rewardErr := creditReviewReward(c.Context(), rc.db, userID, orderID)
 	if rewardErr != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "review saved but reward could not be credited")
+		// The review is already durable. A secondary reward failure must never
+		// make the client retry or pretend the review was not saved.
+		log.Printf("review reward failed review_id=%s user_id=%s: %v", reviewID, userID, rewardErr)
 	}
-	return c.JSON(fiber.Map{"id": reviewID, "updated": true, "review_reward_claimed": rewardClaimed})
+	return rc.sendReviewMutation(c, reviewID, userID, created, rewardClaimed, rewardErr != nil)
 }
 
 func (rc *ReviewController) MyProductReview(c *fiber.Ctx) error {
+	c.Set(fiber.HeaderCacheControl, "private, no-store")
 	userID := c.Locals("user_id").(string)
 	productID := c.Params("product_id")
 	var id, reviewText string
@@ -197,6 +205,40 @@ func (rc *ReviewController) MyProductReview(c *fiber.Ctx) error {
 			"created_at":  createdAt,
 		},
 		"can_review": true,
+	})
+}
+
+func (rc *ReviewController) sendReviewMutation(c *fiber.Ctx, reviewID, userID string, created, rewardClaimed, rewardPending bool) error {
+	var reviewText, author string
+	var mediaURLs []string
+	var rating int
+	var createdAt time.Time
+	var reviewCount int64
+	var averageRating float64
+	if err := rc.db.QueryRow(c.Context(), `
+		SELECT r.rating, r.review_text, r.media_urls, r.created_at,
+			COALESCE(NULLIF(u.full_name, ''), 'Verified buyer'), p.review_count,
+			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
+		FROM reviews r
+		JOIN users u ON u.id = r.user_id
+		JOIN products p ON p.id = r.product_id
+		WHERE r.id = $1 AND r.user_id = $2
+	`, reviewID, userID).Scan(&rating, &reviewText, &mediaURLs, &createdAt, &author, &reviewCount, &averageRating); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "review saved but response could not be loaded")
+	}
+	status := fiber.StatusOK
+	if created {
+		status = fiber.StatusCreated
+	}
+	return c.Status(status).JSON(fiber.Map{
+		"created":               created,
+		"review_reward_claimed": rewardClaimed,
+		"reward_pending":        rewardPending,
+		"review": fiber.Map{
+			"id": reviewID, "rating": rating, "review_text": reviewText,
+			"media_urls": mediaURLs, "created_at": createdAt, "author": author, "is_mine": true,
+		},
+		"summary": fiber.Map{"count": reviewCount, "average_rating": averageRating},
 	})
 }
 

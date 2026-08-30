@@ -334,6 +334,16 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusAccepted)
 	}
 	txRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
+	if strings.HasPrefix(txRef, "PROVIDER-") {
+		paidAmount, err := amountValue(verified.Data.Amount)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
+		}
+		if err := settleProviderSubscription(c.Context(), p.db, txRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
+			return fiber.NewError(fiber.StatusConflict, err.Error())
+		}
+		return c.SendStatus(fiber.StatusOK)
+	}
 	orderID, err := parseOrderID(txRef)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid tx_ref")
@@ -446,6 +456,43 @@ func (p *PaymentController) AdminReconcileFlutterwavePayment(c *fiber.Ctx) error
 	}
 
 	return c.JSON(fiber.Map{"payment_state": "settled", "order_id": verifiedOrderID, "transaction_id": transactionID})
+}
+
+// AdminReconcileProviderSubscription recovers provider payments when a
+// Flutterwave webhook was delayed or missed. The gateway response remains the
+// only source of truth and settlement is idempotent by transaction ID.
+func (p *PaymentController) AdminReconcileProviderSubscription(c *fiber.Ctx) error {
+	var req struct {
+		TxRef         string `json:"tx_ref"`
+		TransactionID string `json:"transaction_id"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.ErrBadRequest
+	}
+	req.TxRef = strings.TrimSpace(req.TxRef)
+	req.TransactionID = strings.TrimSpace(req.TransactionID)
+	if !strings.HasPrefix(req.TxRef, "PROVIDER-") || (req.TxRef == "" && req.TransactionID == "") {
+		return fiber.NewError(fiber.StatusBadRequest, "a provider tx_ref and transaction_id are required")
+	}
+	verified, err := p.verifyFlutterwaveTransaction(c.Context(), req.TransactionID, req.TxRef)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "payment verification unavailable")
+	}
+	if !successfulFlutterwaveStatus(verified.Data.Status) {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"payment_state": "pending", "gateway_status": verified.Data.Status})
+	}
+	verifiedRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
+	if verifiedRef != req.TxRef || !strings.HasPrefix(verifiedRef, "PROVIDER-") {
+		return fiber.NewError(fiber.StatusConflict, "verified transaction does not match the provider subscription")
+	}
+	paidAmount, err := amountValue(verified.Data.Amount)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
+	}
+	if err := settleProviderSubscription(c.Context(), p.db, verifiedRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
+		return fiber.NewError(fiber.StatusConflict, err.Error())
+	}
+	return c.JSON(fiber.Map{"payment_state": "settled", "tx_ref": verifiedRef})
 }
 
 func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef, transactionID string, paidAmount float64, currency string) error {

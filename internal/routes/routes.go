@@ -31,6 +31,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	supportController := controllers.NewSupportController(db)
 	analyticsController := controllers.NewAnalyticsController(db)
 	profileController := controllers.NewProfileController(db)
+	marketplaceController := controllers.NewProviderMarketplaceController(db, cfg)
 	countryGuard := middleware.RequireAllowedCountry(cfg)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
@@ -44,7 +45,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 		path := c.Path()
 		if c.Method() == fiber.MethodGet &&
 			(path == "/api/v1/products" ||
-				strings.HasPrefix(path, "/api/v1/products/") && !strings.Contains(path, "/mine")) {
+				strings.HasPrefix(path, "/api/v1/products/") &&
+					!strings.Contains(path, "/reviews") && !strings.Contains(path, "/mine")) {
 			c.Set(fiber.HeaderCacheControl, "public, max-age=60, stale-while-revalidate=300")
 			c.Vary(fiber.HeaderAcceptEncoding)
 			return err
@@ -90,6 +92,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/products/:product_id/recommendations", catalog.ListRecommendations)
 	v1.Get("/products/:product_id", catalog.GetProduct)
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
+	v1.Get("/marketplace/listings", marketplaceController.ListPublicListings)
+	v1.Get("/marketplace/listings/:listing_id", marketplaceController.GetPublicListing)
+	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
+	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
 	v1.Post("/dev/login", dev.Login)
 	v1.Post("/auth/signup", countryGuard, authController.Signup)
@@ -133,6 +139,14 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Post("/products", catalogOnly, admin.CreateProduct)
 	adminRoutes.Patch("/products/:product_id", catalogOnly, admin.UpdateProduct)
 	adminRoutes.Delete("/products/:product_id", catalogOnly, admin.DeleteProduct)
+	adminRoutes.Get("/providers", catalogOnly, marketplaceController.AdminListProviders)
+	adminRoutes.Get("/providers/:provider_id/verification-documents", catalogOnly, marketplaceController.AdminListVerificationDocuments)
+	adminRoutes.Patch("/providers/:provider_id/verification-documents/:document_id", catalogOnly, marketplaceController.AdminReviewVerificationDocument)
+	adminRoutes.Patch("/providers/:provider_id/verification", catalogOnly, marketplaceController.AdminVerifyProvider)
+	adminRoutes.Get("/provider-listings", catalogOnly, marketplaceController.AdminListListings)
+	adminRoutes.Patch("/provider-listings/:listing_id/moderation", catalogOnly, marketplaceController.AdminModerateListing)
+	adminRoutes.Post("/provider-subscription-plans", superOnly, marketplaceController.AdminUpsertPlan)
+	adminRoutes.Post("/provider-subscriptions/reconcile", superOnly, payments.AdminReconcileProviderSubscription)
 	adminRoutes.Post("/uploads/presign", catalogOnly, uploads.AdminPresign)
 	adminRoutes.Get("/batches", allAdmins, admin.ListBatches)
 	adminRoutes.Patch("/batches/:batch_id", superOnly, admin.UpdateBatch)
@@ -170,6 +184,29 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
 	authed.Post("/notifications/push-token", notifications.RegisterPushToken)
 	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
+
+	// Provider marketplace. Providers authenticate through the verified buyer
+	// identity system but operate through a separate organization membership;
+	// none of these routes grant administrator privileges.
+	authed.Post("/providers/onboarding", marketplaceController.Onboard)
+	authed.Get("/providers/me", marketplaceController.MyProvider)
+	authed.Patch("/providers/me", marketplaceController.UpdateMyProvider)
+	authed.Post("/providers/me/uploads/presign", marketplaceController.PresignProviderUpload)
+	authed.Get("/providers/me/verification-documents", marketplaceController.ListVerificationDocuments)
+	authed.Post("/providers/me/verification-documents", marketplaceController.AddVerificationDocument)
+	authed.Get("/providers/me/listings", marketplaceController.ListMyListings)
+	authed.Post("/providers/me/listings", marketplaceController.CreateListing)
+	authed.Patch("/providers/me/listings/:listing_id", marketplaceController.UpdateListing)
+	authed.Delete("/providers/me/listings/:listing_id", marketplaceController.ArchiveListing)
+	authed.Post("/providers/me/listings/:listing_id/submit", marketplaceController.SubmitListing)
+	authed.Post("/providers/me/listings/:listing_id/availability", marketplaceController.UpsertAvailability)
+	authed.Get("/providers/me/requests", marketplaceController.ListProviderRequests)
+	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
+	authed.Post("/providers/me/subscription-checkout", countryGuard, marketplaceController.SubscriptionCheckout)
+	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
+	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
+	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
+	authed.Post("/marketplace/listings/:listing_id/reports", marketplaceController.ReportListing)
 
 	// XP System
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)

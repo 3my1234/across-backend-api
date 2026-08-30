@@ -31,7 +31,8 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			p.inventory_count,
 			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true
@@ -47,11 +48,12 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
-		var price, compareAtPrice, flashSalePrice float64
+		var price, compareAtPrice, flashSalePrice, averageRating float64
+		var reviewCount int64
 		var inventory int
 		var factoryRaw []byte
 		var isFlashSale bool
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating); err != nil {
 			return err
 		}
 		factory := map[string]any{}
@@ -67,6 +69,8 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			"price":            price,
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
+			"review_count":     reviewCount,
+			"average_rating":   averageRating,
 			"factory_details":  factory,
 			"origin_hub": fiber.Map{
 				"id":   hubID,
@@ -104,7 +108,8 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			p.local_currency_code, p.flash_sale_price,
 			p.local_selling_price, p.inventory_count,
 			p.factory_details, COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.created_at, COUNT(*) OVER() AS total_count
+			p.created_at, COUNT(*) OVER() AS total_count, p.review_count,
+			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.is_flash_sale = true AND p.inventory_count > 0
@@ -123,11 +128,12 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
-		var price, compareAt float64
+		var price, compareAt, averageRating float64
+		var reviewCount int64
 		var inventory int
 		var factoryRaw []byte
 		var createdAt time.Time
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total, &reviewCount, &averageRating); err != nil {
 			return err
 		}
 		factory := map[string]any{}
@@ -136,6 +142,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
 			"price": price, "compare_at_price": compareAt, "inventory_count": inventory,
+			"review_count": reviewCount, "average_rating": averageRating,
 			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
 		})
@@ -156,7 +163,8 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 	productID := c.Params("product_id")
 	var id, sku, title, description, currency, hubID, hubName, hubCity string
 	var categories, images []string
-	var price, compareAtPrice, flashSalePrice float64
+	var price, compareAtPrice, flashSalePrice, averageRating float64
+	var reviewCount int64
 	var inventory int
 	var factoryRaw []byte
 	var isFlashSale bool
@@ -168,11 +176,12 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			p.inventory_count,
 			p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true
-	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice)
+	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
@@ -190,6 +199,8 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			"price":            price,
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
+			"review_count":     reviewCount,
+			"average_rating":   averageRating,
 			"factory_details":  factory,
 			"origin_hub": fiber.Map{
 				"id":   hubID,
@@ -265,7 +276,8 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count, p.factory_details,
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0)
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
 		FROM candidates candidate
 		JOIN products p ON p.id = candidate.id
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
@@ -282,11 +294,12 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
-		var price, compareAtPrice, flashSalePrice float64
+		var price, compareAtPrice, flashSalePrice, averageRating float64
+		var reviewCount int64
 		var inventory int
 		var factoryRaw []byte
 		var isFlashSale bool
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
 		}
 		factory := map[string]any{}
@@ -295,6 +308,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
 			"price": price, "compare_at_price": compareAtPrice, "inventory_count": inventory,
+			"review_count": reviewCount, "average_rating": averageRating,
 			"is_flash_sale": isFlashSale, "flash_sale_price": flashSalePrice, "factory_details": factory,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
 		})
