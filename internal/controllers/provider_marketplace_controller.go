@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -254,6 +257,9 @@ func (m *ProviderMarketplaceController) AdminReviewVerificationDocument(c *fiber
 
 func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
+	if _, err := uuid.Parse(userID); err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "sign in again to create a provider profile")
+	}
 	var req struct {
 		BusinessName string `json:"business_name"`
 		Description  string `json:"description"`
@@ -279,21 +285,39 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		return fiber.ErrInternalServerError
 	}
 	defer tx.Rollback(c.Context())
-	_, err = tx.Exec(c.Context(), `INSERT INTO provider_organizations(id,owner_user_id,business_name,slug,description,contact_email,contact_phone,website_url,address_line,city,state,country_code,logo_url) VALUES($1,$2::uuid,$3,$4||'-'||LEFT($1::text,8),$5,$6,$7,$8,$9,$10,$11,COALESCE(NULLIF($12,''),'NG'),$13)`, providerID, userID, strings.TrimSpace(req.BusinessName), baseSlug, strings.TrimSpace(req.Description), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), strings.TrimSpace(req.LogoURL))
+	_, err = tx.Exec(c.Context(), `
+		INSERT INTO provider_organizations(
+			id, owner_user_id, business_name, slug, description, contact_email,
+			contact_phone, website_url, address_line, city, state, country_code, logo_url
+		)
+		VALUES(
+			$1::uuid, $2::uuid, $3::text, $4::text || '-' || left($1::text, 8),
+			$5::text, $6::text, $7::text, $8::text, $9::text, $10::text,
+			$11::text, COALESCE(NULLIF($12::text, ''), 'NG'), $13::text
+		)
+	`, providerID, userID, strings.TrimSpace(req.BusinessName), baseSlug, strings.TrimSpace(req.Description), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), strings.TrimSpace(req.LogoURL))
 	if err != nil {
-		if strings.Contains(err.Error(), "uq_provider_owner") {
+		log.Printf("provider onboarding organization insert failed user_id=%s provider_id=%s: %v", userID, providerID, err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return fiber.NewError(fiber.StatusConflict, "provider profile already exists")
+		}
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return fiber.NewError(fiber.StatusUnauthorized, "your account session is no longer valid; sign in again")
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create provider profile")
 	}
-	if _, err = tx.Exec(c.Context(), `INSERT INTO provider_members(provider_id,user_id,role) VALUES($1,$2::uuid,'owner')`, providerID, userID); err != nil {
-		return fiber.ErrInternalServerError
+	if _, err = tx.Exec(c.Context(), `INSERT INTO provider_members(provider_id,user_id,role) VALUES($1::uuid,$2::uuid,'owner')`, providerID, userID); err != nil {
+		log.Printf("provider onboarding membership insert failed user_id=%s provider_id=%s: %v", userID, providerID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "could not assign provider account owner")
 	}
-	if _, err = tx.Exec(c.Context(), `INSERT INTO provider_marketplace_events(provider_id,actor_user_id,event_type) VALUES($1,$2::uuid,'provider_onboarded')`, providerID, userID); err != nil {
-		return fiber.ErrInternalServerError
+	if _, err = tx.Exec(c.Context(), `INSERT INTO provider_marketplace_events(provider_id,actor_user_id,event_type) VALUES($1::uuid,$2::uuid,'provider_onboarded')`, providerID, userID); err != nil {
+		log.Printf("provider onboarding audit insert failed user_id=%s provider_id=%s: %v", userID, providerID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "could not record provider onboarding")
 	}
 	if err = tx.Commit(c.Context()); err != nil {
-		return fiber.ErrInternalServerError
+		log.Printf("provider onboarding commit failed user_id=%s provider_id=%s: %v", userID, providerID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "could not finish provider onboarding")
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": providerID, "verification_status": "pending"})
 }
