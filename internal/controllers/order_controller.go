@@ -92,23 +92,37 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 
 	var itemsTotal float64
+	fulfillmentMode := ""
+	var orderProviderID *string
 	for _, item := range req.Items {
 		if item.Quantity <= 0 {
 			return fiber.NewError(fiber.StatusBadRequest, "quantity must be positive")
 		}
 		var unitPrice float64
+		var itemMode string
+		var itemProviderID *string
 		if err := tx.QueryRow(c.Context(), `
 			SELECT CASE WHEN is_flash_sale AND flash_sale_price > 0 AND flash_sale_price < local_selling_price
-				THEN flash_sale_price ELSE local_selling_price END
-			FROM products
-			WHERE id = $1 AND sku = $2 AND is_active = true AND inventory_count >= $3
-		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice); err != nil {
+				THEN flash_sale_price ELSE local_selling_price END,
+				fulfillment_mode, provider_id::text
+			FROM products p
+			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
+			  AND (provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
+		}
+		if fulfillmentMode == "" {
+			fulfillmentMode, orderProviderID = itemMode, itemProviderID
+		} else if fulfillmentMode != itemMode || stringValue(orderProviderID) != stringValue(itemProviderID) {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "products from different sellers or fulfilment routes must be checked out separately")
 		}
 		itemsTotal += unitPrice * float64(item.Quantity)
 	}
 
-	customsFee := roundMoney(itemsTotal * 0.20)
+	customsFee := 0.0
+	if fulfillmentMode == "atlantic_import" {
+		customsFee = roundMoney(itemsTotal * 0.20)
+	}
 	vatFee := 100.0
 	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
 	deliveryPromise := time.Now().UTC().Add(21 * 24 * time.Hour)
@@ -122,15 +136,16 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at, fulfillment_contact_snapshot)
-		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7, $8::jsonb)
+		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at, fulfillment_contact_snapshot,provider_id,fulfillment_mode)
+		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7, $8::jsonb,$9,$10)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
 		return err
 	}
 
 	for _, item := range req.Items {
-		var title, description, hubCode, hubName, hubCity, hubAddress string
+		var title, description, hubCode, hubName, hubCity, hubAddress, itemMode string
+		var itemProviderID *string
 		var unitPrice, supplierCostRMB float64
 		var imageURLs []string
 		var factoryRaw []byte
@@ -139,13 +154,13 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 				CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
 					THEN p.flash_sale_price ELSE p.local_selling_price END,
 				p.cost_price_rmb,
-				p.image_urls, p.factory_details,
+				p.image_urls, p.factory_details,p.fulfillment_mode,p.provider_id::text,
 				COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, '')
 			FROM products p
 			LEFT JOIN logistics_hubs lh ON lh.id = COALESCE(NULLIF($2, '')::uuid, p.origin_hub_id)
 			WHERE p.id = $1
 		`, item.ProductID, item.OriginHubID).Scan(
-			&title, &description, &unitPrice, &supplierCostRMB, &imageURLs, &factoryRaw,
+			&title, &description, &unitPrice, &supplierCostRMB, &imageURLs, &factoryRaw, &itemMode, &itemProviderID,
 			&hubCode, &hubName, &hubCity, &hubAddress,
 		); err != nil {
 			return err
@@ -178,9 +193,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			originHubID = &hubID
 		}
 		_, err = tx.Exec(c.Context(), `
-		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price, product_snapshot)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice, productSnapshot)
+		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price, product_snapshot,provider_id,fulfillment_mode)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,$10,$11)
+		`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice, productSnapshot, itemProviderID, itemMode)
 		if err != nil {
 			return err
 		}
@@ -204,6 +219,13 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		"grand_total": grandTotal,
 		"currency":    currency,
 	})
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func missingPurchasingProfileFields(email, fullName, phone string) []string {

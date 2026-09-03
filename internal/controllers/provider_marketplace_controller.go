@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -340,22 +341,27 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 }
 
 type listingPayload struct {
-	ListingType  string         `json:"listing_type"`
-	Title        string         `json:"title"`
-	Description  string         `json:"description"`
-	Category     string         `json:"category"`
-	ContactEmail string         `json:"contact_email"`
-	ContactPhone string         `json:"contact_phone"`
-	AddressLine  string         `json:"address_line"`
-	City         string         `json:"city"`
-	State        string         `json:"state"`
-	CountryCode  string         `json:"country_code"`
-	Price        *float64       `json:"price"`
-	CurrencyCode string         `json:"currency_code"`
-	PricingUnit  string         `json:"pricing_unit"`
-	Capacity     int            `json:"capacity"`
-	MediaURLs    []string       `json:"media_urls"`
-	Attributes   map[string]any `json:"attributes"`
+	ListingType     string         `json:"listing_type"`
+	Title           string         `json:"title"`
+	Description     string         `json:"description"`
+	Category        string         `json:"category"`
+	ContactEmail    string         `json:"contact_email"`
+	ContactPhone    string         `json:"contact_phone"`
+	AddressLine     string         `json:"address_line"`
+	City            string         `json:"city"`
+	State           string         `json:"state"`
+	CountryCode     string         `json:"country_code"`
+	Price           *float64       `json:"price"`
+	CurrencyCode    string         `json:"currency_code"`
+	PricingUnit     string         `json:"pricing_unit"`
+	Capacity        int            `json:"capacity"`
+	MediaURLs       []string       `json:"media_urls"`
+	Attributes      map[string]any `json:"attributes"`
+	Latitude        *float64       `json:"latitude"`
+	Longitude       *float64       `json:"longitude"`
+	ServiceRadiusKM *float64       `json:"service_radius_km"`
+	IsMobileService bool           `json:"is_mobile_service"`
+	IsAvailableNow  bool           `json:"is_available_now"`
 }
 
 func validListingType(t string) bool {
@@ -394,6 +400,15 @@ func validateListing(req listingPayload) error {
 	}
 	if req.Price != nil && *req.Price < 0 {
 		return fmt.Errorf("price cannot be negative")
+	}
+	if (req.Latitude == nil) != (req.Longitude == nil) {
+		return fmt.Errorf("latitude and longitude must be supplied together")
+	}
+	if req.Latitude != nil && (*req.Latitude < -90 || *req.Latitude > 90 || *req.Longitude < -180 || *req.Longitude > 180) {
+		return fmt.Errorf("invalid service coordinates")
+	}
+	if req.ServiceRadiusKM != nil && (*req.ServiceRadiusKM <= 0 || *req.ServiceRadiusKM > 500) {
+		return fmt.Errorf("service_radius_km must be between 0 and 500")
 	}
 	return nil
 }
@@ -434,7 +449,7 @@ func (m *ProviderMarketplaceController) CreateListing(c *fiber.Ctx) error {
 	attrs, _ := json.Marshal(req.Attributes)
 	id := uuid.New()
 	slug := marketplaceSlug(req.Title) + "-" + strings.ToLower(id.String()[:8])
-	_, err = m.db.Exec(c.Context(), `INSERT INTO provider_listings(id,provider_id,listing_type,title,slug,description,category,contact_email,contact_phone,address_line,city,state,country_code,price,currency_code,pricing_unit,capacity,media_urls,attributes) VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE(NULLIF($13,''),'NG'),$14,COALESCE(NULLIF($15,''),'NGN'),$16,$17,$18,$19::jsonb)`, id, providerID, strings.ToLower(strings.TrimSpace(req.ListingType)), strings.TrimSpace(req.Title), slug, strings.TrimSpace(req.Description), strings.TrimSpace(req.Category), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), req.Price, strings.ToUpper(strings.TrimSpace(req.CurrencyCode)), strings.TrimSpace(req.PricingUnit), req.Capacity, req.MediaURLs, attrs)
+	_, err = m.db.Exec(c.Context(), `INSERT INTO provider_listings(id,provider_id,listing_type,title,slug,description,category,contact_email,contact_phone,address_line,city,state,country_code,price,currency_code,pricing_unit,capacity,media_urls,attributes,latitude,longitude,service_radius_km,is_mobile_service,is_available_now) VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE(NULLIF($13,''),'NG'),$14,COALESCE(NULLIF($15,''),'NGN'),$16,$17,$18,$19::jsonb,$20,$21,$22,$23,$24)`, id, providerID, strings.ToLower(strings.TrimSpace(req.ListingType)), strings.TrimSpace(req.Title), slug, strings.TrimSpace(req.Description), strings.TrimSpace(req.Category), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), req.Price, strings.ToUpper(strings.TrimSpace(req.CurrencyCode)), strings.TrimSpace(req.PricingUnit), req.Capacity, req.MediaURLs, attrs, req.Latitude, req.Longitude, req.ServiceRadiusKM, req.IsMobileService, req.IsAvailableNow)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create listing")
 	}
@@ -461,7 +476,7 @@ func (m *ProviderMarketplaceController) UpdateListing(c *fiber.Ctx) error {
 		req.CurrencyCode = "NGN"
 	}
 	attrs, _ := json.Marshal(req.Attributes)
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET listing_type=$3,title=$4,description=$5,category=$6,contact_email=$7,contact_phone=$8,address_line=$9,city=$10,state=$11,country_code=COALESCE(NULLIF($12,''),'NG'),price=$13,currency_code=COALESCE(NULLIF($14,''),'NGN'),pricing_unit=$15,capacity=$16,media_urls=$17,attributes=$18::jsonb,status=CASE WHEN status IN ('pending','approved') THEN 'pending' ELSE status END,moderation_notes='',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status<>'archived'`, c.Params("listing_id"), providerID, strings.ToLower(strings.TrimSpace(req.ListingType)), strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), strings.TrimSpace(req.Category), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), req.Price, strings.ToUpper(strings.TrimSpace(req.CurrencyCode)), strings.TrimSpace(req.PricingUnit), req.Capacity, req.MediaURLs, attrs)
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET listing_type=$3,title=$4,description=$5,category=$6,contact_email=$7,contact_phone=$8,address_line=$9,city=$10,state=$11,country_code=COALESCE(NULLIF($12,''),'NG'),price=$13,currency_code=COALESCE(NULLIF($14,''),'NGN'),pricing_unit=$15,capacity=$16,media_urls=$17,attributes=$18::jsonb,latitude=$19,longitude=$20,service_radius_km=$21,is_mobile_service=$22,is_available_now=$23,status=CASE WHEN status IN ('pending','approved') THEN 'pending' ELSE status END,moderation_notes='',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status<>'archived'`, c.Params("listing_id"), providerID, strings.ToLower(strings.TrimSpace(req.ListingType)), strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), strings.TrimSpace(req.Category), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), req.Price, strings.ToUpper(strings.TrimSpace(req.CurrencyCode)), strings.TrimSpace(req.PricingUnit), req.Capacity, req.MediaURLs, attrs, req.Latitude, req.Longitude, req.ServiceRadiusKM, req.IsMobileService, req.IsAvailableNow)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -521,6 +536,69 @@ func (m *ProviderMarketplaceController) ListPublicListings(c *fiber.Ctx) error {
 	return m.listListings(c, "public", "")
 }
 
+// ListNearbyListings performs an indexed bounding-box prefilter before the
+// Haversine calculation. This keeps the expensive distance calculation bounded
+// as the marketplace grows and returns no unbounded totals.
+func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
+	latitude, err := strconv.ParseFloat(c.Query("latitude"), 64)
+	if err != nil || latitude < -90 || latitude > 90 {
+		return fiber.NewError(fiber.StatusBadRequest, "valid latitude is required")
+	}
+	longitude, err := strconv.ParseFloat(c.Query("longitude"), 64)
+	if err != nil || longitude < -180 || longitude > 180 {
+		return fiber.NewError(fiber.StatusBadRequest, "valid longitude is required")
+	}
+	radius := 25.0
+	if raw := strings.TrimSpace(c.Query("radius_km")); raw != "" {
+		radius, err = strconv.ParseFloat(raw, 64)
+		if err != nil || radius <= 0 || radius > 200 {
+			return fiber.NewError(fiber.StatusBadRequest, "radius_km must be between 0 and 200")
+		}
+	}
+	limit := marketplaceLimit(c)
+	latDelta := radius / 111.32
+	lonScale := math.Abs(math.Cos(latitude * math.Pi / 180))
+	if lonScale < 0.01 {
+		lonScale = 0.01
+	}
+	lonDelta := radius / (111.32 * lonScale)
+	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
+	availableOnly := strings.EqualFold(c.Query("available_now"), "true")
+	rows, err := m.db.Query(c.Context(), `WITH candidates AS (
+		SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.description,l.category,
+			l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.media_urls,
+			l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,
+			6371 * 2 * asin(sqrt(power(sin(radians((l.latitude::float8-$1::float8)/2)),2)+cos(radians($1::float8))*cos(radians(l.latitude::float8))*power(sin(radians((l.longitude::float8-$2::float8)/2)),2))) AS distance_km
+		FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id
+		WHERE l.status='approved' AND p.verification_status='approved' AND p.is_active=true
+		  AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())
+		  AND l.latitude BETWEEN $3 AND $4 AND l.longitude BETWEEN $5 AND $6
+		  AND ($7='' OR l.listing_type=$7) AND (NOT $8 OR l.is_available_now=true)
+	)
+	SELECT * FROM candidates WHERE distance_km <= $9 AND (NOT is_mobile_service OR service_radius_km IS NULL OR distance_km <= service_radius_km)
+	ORDER BY distance_km ASC,id ASC LIMIT $10`, latitude, longitude, latitude-latDelta, latitude+latDelta, longitude-lonDelta, longitude+lonDelta, listingType, availableOnly, radius, limit+1)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "nearby services unavailable")
+	}
+	defer rows.Close()
+	items := make([]fiber.Map, 0, limit)
+	for rows.Next() {
+		var id, pid, business, lt, title, description, category, address, city, state, country, currency, unit string
+		var price, lat, lon, serviceRadius *float64
+		var media []string
+		var mobile, available bool
+		var distance float64
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &description, &category, &address, &city, &state, &country, &price, &currency, &unit, &media, &lat, &lon, &serviceRadius, &mobile, &available, &distance); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if len(items) == limit {
+			break
+		}
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "description": description, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "media_urls": media, "latitude": lat, "longitude": lon, "service_radius_km": serviceRadius, "is_mobile_service": mobile, "is_available_now": available, "distance_km": math.Round(distance*10) / 10, "direct_booking": directBookingType(lt)})
+	}
+	return c.JSON(fiber.Map{"items": items, "has_more": len(items) == limit})
+}
+
 func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, providerID string) error {
 	limit := marketplaceLimit(c)
 	cursorTime, cursorID, err := decodeMarketplaceCursor(c.Query("cursor"))
@@ -530,7 +608,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
 	search := strings.TrimSpace(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.published_at,l.created_at,COALESCE(s.active,false) FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND COALESCE(s.active,false))) AND ($3<>'provider' OR l.provider_id=$4::uuid) AND ($5='' OR l.status=$5) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.published_at,l.created_at,COALESCE(s.active,false),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND COALESCE(s.active,false))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "listings unavailable")
 	}
@@ -548,7 +626,9 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		var published *time.Time
 		var created time.Time
 		var subscribed bool
-		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &published, &created, &subscribed); err != nil {
+		var latitude, longitude, radius *float64
+		var mobile, available bool
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &published, &created, &subscribed, &latitude, &longitude, &radius, &mobile, &available); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
@@ -557,7 +637,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		}
 		var attributes map[string]any
 		_ = json.Unmarshal(attrs, &attributes)
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "status": lstatus, "published_at": published, "created_at": created, "contact_available": subscribed, "direct_booking": directBookingType(lt), "safety_warning": func() string {
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "status": lstatus, "published_at": published, "created_at": created, "contact_available": subscribed, "latitude": latitude, "longitude": longitude, "service_radius_km": radius, "is_mobile_service": mobile, "is_available_now": available, "direct_booking": directBookingType(lt), "safety_warning": func() string {
 			if lt == "property" || lt == "land" || lt == "shop_rental" {
 				return propertySafetyWarning
 			}
@@ -574,7 +654,9 @@ func (m *ProviderMarketplaceController) GetPublicListing(c *fiber.Ctx) error {
 	var capacity int
 	var media []string
 	var attrs []byte
-	err := m.db.QueryRow(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id WHERE l.id=$1::uuid AND l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())`, c.Params("listing_id")).Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs)
+	var latitude, longitude, radius *float64
+	var mobile, available bool
+	err := m.db.QueryRow(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id WHERE l.id=$1::uuid AND l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())`, c.Params("listing_id")).Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &latitude, &longitude, &radius, &mobile, &available)
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
 	}
@@ -583,7 +665,7 @@ func (m *ProviderMarketplaceController) GetPublicListing(c *fiber.Ctx) error {
 	}
 	var attributes map[string]any
 	_ = json.Unmarshal(attrs, &attributes)
-	return c.JSON(fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "direct_booking": directBookingType(lt), "safety_warning": func() string {
+	return c.JSON(fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "latitude": latitude, "longitude": longitude, "service_radius_km": radius, "is_mobile_service": mobile, "is_available_now": available, "direct_booking": directBookingType(lt), "safety_warning": func() string {
 		if !directBookingType(lt) {
 			return propertySafetyWarning
 		}

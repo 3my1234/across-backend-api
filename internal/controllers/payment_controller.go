@@ -570,17 +570,18 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	}
 	defer tx.Rollback(ctx)
 
-	var countryID, currencyCode, orderStatus, existingTxRef string
+	var countryID, currencyCode, orderStatus, existingTxRef, fulfillmentMode string
+	var providerID *string
 	var orderAmount float64
 	var promisedAt time.Time
 	if err := tx.QueryRow(ctx, `
 		SELECT country_id, currency_code, total_amount,
 			COALESCE(delivery_promised_at, now() + interval '14 days'),
-			order_status::text, COALESCE(flutterwave_tx_ref, '')
+			order_status::text, COALESCE(flutterwave_tx_ref, ''), fulfillment_mode, provider_id::text
 		FROM orders
 		WHERE id = $1
 		FOR UPDATE
-	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt, &orderStatus, &existingTxRef); err != nil {
+	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt, &orderStatus, &existingTxRef, &fulfillmentMode, &providerID); err != nil {
 		return err
 	}
 	if !strings.EqualFold(currencyCode, strings.TrimSpace(paidCurrency)) || paidAmount+0.001 < orderAmount {
@@ -593,11 +594,16 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 		return errors.New("order is not payable")
 	}
 
-	batchID, batchCode, err := p.ensureDailyBatch(ctx, tx, countryID, promisedAt, orderAmount)
-	if err != nil {
-		return err
+	var batchID any
+	packageLabel := "LOCAL-" + shortOrderLabel(orderID)
+	if fulfillmentMode == "atlantic_import" {
+		importBatchID, batchCode, err := p.ensureDailyBatch(ctx, tx, countryID, promisedAt, orderAmount)
+		if err != nil {
+			return err
+		}
+		batchID = importBatchID
+		packageLabel = fmt.Sprintf("%s-%s", batchCode, shortOrderLabel(orderID))
 	}
-	packageLabel := fmt.Sprintf("%s-%s", batchCode, shortOrderLabel(orderID))
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE orders
@@ -615,6 +621,11 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	}
 	if tag.RowsAffected() == 0 {
 		return errors.New("order is not payable")
+	}
+	if fulfillmentMode == "merchant_local" && providerID != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,0,$5,'pending',now()+interval '7 days') ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit(ctx)

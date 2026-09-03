@@ -47,7 +47,9 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 			(path == "/api/v1/products" ||
 				strings.HasPrefix(path, "/api/v1/products/") &&
 					!strings.Contains(path, "/reviews") && !strings.Contains(path, "/mine")) {
-			c.Set(fiber.HeaderCacheControl, "public, max-age=60, stale-while-revalidate=300")
+			// Product prices and inventory are operational data. Keep a very short
+			// shared cache window; explicit app refreshes use a cache-busting query.
+			c.Set(fiber.HeaderCacheControl, "public, max-age=5, stale-while-revalidate=10")
 			c.Vary(fiber.HeaderAcceptEncoding)
 			return err
 		}
@@ -93,6 +95,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/products/:product_id", catalog.GetProduct)
 	v1.Get("/products/:product_id/reviews", reviews.ListProductReviews)
 	v1.Get("/marketplace/listings", marketplaceController.ListPublicListings)
+	v1.Get("/marketplace/nearby", marketplaceController.ListNearbyListings)
 	v1.Get("/marketplace/listings/:listing_id", marketplaceController.GetPublicListing)
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
@@ -145,6 +148,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Patch("/providers/:provider_id/verification", catalogOnly, marketplaceController.AdminVerifyProvider)
 	adminRoutes.Get("/provider-listings", catalogOnly, marketplaceController.AdminListListings)
 	adminRoutes.Patch("/provider-listings/:listing_id/moderation", catalogOnly, marketplaceController.AdminModerateListing)
+	adminRoutes.Get("/merchant-products", catalogOnly, marketplaceController.AdminListMerchantProducts)
+	adminRoutes.Patch("/merchant-products/:product_id/moderation", catalogOnly, marketplaceController.AdminModerateMerchantProduct)
 	adminRoutes.Post("/provider-subscription-plans", superOnly, marketplaceController.AdminUpsertPlan)
 	adminRoutes.Post("/provider-subscriptions/reconcile", superOnly, payments.AdminReconcileProviderSubscription)
 	adminRoutes.Post("/uploads/presign", catalogOnly, uploads.AdminPresign)
@@ -199,6 +204,12 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Patch("/providers/me/listings/:listing_id", marketplaceController.UpdateListing)
 	authed.Delete("/providers/me/listings/:listing_id", marketplaceController.ArchiveListing)
 	authed.Post("/providers/me/listings/:listing_id/submit", marketplaceController.SubmitListing)
+	authed.Get("/providers/me/products", marketplaceController.ListMyMerchantProducts)
+	authed.Post("/providers/me/products", marketplaceController.CreateMerchantProduct)
+	authed.Patch("/providers/me/products/:product_id", marketplaceController.UpdateMerchantProduct)
+	authed.Delete("/providers/me/products/:product_id", marketplaceController.ArchiveMerchantProduct)
+	authed.Post("/providers/me/products/:product_id/submit", marketplaceController.SubmitMerchantProduct)
+	authed.Get("/providers/me/merchant-orders", marketplaceController.ListMyMerchantOrders)
 	authed.Post("/providers/me/listings/:listing_id/availability", marketplaceController.UpsertAvailability)
 	authed.Get("/providers/me/requests", marketplaceController.ListProviderRequests)
 	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
