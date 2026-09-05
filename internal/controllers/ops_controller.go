@@ -383,6 +383,14 @@ func (o *OpsController) ConfirmReceipt(c *fiber.Ctx) error {
 		log.Printf("receipt review reward failed order_id=%s user_id=%s: %v", orderID, userID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
 	}
+	if _, err := tx.Exec(c.Context(), `
+		UPDATE merchant_ledger
+		SET status='available', available_at=now(), updated_at=now()
+		WHERE order_id=$1::uuid AND status='pending'
+	`, orderID); err != nil {
+		log.Printf("receipt merchant settlement release failed order_id=%s user_id=%s: %v", orderID, userID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "receipt confirmation failed; no changes were saved")
+	}
 	if batchID != nil {
 		if err := completeBatchIfResolved(c.Context(), tx, *batchID); err != nil {
 			log.Printf("receipt batch completion failed order_id=%s batch_id=%s: %v", orderID, *batchID, err)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -142,6 +143,38 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
 		return err
 	}
+	if fulfillmentMode != "atlantic_import" {
+		tag, err := tx.Exec(c.Context(), `
+			INSERT INTO order_fulfillments(
+				order_id, provider_id, route, owner, status,
+				origin_snapshot, delivery_snapshot, current_location,
+				estimated_delivery_at
+			)
+			SELECT $1::uuid, p.provider_id, p.fulfillment_mode, 'merchant', 'pending',
+				jsonb_build_object(
+					'country_code', p.inventory_country_code,
+					'city', p.inventory_city,
+					'location', p.inventory_location,
+					'stock_state', p.stock_state
+				),
+				jsonb_build_object(
+					'handling_time_hours', p.handling_time_hours,
+					'delivery_min_days', p.delivery_min_days,
+					'delivery_max_days', p.delivery_max_days,
+					'delivery_methods', p.delivery_methods,
+					'return_policy', p.return_policy,
+					'atlantic_last_mile', p.atlantic_last_mile,
+					'buyer_contact', $3::jsonb
+				),
+				p.inventory_location,
+				now() + make_interval(days => p.delivery_max_days)
+			FROM products p
+			WHERE p.id=$2::uuid AND p.provider_id=$4::uuid
+		`, orderID, req.Items[0].ProductID, contactSnapshot, orderProviderID)
+		if err != nil || tag.RowsAffected() != 1 {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not create merchant fulfilment")
+		}
+	}
 
 	for _, item := range req.Items {
 		var title, description, hubCode, hubName, hubCity, hubAddress, itemMode string
@@ -171,6 +204,8 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			"description":       description,
 			"image_urls":        imageURLs,
 			"supplier_cost_rmb": supplierCostRMB,
+			"fulfillment_mode":  itemMode,
+			"provider_id":       itemProviderID,
 			"factory_details":   factoryDetails,
 			"origin_hub": map[string]any{
 				"code": hubCode, "name": hubName, "city": hubCity, "address": hubAddress,
@@ -249,8 +284,12 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 			o.order_status::text, o.current_tracking_stage::text, COALESCE(o.package_label, ''),
 			o.created_at,
 			COALESCE((SELECT SUM(oi.quantity)::int FROM order_items oi WHERE oi.order_id = o.id), 0),
-			COALESCE((SELECT string_agg(oi.title, ', ' ORDER BY oi.created_at) FROM order_items oi WHERE oi.order_id = o.id), '')
+			COALESCE((SELECT string_agg(oi.title, ', ' ORDER BY oi.created_at) FROM order_items oi WHERE oi.order_id = o.id), ''),
+			COALESCE(f.route, ''), COALESCE(f.owner, ''), COALESCE(f.status, ''),
+			COALESCE(f.carrier, ''), COALESCE(f.tracking_number, ''), COALESCE(f.tracking_url, ''),
+			COALESCE(f.current_location, ''), f.estimated_delivery_at, COALESCE(f.version, 0)
 		FROM orders o
+		LEFT JOIN order_fulfillments f ON f.order_id = o.id
 		WHERE o.user_id = $1
 		  AND o.order_status != 'Pending'
 		ORDER BY o.created_at DESC
@@ -263,20 +302,34 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 	orders := make([]fiber.Map, 0)
 	for rows.Next() {
 		var id, currency, status, stage, packageLabel, itemsSummary string
+		var route, owner, fulfillmentStatus, carrier, trackingNumber, trackingURL, currentLocation string
 		var totalAmount, shippingFee, customsFee, vatFee float64
 		var createdAt time.Time
+		var estimatedDelivery *time.Time
+		var fulfillmentVersion int64
 		var itemCount int
 		if err := rows.Scan(&id, &currency, &totalAmount, &shippingFee, &customsFee, &vatFee,
-			&status, &stage, &packageLabel, &createdAt, &itemCount, &itemsSummary); err != nil {
+			&status, &stage, &packageLabel, &createdAt, &itemCount, &itemsSummary,
+			&route, &owner, &fulfillmentStatus, &carrier, &trackingNumber, &trackingURL,
+			&currentLocation, &estimatedDelivery, &fulfillmentVersion); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
 		}
-		orders = append(orders, fiber.Map{
+		order := fiber.Map{
 			"id": id, "currency": currency, "total_amount": totalAmount,
 			"shipping_fee": shippingFee, "customs_fee": customsFee, "vat_fee": vatFee,
 			"order_status": status, "current_tracking_stage": stage,
 			"package_label": packageLabel, "created_at": createdAt,
 			"item_count": itemCount, "items_summary": itemsSummary,
-		})
+		}
+		if route != "" {
+			order["fulfillment"] = fiber.Map{
+				"route": route, "owner": owner, "status": fulfillmentStatus,
+				"carrier": carrier, "tracking_number": trackingNumber, "tracking_url": trackingURL,
+				"current_location": currentLocation, "estimated_delivery_at": estimatedDelivery,
+				"version": fulfillmentVersion,
+			}
+		}
+		orders = append(orders, order)
 	}
 	if err := rows.Err(); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
@@ -366,6 +419,70 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 		}
 	}
 
+	var fulfillment any
+	fulfillmentEvents := make([]fiber.Map, 0)
+	var fulfillmentID, route, owner, fulfillmentStatus string
+	var carrier, trackingNumber, trackingURL, currentLocation string
+	var originSnapshot, deliverySnapshot []byte
+	var estimatedDelivery *time.Time
+	var version int64
+	err = o.db.QueryRow(c.Context(), `
+		SELECT f.id::text, f.route, f.owner, f.status,
+		       f.origin_snapshot, f.delivery_snapshot,
+		       f.carrier, f.tracking_number, f.tracking_url,
+		       f.current_location, f.estimated_delivery_at, f.version
+		FROM order_fulfillments f
+		JOIN orders ord ON ord.id=f.order_id
+		WHERE f.order_id=$1::uuid AND ord.user_id=$2::uuid
+	`, orderID, userID).Scan(&fulfillmentID, &route, &owner, &fulfillmentStatus,
+		&originSnapshot, &deliverySnapshot, &carrier, &trackingNumber,
+		&trackingURL, &currentLocation, &estimatedDelivery, &version)
+	if err != nil && err != pgx.ErrNoRows {
+		return fiber.NewError(fiber.StatusInternalServerError, "fulfilment tracking unavailable")
+	}
+	if err == nil {
+		var origin, delivery map[string]any
+		_ = json.Unmarshal(originSnapshot, &origin)
+		_ = json.Unmarshal(deliverySnapshot, &delivery)
+		fulfillment = fiber.Map{
+			"id": fulfillmentID, "route": route, "owner": owner,
+			"status": fulfillmentStatus, "origin": origin,
+			"delivery": delivery, "carrier": carrier,
+			"tracking_number": trackingNumber, "tracking_url": trackingURL,
+			"current_location":      currentLocation,
+			"estimated_delivery_at": estimatedDelivery, "version": version,
+		}
+		rows, err := o.db.Query(c.Context(), `
+			SELECT previous_status, status, notes, location, metadata, created_at
+			FROM fulfillment_events
+			WHERE fulfillment_id=$1::uuid
+			ORDER BY created_at ASC, id ASC
+		`, fulfillmentID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "fulfilment events unavailable")
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var previous *string
+			var status, notes, location string
+			var metadata []byte
+			var occurredAt time.Time
+			if err := rows.Scan(&previous, &status, &notes, &location, &metadata, &occurredAt); err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "fulfilment events unavailable")
+			}
+			var eventMetadata map[string]any
+			_ = json.Unmarshal(metadata, &eventMetadata)
+			fulfillmentEvents = append(fulfillmentEvents, fiber.Map{
+				"previous_status": previous, "status": status, "notes": notes,
+				"location": location, "metadata": eventMetadata,
+				"occurred_at": occurredAt,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "fulfilment events unavailable")
+		}
+	}
+
 	return c.JSON(fiber.Map{
 		"batch": fiber.Map{
 			"batch_code":       batchSummary.BatchCode,
@@ -374,8 +491,10 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 			"transport_mode":   batchSummary.TransportMode,
 			"package_label":    batchSummary.PackageLabel,
 		},
-		"events":       events,
-		"batch_events": batchEvents,
+		"events":             events,
+		"batch_events":       batchEvents,
+		"fulfillment":        fulfillment,
+		"fulfillment_events": fulfillmentEvents,
 	})
 }
 

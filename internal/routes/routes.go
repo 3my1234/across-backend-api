@@ -164,6 +164,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Post("/batches/:batch_id/purchase-confirm", procurementActions, ops.ConfirmPurchase)
 	// Admin III: Delivery management
 	adminRoutes.Post("/batches/confirm-delivered", courierActions, ops.ConfirmDelivered)
+	adminRoutes.Get("/merchant-fulfillments", allAdmins, marketplaceController.AdminListMerchantFulfillments)
+	adminRoutes.Patch("/merchant-orders/:order_id/last-mile", courierActions, marketplaceController.TransitionAtlanticLastMile)
 	// Auto-confirm expired deliveries (can be called by cron)
 	adminRoutes.Post("/deliveries/auto-confirm", courierOnly, ops.AutoConfirmDeliveries)
 
@@ -210,6 +212,11 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Delete("/providers/me/products/:product_id", marketplaceController.ArchiveMerchantProduct)
 	authed.Post("/providers/me/products/:product_id/submit", marketplaceController.SubmitMerchantProduct)
 	authed.Get("/providers/me/merchant-orders", marketplaceController.ListMyMerchantOrders)
+	authed.Patch("/providers/me/merchant-orders/:order_id/fulfillment", marketplaceController.TransitionMerchantOrder)
+	authed.Get("/providers/me/manifests", marketplaceController.ListMerchantManifests)
+	authed.Post("/providers/me/manifests", marketplaceController.CreateMerchantManifest)
+	authed.Get("/providers/me/manifests/:manifest_id", marketplaceController.GetMerchantManifest)
+	authed.Patch("/providers/me/manifests/:manifest_id", marketplaceController.TransitionMerchantManifest)
 	authed.Post("/providers/me/listings/:listing_id/availability", marketplaceController.UpsertAvailability)
 	authed.Get("/providers/me/requests", marketplaceController.ListProviderRequests)
 	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
