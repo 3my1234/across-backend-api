@@ -31,7 +31,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			p.inventory_count,
 			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
@@ -51,13 +51,13 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
 		var price, compareAtPrice, flashSalePrice, averageRating float64
-		var reviewCount int64
+		var reviewCount, soldCount int64
 		var inventory int
 		var factoryRaw []byte
 		var isFlashSale bool
 		var providerID *string
 		var fulfillmentMode string
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
 			return err
 		}
 		factory := map[string]any{}
@@ -74,6 +74,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
 			"review_count":     reviewCount,
+			"sold_count":       soldCount,
 			"average_rating":   averageRating,
 			"provider_id":      stringValue(providerID),
 			"fulfillment_mode": fulfillmentMode,
@@ -114,7 +115,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			p.local_currency_code, p.flash_sale_price,
 			p.local_selling_price, p.inventory_count,
 			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.created_at, COUNT(*) OVER() AS total_count, p.review_count,
+			p.created_at, COUNT(*) OVER() AS total_count, p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
@@ -137,13 +138,13 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
 		var price, compareAt, averageRating float64
-		var reviewCount int64
+		var reviewCount, soldCount int64
 		var inventory int
 		var factoryRaw []byte
 		var createdAt time.Time
 		var providerID *string
 		var fulfillmentMode string
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total, &reviewCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
 			return err
 		}
 		factory := map[string]any{}
@@ -152,7 +153,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
 			"price": price, "compare_at_price": compareAt, "inventory_count": inventory,
-			"review_count": reviewCount, "average_rating": averageRating,
+			"review_count": reviewCount, "sold_count": soldCount, "average_rating": averageRating,
 			"provider_id": stringValue(providerID), "fulfillment_mode": fulfillmentMode,
 			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
@@ -175,7 +176,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 	var id, sku, title, description, currency, hubID, hubName, hubCity string
 	var categories, images []string
 	var price, compareAtPrice, flashSalePrice, averageRating float64
-	var reviewCount int64
+	var reviewCount, soldCount int64
 	var inventory int
 	var factoryRaw []byte
 	var isFlashSale bool
@@ -189,14 +190,14 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			p.inventory_count,
 			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved'
 		  AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
-	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating, &providerID, &fulfillmentMode)
+	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
@@ -215,6 +216,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
 			"review_count":     reviewCount,
+			"sold_count":       soldCount,
 			"average_rating":   averageRating,
 			"provider_id":      stringValue(providerID),
 			"fulfillment_mode": fulfillmentMode,
@@ -297,7 +299,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count, p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count,
+			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM candidates candidate
@@ -317,13 +319,13 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 		var id, sku, title, description, currency, hubID, hubName, hubCity string
 		var categories, images []string
 		var price, compareAtPrice, flashSalePrice, averageRating float64
-		var reviewCount int64
+		var reviewCount, soldCount int64
 		var inventory int
 		var factoryRaw []byte
 		var isFlashSale bool
 		var providerID *string
 		var fulfillmentMode string
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
 		}
 		factory := map[string]any{}
@@ -332,7 +334,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
 			"price": price, "compare_at_price": compareAtPrice, "inventory_count": inventory,
-			"review_count": reviewCount, "average_rating": averageRating,
+			"review_count": reviewCount, "sold_count": soldCount, "average_rating": averageRating,
 			"provider_id": stringValue(providerID), "fulfillment_mode": fulfillmentMode,
 			"is_flash_sale": isFlashSale, "flash_sale_price": flashSalePrice, "factory_details": factory,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},

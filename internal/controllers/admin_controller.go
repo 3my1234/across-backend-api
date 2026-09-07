@@ -784,6 +784,9 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			b.procurement_funds_reference, b.procurement_funds_sent_at,
 			b.procurement_funds_acknowledged_at, b.procurement_completed_at,
 			COALESCE(ms.pending_items, 0), COALESCE(ms.purchased_items, 0), COALESCE(ms.failed_items, 0),
+			(SELECT COUNT(*)::int FROM orders deliverable_order
+			 WHERE deliverable_order.batch_id = b.id
+			   AND deliverable_order.current_tracking_stage::text NOT IN ('Delivered', 'Completed')) AS deliverable_order_count,
 			COUNT(*) OVER() AS total_count
 		FROM order_batches b
 		LEFT JOIN orders o ON o.batch_id = b.id
@@ -839,13 +842,13 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 		var routeKey, fundsCurrency, fundsReference string
 		var batchSequence int
 		var fundsAmount *float64
-		var pendingItems, purchasedItems, failedItems int
+		var pendingItems, purchasedItems, failedItems, deliverableOrderCount int
 		if err := rows.Scan(
 			&id, &code, &batchDate, &status, &transport, &totalNgn, &totalCny,
 			&location, &notes, &orderCount, &createdAt, &version, &membershipLocked,
 			&openedAt, &closedAt, &routeKey, &batchSequence, &fundsAmount,
 			&fundsCurrency, &fundsReference, &fundsSentAt, &fundsAcknowledgedAt,
-			&procurementCompletedAt, &pendingItems, &purchasedItems, &failedItems, &totalCount,
+			&procurementCompletedAt, &pendingItems, &purchasedItems, &failedItems, &deliverableOrderCount, &totalCount,
 		); err != nil {
 			return err
 		}
@@ -876,6 +879,7 @@ func (a *AdminController) ListBatches(c *fiber.Ctx) error {
 			"pending_items":                     pendingItems,
 			"purchased_items":                   purchasedItems,
 			"failed_items":                      failedItems,
+			"deliverable_order_count":           deliverableOrderCount,
 		})
 	}
 	nextCursor := ""

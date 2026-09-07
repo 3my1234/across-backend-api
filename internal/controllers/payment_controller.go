@@ -622,6 +622,20 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	if tag.RowsAffected() == 0 {
 		return errors.New("order is not payable")
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE products p
+		SET sold_count = p.sold_count + sold.quantity,
+			updated_at = now()
+		FROM (
+			SELECT product_id, SUM(quantity)::bigint AS quantity
+			FROM order_items
+			WHERE order_id = $1::uuid
+			GROUP BY product_id
+		) sold
+		WHERE p.id = sold.product_id
+	`, orderID); err != nil {
+		return err
+	}
 	if fulfillmentMode != "atlantic_import" && providerID != nil {
 		if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,0,$5,'pending',now()+interval '7 days') ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount); err != nil {
 			return err
