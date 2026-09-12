@@ -1035,6 +1035,11 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 }
 
 func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, transactionID string, paidAmount float64, currency string) error {
+	txRef = strings.TrimSpace(txRef)
+	transactionID = strings.TrimSpace(transactionID)
+	if txRef == "" || transactionID == "" {
+		return fmt.Errorf("provider subscription payment reference is required")
+	}
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return err
@@ -1053,16 +1058,31 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return tx.Commit(ctx)
+	isNewPayment := tag.RowsAffected() > 0
+	if !isNewPayment {
+		var existingSubscriptionID, existingTxRef string
+		err = tx.QueryRow(ctx, `SELECT subscription_id::text,tx_ref FROM provider_subscription_payments WHERE flutterwave_transaction_id=$1`, transactionID).Scan(&existingSubscriptionID, &existingTxRef)
+		if err != nil {
+			return err
+		}
+		if existingSubscriptionID != subscriptionID || existingTxRef != txRef {
+			return fmt.Errorf("provider subscription payment reference conflict")
+		}
 	}
-	_, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2,starts_at=COALESCE(starts_at,now()),current_period_end=GREATEST(COALESCE(current_period_end,now()),now())+interval '1 month',last_payment_at=now(),updated_at=now(),version=version+1 WHERE id=$1::uuid`, subscriptionID, transactionID)
+	var updateTag pgconn.CommandTag
+	if isNewPayment {
+		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2,starts_at=COALESCE(starts_at,now()),current_period_end=GREATEST(COALESCE(current_period_end,now()),now())+interval '1 month',last_payment_at=now(),updated_at=now(),version=version+1 WHERE id=$1::uuid`, subscriptionID, transactionID)
+	} else {
+		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2,starts_at=COALESCE(starts_at,now()),current_period_end=CASE WHEN current_period_end IS NULL OR current_period_end <= now() THEN now()+interval '1 month' ELSE current_period_end END,last_payment_at=COALESCE(last_payment_at,now()),updated_at=now(),version=version+1 WHERE id=$1::uuid AND (status<>'active' OR flutterwave_transaction_id IS NULL OR starts_at IS NULL OR current_period_end IS NULL OR current_period_end <= now())`, subscriptionID, transactionID)
+	}
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,event_type,metadata) VALUES($1::uuid,'subscription_activated',jsonb_build_object('subscription_id',$2,'tx_ref',$3))`, providerID, subscriptionID, txRef)
-	if err != nil {
-		return err
+	if isNewPayment || updateTag.RowsAffected() > 0 {
+		_, err = tx.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,event_type,metadata) VALUES($1::uuid,'subscription_activated',jsonb_build_object('subscription_id',$2,'tx_ref',$3))`, providerID, subscriptionID, txRef)
+		if err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
