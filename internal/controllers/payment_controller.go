@@ -495,6 +495,94 @@ func (p *PaymentController) AdminReconcileProviderSubscription(c *fiber.Ctx) err
 	return c.JSON(fiber.Map{"payment_state": "settled", "tx_ref": verifiedRef})
 }
 
+// ConfirmProviderSubscription safely recovers a provider's successful checkout
+// when Flutterwave's webhook is delayed. The pending reference is resolved
+// through provider membership before the gateway is queried.
+func (p *PaymentController) ConfirmProviderSubscription(c *fiber.Ctx) error {
+	var req struct {
+		TxRef         string `json:"tx_ref"`
+		TransactionID string `json:"transaction_id"`
+	}
+	if len(c.Body()) > 0 {
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.ErrBadRequest
+		}
+	}
+	req.TxRef = strings.TrimSpace(req.TxRef)
+	req.TransactionID = strings.TrimSpace(req.TransactionID)
+	userID, _ := c.Locals("user_id").(string)
+	if strings.TrimSpace(userID) == "" {
+		return fiber.ErrUnauthorized
+	}
+
+	var ownedTxRef string
+	err := p.db.QueryRow(c.Context(), `
+		SELECT subscription.tx_ref
+		FROM provider_subscriptions subscription
+		JOIN provider_members member
+		  ON member.provider_id = subscription.provider_id
+		 AND member.user_id = $1::uuid
+		 AND member.is_active = true
+		JOIN provider_organizations provider
+		  ON provider.id = subscription.provider_id
+		 AND provider.is_active = true
+		WHERE subscription.status = 'pending'
+		  AND ($2::text = '' OR subscription.tx_ref = $2::text)
+		ORDER BY subscription.created_at DESC
+		LIMIT 1
+	`, userID, req.TxRef).Scan(&ownedTxRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var active bool
+		if activeErr := p.db.QueryRow(c.Context(), `
+			SELECT EXISTS (
+				SELECT 1
+				FROM provider_subscriptions subscription
+				JOIN provider_members member
+				  ON member.provider_id = subscription.provider_id
+				 AND member.user_id = $1::uuid
+				 AND member.is_active = true
+				WHERE subscription.status = 'active'
+				  AND subscription.current_period_end > now()
+			)
+		`, userID).Scan(&active); activeErr != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not check subscription status")
+		}
+		if active {
+			return c.JSON(fiber.Map{"payment_state": "settled"})
+		}
+		return c.JSON(fiber.Map{"payment_state": "not_found"})
+	}
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not load pending subscription")
+	}
+	if !strings.HasPrefix(ownedTxRef, "PROVIDER-") {
+		return fiber.NewError(fiber.StatusConflict, "invalid provider subscription reference")
+	}
+
+	verified, err := p.verifyFlutterwaveTransaction(c.Context(), req.TransactionID, ownedTxRef)
+	if err != nil {
+		log.Printf("provider subscription verification pending user_id=%s: %v", userID, err)
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"payment_state": "pending"})
+	}
+	if !successfulFlutterwaveStatus(verified.Data.Status) {
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"payment_state": "pending", "gateway_status": verified.Data.Status,
+		})
+	}
+	verifiedRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
+	if verifiedRef != ownedTxRef {
+		return fiber.NewError(fiber.StatusConflict, "verified transaction does not match the provider subscription")
+	}
+	paidAmount, err := amountValue(verified.Data.Amount)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
+	}
+	if err := settleProviderSubscription(c.Context(), p.db, ownedTxRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
+		return fiber.NewError(fiber.StatusConflict, err.Error())
+	}
+	return c.JSON(fiber.Map{"payment_state": "settled", "tx_ref": ownedTxRef})
+}
+
 func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef, transactionID string, paidAmount float64, currency string) error {
 	if err := p.settleOrderPayment(ctx, orderID, txRef, transactionID, paidAmount, currency); err != nil {
 		return err
