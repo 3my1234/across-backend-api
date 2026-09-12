@@ -94,7 +94,7 @@ func activeProviderPlan(ctx context.Context, db *pgxpool.Pool, providerID string
 	var limit int
 	err := db.QueryRow(ctx, `SELECT plan.listing_limit
 		FROM provider_subscriptions subscription
-		JOIN provider_subscription_plans plan ON plan.id=subscription.plan_id AND plan.is_active=true
+		JOIN provider_subscription_plans plan ON plan.id=subscription.plan_id
 		WHERE subscription.provider_id=$1::uuid AND subscription.status='active'
 		  AND subscription.current_period_end>now()
 		ORDER BY subscription.current_period_end DESC LIMIT 1`, providerID).Scan(&limit)
@@ -969,10 +969,34 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if fwPlanID == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
 	}
-	var email, fullName, phone string
-	err = m.db.QueryRow(c.Context(), `SELECT email,full_name,COALESCE(phone,'') FROM users WHERE id=$1::uuid AND is_active=true AND email_verified_at IS NOT NULL`, userID).Scan(&email, &fullName, &phone)
+	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus string
+	var emailVerified bool
+	err = m.db.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
+		p.business_name,p.contact_email,p.contact_phone,p.verification_status
+		FROM users u
+		JOIN provider_members member ON member.user_id=u.id AND member.provider_id=$2::uuid AND member.is_active=true
+		JOIN provider_organizations p ON p.id=member.provider_id AND p.is_active=true
+		WHERE u.id=$1::uuid AND u.is_active=true`, userID, providerID).Scan(&email, &fullName, &phone, &emailVerified, &providerName, &providerEmail, &providerPhone, &verificationStatus)
 	if err != nil {
-		return fiber.NewError(fiber.StatusUnprocessableEntity, "verify your email and complete your profile first")
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "complete your provider profile before subscribing")
+	}
+	if !emailVerified {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "verify your email before subscribing")
+	}
+	if verificationStatus != "approved" {
+		return fiber.NewError(fiber.StatusForbidden, "provider approval is required before subscribing")
+	}
+	if strings.TrimSpace(providerName) != "" {
+		fullName = providerName
+	}
+	if strings.TrimSpace(providerEmail) != "" {
+		email = providerEmail
+	}
+	if strings.TrimSpace(providerPhone) != "" {
+		phone = providerPhone
+	}
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(fullName) == "" || strings.TrimSpace(phone) == "" {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "complete your provider name, email, and phone before subscribing")
 	}
 	txRef := "PROVIDER-" + uuid.NewString()
 	redirect := strings.TrimSpace(req.RedirectURL)
@@ -1154,6 +1178,44 @@ func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
 		return fiber.ErrInternalServerError
 	}
 	return c.JSON(fiber.Map{"id": id})
+}
+
+func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,billing_interval,listing_limit,flutterwave_plan_id,is_active,created_at,updated_at FROM provider_subscription_plans ORDER BY is_active DESC,amount_ngn,id`)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer rows.Close()
+	items := []fiber.Map{}
+	for rows.Next() {
+		var id, code, name, description, interval string
+		var amount float64
+		var listingLimit int
+		var flutterwavePlanID *int64
+		var active bool
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &code, &name, &description, &amount, &interval, &listingLimit, &flutterwavePlanID, &active, &createdAt, &updatedAt); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": description, "amount_ngn": amount, "billing_interval": interval, "listing_limit": listingLimit, "flutterwave_plan_id": flutterwavePlanID, "is_active": active, "created_at": createdAt, "updated_at": updatedAt})
+	}
+	if err := rows.Err(); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"items": items})
+}
+
+// AdminDeactivatePlan removes a plan from sale without deleting financial history
+// or revoking access already paid for by existing subscribers.
+func (m *ProviderMarketplaceController) AdminDeactivatePlan(c *fiber.Ctx) error {
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_subscription_plans SET is_active=false,updated_at=now() WHERE id=$1::uuid AND is_active=true`, c.Params("plan_id"))
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.ErrNotFound
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func parseNumericID(value any) string {
