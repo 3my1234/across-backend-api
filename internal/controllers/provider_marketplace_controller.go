@@ -1079,7 +1079,7 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 		return err
 	}
 	if isNewPayment || updateTag.RowsAffected() > 0 {
-		_, err = tx.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,event_type,metadata) VALUES($1::uuid,'subscription_activated',jsonb_build_object('subscription_id',$2,'tx_ref',$3))`, providerID, subscriptionID, txRef)
+		_, err = tx.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,event_type,metadata) VALUES($1::uuid,'subscription_activated',jsonb_build_object('subscription_id',$2::text,'tx_ref',$3::text))`, providerID, subscriptionID, txRef)
 		if err != nil {
 			return err
 		}
