@@ -514,9 +514,11 @@ func (p *PaymentController) ConfirmProviderSubscription(c *fiber.Ctx) error {
 	if strings.TrimSpace(userID) == "" {
 		return fiber.ErrUnauthorized
 	}
+	if req.TxRef != "" && !strings.HasPrefix(req.TxRef, "PROVIDER-") {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid provider subscription reference")
+	}
 
-	var ownedTxRef string
-	err := p.db.QueryRow(c.Context(), `
+	rows, err := p.db.Query(c.Context(), `
 		SELECT subscription.tx_ref
 		FROM provider_subscriptions subscription
 		JOIN provider_members member
@@ -527,60 +529,72 @@ func (p *PaymentController) ConfirmProviderSubscription(c *fiber.Ctx) error {
 		  ON provider.id = subscription.provider_id
 		 AND provider.is_active = true
 		WHERE subscription.status = 'pending'
-		  AND ($2::text = '' OR subscription.tx_ref = $2::text)
-		ORDER BY subscription.created_at DESC
-		LIMIT 1
-	`, userID, req.TxRef).Scan(&ownedTxRef)
-	if errors.Is(err, pgx.ErrNoRows) {
-		var active bool
-		if activeErr := p.db.QueryRow(c.Context(), `
-			SELECT EXISTS (
-				SELECT 1
-				FROM provider_subscriptions subscription
-				JOIN provider_members member
-				  ON member.provider_id = subscription.provider_id
-				 AND member.user_id = $1::uuid
-				 AND member.is_active = true
-				WHERE subscription.status = 'active'
-				  AND subscription.current_period_end > now()
-			)
-		`, userID).Scan(&active); activeErr != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not check subscription status")
-		}
-		if active {
-			return c.JSON(fiber.Map{"payment_state": "settled"})
-		}
-		return c.JSON(fiber.Map{"payment_state": "not_found"})
-	}
+		ORDER BY CASE WHEN subscription.tx_ref=$2::text THEN 0 ELSE 1 END,
+		         subscription.created_at ASC
+		LIMIT 10
+	`, userID, req.TxRef)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not load pending subscription")
 	}
-	if !strings.HasPrefix(ownedTxRef, "PROVIDER-") {
-		return fiber.NewError(fiber.StatusConflict, "invalid provider subscription reference")
+	pendingRefs := make([]string, 0, 4)
+	for rows.Next() {
+		var txRef string
+		if err := rows.Scan(&txRef); err != nil {
+			rows.Close()
+			return fiber.NewError(fiber.StatusInternalServerError, "could not load pending subscription")
+		}
+		pendingRefs = append(pendingRefs, txRef)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fiber.NewError(fiber.StatusInternalServerError, "could not load pending subscription")
+	}
+	rows.Close()
+
+	reconciled := 0
+	lastGatewayStatus := ""
+	for _, ownedTxRef := range pendingRefs {
+		transactionID := ""
+		if req.TxRef != "" && ownedTxRef == req.TxRef {
+			transactionID = req.TransactionID
+		}
+		verified, verifyErr := p.verifyFlutterwaveTransaction(c.Context(), transactionID, ownedTxRef)
+		if verifyErr != nil {
+			log.Printf("provider subscription verification pending user_id=%s tx_ref=%s: %v", userID, ownedTxRef, verifyErr)
+			continue
+		}
+		lastGatewayStatus = verified.Data.Status
+		if !successfulFlutterwaveStatus(verified.Data.Status) {
+			continue
+		}
+		verifiedRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
+		if verifiedRef != ownedTxRef {
+			log.Printf("provider subscription reference mismatch user_id=%s expected=%s received=%s", userID, ownedTxRef, verifiedRef)
+			continue
+		}
+		paidAmount, amountErr := amountValue(verified.Data.Amount)
+		if amountErr != nil {
+			log.Printf("provider subscription amount invalid user_id=%s tx_ref=%s: %v", userID, ownedTxRef, amountErr)
+			continue
+		}
+		if settleErr := settleProviderSubscription(c.Context(), p.db, ownedTxRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); settleErr != nil {
+			log.Printf("provider subscription activation failed user_id=%s tx_ref=%s: %v", userID, ownedTxRef, settleErr)
+			return fiber.NewError(fiber.StatusServiceUnavailable, "payment was verified but subscription activation is temporarily unavailable")
+		}
+		reconciled++
 	}
 
-	verified, err := p.verifyFlutterwaveTransaction(c.Context(), req.TransactionID, ownedTxRef)
-	if err != nil {
-		log.Printf("provider subscription verification pending user_id=%s: %v", userID, err)
-		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"payment_state": "pending"})
+	var active bool
+	if err := p.db.QueryRow(c.Context(), `SELECT EXISTS (SELECT 1 FROM provider_subscriptions subscription JOIN provider_members member ON member.provider_id=subscription.provider_id AND member.user_id=$1::uuid AND member.is_active=true WHERE subscription.status='active' AND subscription.current_period_end>now())`, userID).Scan(&active); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not check subscription status")
 	}
-	if !successfulFlutterwaveStatus(verified.Data.Status) {
-		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-			"payment_state": "pending", "gateway_status": verified.Data.Status,
-		})
+	if active {
+		return c.JSON(fiber.Map{"payment_state": "settled", "reconciled_payments": reconciled})
 	}
-	verifiedRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
-	if verifiedRef != ownedTxRef {
-		return fiber.NewError(fiber.StatusConflict, "verified transaction does not match the provider subscription")
+	if len(pendingRefs) == 0 {
+		return c.JSON(fiber.Map{"payment_state": "not_found"})
 	}
-	paidAmount, err := amountValue(verified.Data.Amount)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
-	}
-	if err := settleProviderSubscription(c.Context(), p.db, ownedTxRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
-		return fiber.NewError(fiber.StatusConflict, err.Error())
-	}
-	return c.JSON(fiber.Map{"payment_state": "settled", "tx_ref": ownedTxRef})
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"payment_state": "pending", "gateway_status": lastGatewayStatus})
 }
 
 func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef, transactionID string, paidAmount float64, currency string) error {

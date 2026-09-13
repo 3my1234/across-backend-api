@@ -330,7 +330,7 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 	var created time.Time
 	var subStatus string
 	var periodEnd *time.Time
-	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd)
+	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusNotFound, "provider profile not found")
 	}
@@ -1047,21 +1047,27 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	defer tx.Rollback(ctx)
 	var subscriptionID, providerID string
 	var expected float64
-	err = tx.QueryRow(ctx, `SELECT s.id::text,s.provider_id::text,p.amount_ngn FROM provider_subscriptions s JOIN provider_subscription_plans p ON p.id=s.plan_id WHERE s.tx_ref=$1 FOR UPDATE`, txRef).Scan(&subscriptionID, &providerID, &expected)
+	err = tx.QueryRow(ctx, `SELECT s.id::text,s.provider_id::text,p.amount_ngn FROM provider_subscriptions s JOIN provider_subscription_plans p ON p.id=s.plan_id WHERE s.tx_ref=$1::text FOR UPDATE`, txRef).Scan(&subscriptionID, &providerID, &expected)
 	if err != nil {
 		return fmt.Errorf("provider subscription not found")
 	}
 	if strings.ToUpper(strings.TrimSpace(currency)) != "NGN" || paidAmount+0.01 < expected {
 		return fmt.Errorf("provider subscription amount mismatch")
 	}
-	tag, err := tx.Exec(ctx, `INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id,tx_ref,amount,currency_code) VALUES($1::uuid,$2,$3,$4,$5) ON CONFLICT(flutterwave_transaction_id) DO NOTHING`, subscriptionID, transactionID, txRef, paidAmount, strings.ToUpper(strings.TrimSpace(currency)))
+	// Serialize settlements per provider so two successful callbacks cannot
+	// calculate overlapping entitlement periods.
+	var lockedProviderID string
+	if err = tx.QueryRow(ctx, `SELECT id::text FROM provider_organizations WHERE id=$1::uuid FOR UPDATE`, providerID).Scan(&lockedProviderID); err != nil {
+		return fmt.Errorf("provider subscription owner not found")
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id,tx_ref,amount,currency_code) VALUES($1::uuid,$2::text,$3::text,$4::numeric,$5::text) ON CONFLICT(flutterwave_transaction_id) DO NOTHING`, subscriptionID, transactionID, txRef, paidAmount, strings.ToUpper(strings.TrimSpace(currency)))
 	if err != nil {
 		return err
 	}
 	isNewPayment := tag.RowsAffected() > 0
 	if !isNewPayment {
 		var existingSubscriptionID, existingTxRef string
-		err = tx.QueryRow(ctx, `SELECT subscription_id::text,tx_ref FROM provider_subscription_payments WHERE flutterwave_transaction_id=$1`, transactionID).Scan(&existingSubscriptionID, &existingTxRef)
+		err = tx.QueryRow(ctx, `SELECT subscription_id::text,tx_ref FROM provider_subscription_payments WHERE flutterwave_transaction_id=$1::text`, transactionID).Scan(&existingSubscriptionID, &existingTxRef)
 		if err != nil {
 			return err
 		}
@@ -1071,9 +1077,9 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	}
 	var updateTag pgconn.CommandTag
 	if isNewPayment {
-		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2,starts_at=COALESCE(starts_at,now()),current_period_end=GREATEST(COALESCE(current_period_end,now()),now())+interval '1 month',last_payment_at=now(),updated_at=now(),version=version+1 WHERE id=$1::uuid`, subscriptionID, transactionID)
+		updateTag, err = tx.Exec(ctx, `WITH entitlement AS (SELECT GREATEST(now(),COALESCE(MAX(current_period_end) FILTER (WHERE status='active' AND current_period_end>now() AND id<>$1::uuid),now())) AS starts_at FROM provider_subscriptions WHERE provider_id=$3::uuid) UPDATE provider_subscriptions s SET status='active',flutterwave_transaction_id=$2::text,starts_at=entitlement.starts_at,current_period_end=entitlement.starts_at+interval '1 month',last_payment_at=now(),updated_at=now(),version=s.version+1 FROM entitlement WHERE s.id=$1::uuid`, subscriptionID, transactionID, providerID)
 	} else {
-		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2,starts_at=COALESCE(starts_at,now()),current_period_end=CASE WHEN current_period_end IS NULL OR current_period_end <= now() THEN now()+interval '1 month' ELSE current_period_end END,last_payment_at=COALESCE(last_payment_at,now()),updated_at=now(),version=version+1 WHERE id=$1::uuid AND (status<>'active' OR flutterwave_transaction_id IS NULL OR starts_at IS NULL OR current_period_end IS NULL OR current_period_end <= now())`, subscriptionID, transactionID)
+		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2::text,starts_at=COALESCE(starts_at,now()),current_period_end=CASE WHEN current_period_end IS NULL OR current_period_end <= now() THEN now()+interval '1 month' ELSE current_period_end END,last_payment_at=COALESCE(last_payment_at,now()),updated_at=now(),version=version+1 WHERE id=$1::uuid AND (status<>'active' OR flutterwave_transaction_id IS NULL OR starts_at IS NULL OR current_period_end IS NULL OR current_period_end <= now())`, subscriptionID, transactionID)
 	}
 	if err != nil {
 		return err
@@ -1095,7 +1101,7 @@ func (m *ProviderMarketplaceController) AdminListProviders(c *fiber.Ctx) error {
 	}
 	search := strings.TrimSpace(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.business_name,p.contact_email,p.contact_phone,p.city,p.state,p.verification_status,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p LEFT JOIN LATERAL(SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY created_at DESC LIMIT 1)s ON true WHERE ($1='' OR p.verification_status=$1) AND ($2='' OR (p.business_name||' '||p.contact_email||' '||p.contact_phone||' '||p.city||' '||p.state) ILIKE '%'||$2||'%') AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, status, search, cursorTime, cursorID, limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.business_name,p.contact_email,p.contact_phone,p.city,p.state,p.verification_status,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p LEFT JOIN LATERAL(SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1)s ON true WHERE ($1='' OR p.verification_status=$1) AND ($2='' OR (p.business_name||' '||p.contact_email||' '||p.contact_phone||' '||p.city||' '||p.state) ILIKE '%'||$2||'%') AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, status, search, cursorTime, cursorID, limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
