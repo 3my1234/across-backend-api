@@ -47,11 +47,23 @@ func normalizeMerchantProduct(req *merchantProductPayload) {
 	req.InventoryCity = strings.TrimSpace(req.InventoryCity)
 	req.InventoryLocation = strings.TrimSpace(req.InventoryLocation)
 	req.StockState = strings.ToLower(strings.TrimSpace(req.StockState))
-	if req.StockState == "" {
-		if req.FulfillmentMode == "merchant_cross_border" {
-			req.StockState = "foreign_stock"
-		} else {
+	// Normalize values emitted by older cached versions of the provider portal.
+	// The fulfillment route is authoritative; stock_state is stored canonically.
+	switch req.FulfillmentMode {
+	case "merchant_local":
+		switch req.StockState {
+		case "", "available", "in_stock", "locally_available":
 			req.StockState = "locally_available"
+		}
+		if req.InventoryCountryCode == "" {
+			req.InventoryCountryCode = "NG"
+		}
+	case "merchant_cross_border":
+		switch req.StockState {
+		case "", "available", "in_stock", "foreign_stock":
+			req.StockState = "foreign_stock"
+		case "preorder", "made_to_order", "import_on_demand":
+			req.StockState = "import_on_demand"
 		}
 	}
 	if req.HandlingTimeHours == 0 {
@@ -106,8 +118,13 @@ func validateMerchantProduct(req merchantProductPayload) error {
 	if req.FulfillmentMode == "merchant_local" && (req.InventoryCountryCode != "NG" || req.StockState != "locally_available") {
 		return fmt.Errorf("local products must be available in Nigeria")
 	}
-	if req.FulfillmentMode == "merchant_cross_border" && req.StockState == "locally_available" {
-		return fmt.Errorf("cross-border products must use foreign_stock or import_on_demand")
+	if req.FulfillmentMode == "merchant_cross_border" {
+		if req.InventoryCountryCode == "NG" {
+			return fmt.Errorf("cross-border products must use a non-Nigerian stock country")
+		}
+		if req.StockState != "foreign_stock" && req.StockState != "import_on_demand" {
+			return fmt.Errorf("cross-border products must use foreign_stock or import_on_demand")
+		}
 	}
 	if req.HandlingTimeHours < 0 || req.DeliveryMinDays < 0 || req.DeliveryMaxDays < req.DeliveryMinDays {
 		return fmt.Errorf("delivery window is invalid")
