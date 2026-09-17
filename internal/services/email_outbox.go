@@ -33,12 +33,48 @@ type emailQueryer interface {
 
 type emailDelivery struct {
 	ID             string
-	UserID         string
+	UserID         *string
 	RecipientEmail string
 	RecipientName  string
 	TemplateType   string
 	Payload        json.RawMessage
 	Attempts       int
+}
+
+func QueueMarketplaceEmail(ctx context.Context, db emailQueryer, userID, dedupeKey string, payload map[string]string) error {
+	return queueUserEmail(ctx, db, userID, dedupeKey, "marketplace_activity", payload)
+}
+
+func QueueDirectMarketplaceEmail(ctx context.Context, db emailQueryer, recipientEmail, recipientName, dedupeKey string, payload map[string]string) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	email := strings.ToLower(strings.TrimSpace(recipientEmail))
+	if email == "" {
+		return errors.New("recipient email is required")
+	}
+	var status string
+	err = db.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO email_outbox(dedupe_key, recipient_email, recipient_name, template_type, payload, status)
+			VALUES ($1, $2, btrim($3), 'marketplace_activity', $4::jsonb,
+				CASE WHEN EXISTS (SELECT 1 FROM email_suppressions WHERE email = $2) THEN 'suppressed' ELSE 'pending' END)
+			ON CONFLICT (dedupe_key) DO NOTHING
+			RETURNING status
+		)
+		SELECT status FROM inserted
+		UNION ALL
+		SELECT status FROM email_outbox WHERE dedupe_key = $1 AND recipient_email = $2
+		LIMIT 1
+	`, dedupeKey, email, recipientName, encoded).Scan(&status)
+	if err != nil {
+		return err
+	}
+	if status == "suppressed" {
+		return ErrRecipientSuppressed
+	}
+	return nil
 }
 
 func QueueVerificationEmail(ctx context.Context, db emailQueryer, userID, token, publicBaseURL string) error {
@@ -205,15 +241,17 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 }
 
 func deliverEmail(ctx context.Context, db *pgxpool.Pool, sender *EmailService, item emailDelivery) error {
-	var currentEmail, currentName string
-	if err := db.QueryRow(ctx, `SELECT lower(btrim(email)), btrim(full_name) FROM users WHERE id = $1::uuid`, item.UserID).Scan(&currentEmail, &currentName); err != nil {
-		return failEmail(ctx, db, item, "email owner no longer exists")
+	if item.UserID != nil {
+		var currentEmail, currentName string
+		if err := db.QueryRow(ctx, `SELECT lower(btrim(email)), btrim(full_name) FROM users WHERE id = $1::uuid`, *item.UserID).Scan(&currentEmail, &currentName); err != nil {
+			return failEmail(ctx, db, item, "email owner no longer exists")
+		}
+		if currentEmail != strings.ToLower(strings.TrimSpace(item.RecipientEmail)) {
+			return failEmail(ctx, db, item, "email recipient no longer belongs to the queued account")
+		}
+		item.RecipientEmail = currentEmail
+		item.RecipientName = currentName
 	}
-	if currentEmail != strings.ToLower(strings.TrimSpace(item.RecipientEmail)) {
-		return failEmail(ctx, db, item, "email recipient no longer belongs to the queued account")
-	}
-	item.RecipientEmail = currentEmail
-	item.RecipientName = currentName
 	var suppressed bool
 	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM email_suppressions WHERE email = $1)`, item.RecipientEmail).Scan(&suppressed); err != nil {
 		return retryEmail(ctx, db, item, err.Error())
@@ -230,7 +268,11 @@ func deliverEmail(ctx context.Context, db *pgxpool.Pool, sender *EmailService, i
 		return retryEmail(ctx, db, item, err.Error())
 	}
 	recipientDigest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(item.RecipientEmail))))
-	log.Printf("email outbox delivered id=%s user_id=%s template=%s recipient_hash=%s", item.ID, item.UserID, item.TemplateType, hex.EncodeToString(recipientDigest[:8]))
+	owner := "direct"
+	if item.UserID != nil {
+		owner = *item.UserID
+	}
+	log.Printf("email outbox delivered id=%s owner=%s template=%s recipient_hash=%s", item.ID, owner, item.TemplateType, hex.EncodeToString(recipientDigest[:8]))
 	_, err := db.Exec(ctx, `
 		UPDATE email_outbox SET status = 'sent', sent_at = now(), locked_at = NULL,
 			last_error = '', updated_at = now()

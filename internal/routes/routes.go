@@ -222,6 +222,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/providers/me/listings/:listing_id/availability", marketplaceController.UpsertAvailability)
 	authed.Get("/providers/me/requests", marketplaceController.ListProviderRequests)
 	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
+	authed.Get("/providers/me/notifications", marketplaceController.ListProviderNotifications)
+	authed.Patch("/providers/me/notifications/read-all", marketplaceController.MarkProviderNotificationsRead)
 	authed.Post("/providers/me/subscription-checkout", countryGuard, marketplaceController.SubscriptionCheckout)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"across/backend/internal/config"
+	"across/backend/internal/services"
 	"across/backend/internal/storage"
 
 	"github.com/gofiber/fiber/v2"
@@ -38,6 +39,37 @@ type ProviderMarketplaceController struct {
 
 func NewProviderMarketplaceController(db *pgxpool.Pool, cfg config.Config) *ProviderMarketplaceController {
 	return &ProviderMarketplaceController{db: db, cfg: cfg, httpClient: &http.Client{Timeout: 12 * time.Second}, s3: storage.NewS3(cfg)}
+}
+
+func (m *ProviderMarketplaceController) queueProviderActivity(ctx context.Context, providerID, listingID, eventType, title, body, dedupeKey string, metadata map[string]any) {
+	encoded, _ := json.Marshal(metadata)
+	_, _ = m.db.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,listing_id,event_type,metadata)
+		VALUES($1::uuid,NULLIF($2::text,'')::uuid,$3,$4::jsonb)`, providerID, listingID, eventType, encoded)
+	var userID, email, name string
+	if err := m.db.QueryRow(ctx, `SELECT pm.user_id::text,u.email,u.full_name
+		FROM provider_members pm JOIN users u ON u.id=pm.user_id
+		WHERE pm.provider_id=$1::uuid AND pm.is_active=true
+		ORDER BY CASE WHEN pm.role='owner' THEN 0 ELSE 1 END,pm.created_at LIMIT 1`, providerID).Scan(&userID, &email, &name); err == nil {
+		_ = services.QueueMarketplaceEmail(ctx, m.db, userID, dedupeKey, map[string]string{
+			"recipient_name": name, "title": title, "body": body,
+		})
+	}
+}
+
+func (m *ProviderMarketplaceController) queueAdminMarketplaceEmail(ctx context.Context, title, body, dedupeKey string) {
+	rows, err := m.db.Query(ctx, `SELECT email,full_name FROM admins WHERE is_active=true AND role IN ('super_admin','admin_i') ORDER BY id`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var email, name string
+		if rows.Scan(&email, &name) == nil {
+			_ = services.QueueDirectMarketplaceEmail(ctx, m.db, email, name, dedupeKey+":"+strings.ToLower(email), map[string]string{
+				"recipient_name": name, "title": title, "body": body,
+			})
+		}
+	}
 }
 
 type marketplaceCursor struct {
@@ -366,14 +398,14 @@ type listingPayload struct {
 
 func validListingType(t string) bool {
 	switch t {
-	case "hotel", "short_let", "car_rental", "car_wash", "shop_rental", "property", "land":
+	case "hotel", "short_let", "car_rental", "car_wash", "mechanic", "plumber", "carpenter", "fuel_station", "food_vendor", "artisan", "shop_rental", "property", "land":
 		return true
 	}
 	return false
 }
 func directBookingType(t string) bool {
 	switch t {
-	case "hotel", "short_let", "car_rental", "car_wash":
+	case "hotel", "short_let", "car_rental", "car_wash", "mechanic", "plumber", "carpenter", "fuel_station", "food_vendor", "artisan":
 		return true
 	}
 	return false
@@ -520,6 +552,10 @@ func (m *ProviderMarketplaceController) SubmitListing(c *fiber.Ctx) error {
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusConflict, "listing cannot be submitted")
 	}
+	var title, business string
+	if m.db.QueryRow(c.Context(), `SELECT l.title,p.business_name FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id WHERE l.id=$1::uuid`, c.Params("listing_id")).Scan(&title, &business) == nil {
+		m.queueAdminMarketplaceEmail(c.Context(), "Service listing awaiting review", business+" submitted "+title+" for moderation.", "listing-submitted:"+c.Params("listing_id"))
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -608,7 +644,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
 	search := strings.TrimSpace(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.published_at,l.created_at,COALESCE(s.active,false),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND COALESCE(s.active,false))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,COALESCE(s.active,false),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND COALESCE(s.active,false))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "listings unavailable")
 	}
@@ -619,6 +655,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	var lastID string
 	for rows.Next() {
 		var id, pid, business, lt, title, slug, desc, category, address, city, state, country, currency, unit, lstatus string
+		var moderationNotes *string
 		var price *float64
 		var capacity int
 		var media []string
@@ -628,7 +665,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		var subscribed bool
 		var latitude, longitude, radius *float64
 		var mobile, available bool
-		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &published, &created, &subscribed, &latitude, &longitude, &radius, &mobile, &available); err != nil {
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &moderationNotes, &published, &created, &subscribed, &latitude, &longitude, &radius, &mobile, &available); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
@@ -637,7 +674,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		}
 		var attributes map[string]any
 		_ = json.Unmarshal(attrs, &attributes)
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "status": lstatus, "published_at": published, "created_at": created, "contact_available": subscribed, "latitude": latitude, "longitude": longitude, "service_radius_km": radius, "is_mobile_service": mobile, "is_available_now": available, "direct_booking": directBookingType(lt), "safety_warning": func() string {
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "slug": slug, "description": desc, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "capacity": capacity, "media_urls": media, "attributes": attributes, "status": lstatus, "moderation_notes": moderationNotes, "published_at": published, "created_at": created, "contact_available": subscribed, "latitude": latitude, "longitude": longitude, "service_radius_km": radius, "is_mobile_service": mobile, "is_available_now": available, "direct_booking": directBookingType(lt), "safety_warning": func() string {
 			if lt == "property" || lt == "land" || lt == "shop_rental" {
 				return propertySafetyWarning
 			}
@@ -776,6 +813,7 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 	if err = tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
+	m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "request_created", "New buyer request", buyerName+" sent a "+wanted+" for "+listingTitle+".", "provider-request:"+requestID, map[string]any{"request_id": requestID, "request_type": wanted, "listing_title": listingTitle})
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": requestID, "status": "pending"})
 }
 
@@ -901,12 +939,62 @@ func (m *ProviderMarketplaceController) UpdateProviderRequest(c *fiber.Ctx) erro
 	if req.Status != "accepted" && req.Status != "rejected" && req.Status != "completed" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "status must be accepted, rejected, or completed")
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_requests SET status=$1,updated_at=now() WHERE id=$2::uuid AND provider_id=$3::uuid AND (($1 IN ('accepted','rejected') AND status='pending') OR ($1='completed' AND status='accepted'))`, req.Status, c.Params("request_id"), providerID)
+	var buyerID, listingID string
+	err = m.db.QueryRow(c.Context(), `UPDATE provider_requests SET status=$1::text,updated_at=now() WHERE id=$2::uuid AND provider_id=$3::uuid AND (($1::text IN ('accepted','rejected') AND status='pending') OR ($1::text='completed' AND status='accepted')) RETURNING user_id::text,listing_id::text`, req.Status, c.Params("request_id"), providerID).Scan(&buyerID, &listingID)
+	if err == pgx.ErrNoRows {
+		return fiber.NewError(fiber.StatusConflict, "request status has changed; reload and try again")
+	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	if tag.RowsAffected() == 0 {
-		return fiber.NewError(fiber.StatusConflict, "request status has changed; reload and try again")
+	var listingTitle string
+	_ = m.db.QueryRow(c.Context(), `SELECT title FROM provider_listings WHERE id=$1::uuid`, listingID).Scan(&listingTitle)
+	message := "Your request for " + listingTitle + " was " + req.Status + "."
+	data, _ := json.Marshal(map[string]string{"request_id": c.Params("request_id"), "listing_id": listingID, "status": req.Status})
+	_, _ = m.db.Exec(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,event_key) VALUES($1::uuid,'marketplace_request','Provider request updated',$2,$3::jsonb,$4) ON CONFLICT(event_key) DO NOTHING`, buyerID, message, data, "provider-request-status:"+c.Params("request_id")+":"+req.Status)
+	_ = services.QueueMarketplaceEmail(c.Context(), m.db, buyerID, "provider-request-email:"+c.Params("request_id")+":"+req.Status, map[string]string{"title": "Provider request updated", "body": message})
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (m *ProviderMarketplaceController) ListProviderNotifications(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	providerID, _, err := m.providerForUser(c.Context(), userID)
+	if err != nil {
+		return fiber.ErrForbidden
+	}
+	limit := marketplaceLimit(c)
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,event_type,metadata,read_at,created_at FROM provider_marketplace_events WHERE provider_id=$1::uuid ORDER BY created_at DESC,id DESC LIMIT $2`, providerID, limit)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer rows.Close()
+	items := make([]fiber.Map, 0, limit)
+	for rows.Next() {
+		var id, eventType string
+		var metadata []byte
+		var readAt *time.Time
+		var createdAt time.Time
+		if rows.Scan(&id, &eventType, &metadata, &readAt, &createdAt) != nil {
+			return fiber.ErrInternalServerError
+		}
+		var details map[string]any
+		_ = json.Unmarshal(metadata, &details)
+		items = append(items, fiber.Map{"id": id, "event_type": eventType, "metadata": details, "read_at": readAt, "created_at": createdAt})
+	}
+	var unread int
+	_ = m.db.QueryRow(c.Context(), `SELECT COUNT(*) FROM provider_marketplace_events WHERE provider_id=$1::uuid AND read_at IS NULL`, providerID).Scan(&unread)
+	return c.JSON(fiber.Map{"items": items, "unread_count": unread})
+}
+
+func (m *ProviderMarketplaceController) MarkProviderNotificationsRead(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	providerID, _, err := m.providerForUser(c.Context(), userID)
+	if err != nil {
+		return fiber.ErrForbidden
+	}
+	_, err = m.db.Exec(c.Context(), `UPDATE provider_marketplace_events SET read_at=COALESCE(read_at,now()) WHERE provider_id=$1::uuid AND read_at IS NULL`, providerID)
+	if err != nil {
+		return fiber.ErrInternalServerError
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -1146,6 +1234,11 @@ func (m *ProviderMarketplaceController) AdminVerifyProvider(c *fiber.Ctx) error 
 		}
 		return fiber.ErrNotFound
 	}
+	message := "Your Atlantic Express provider verification is now " + status + "."
+	if strings.TrimSpace(req.Notes) != "" {
+		message += " " + strings.TrimSpace(req.Notes)
+	}
+	m.queueProviderActivity(c.Context(), c.Params("provider_id"), "", "provider_"+status, "Provider verification updated", message, "provider-verification:"+c.Params("provider_id")+":"+status, map[string]any{"status": status, "notes": strings.TrimSpace(req.Notes)})
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -1169,6 +1262,14 @@ func (m *ProviderMarketplaceController) AdminModerateListing(c *fiber.Ctx) error
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.ErrNotFound
+	}
+	var providerID, title string
+	if m.db.QueryRow(c.Context(), `SELECT provider_id::text,title FROM provider_listings WHERE id=$1::uuid`, c.Params("listing_id")).Scan(&providerID, &title) == nil {
+		message := title + " was " + status + " by Atlantic Express."
+		if strings.TrimSpace(req.Notes) != "" {
+			message += " " + strings.TrimSpace(req.Notes)
+		}
+		m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "listing_"+status, "Service listing updated", message, "listing-moderation:"+c.Params("listing_id")+":"+status, map[string]any{"status": status, "notes": strings.TrimSpace(req.Notes), "listing_title": title})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

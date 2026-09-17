@@ -220,6 +220,10 @@ func (m *ProviderMarketplaceController) SubmitMerchantProduct(c *fiber.Ctx) erro
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusConflict, "product cannot be submitted")
 	}
+	var title, business string
+	if m.db.QueryRow(c.Context(), `SELECT pr.title,p.business_name FROM products pr JOIN provider_organizations p ON p.id=pr.provider_id WHERE pr.id=$1::uuid`, c.Params("product_id")).Scan(&title, &business) == nil {
+		m.queueAdminMarketplaceEmail(c.Context(), "Merchant product awaiting review", business+" submitted "+title+" for moderation.", "merchant-product-submitted:"+c.Params("product_id"))
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -311,6 +315,14 @@ func (m *ProviderMarketplaceController) AdminModerateMerchantProduct(c *fiber.Ct
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.ErrNotFound
+	}
+	var providerID, title string
+	if m.db.QueryRow(c.Context(), `SELECT provider_id::text,title FROM products WHERE id=$1::uuid`, c.Params("product_id")).Scan(&providerID, &title) == nil {
+		message := title + " was " + req.Status + " by Atlantic Express."
+		if strings.TrimSpace(req.Notes) != "" {
+			message += " " + strings.TrimSpace(req.Notes)
+		}
+		m.queueProviderActivity(c.Context(), providerID, "", "product_"+req.Status, "Product moderation updated", message, "product-moderation:"+c.Params("product_id")+":"+req.Status, map[string]any{"product_id": c.Params("product_id"), "status": req.Status, "notes": strings.TrimSpace(req.Notes), "title": title})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

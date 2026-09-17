@@ -104,9 +104,36 @@ func (e *EmailService) SendOutboxTemplate(toEmail, toName, templateType string, 
 		return e.sendWelcomeEmail(toEmail, toName, messageID)
 	case "password_reset":
 		return e.sendPasswordResetEmail(toEmail, toName, values["reset_url"], messageID)
+	case "marketplace_activity":
+		return e.sendMarketplaceActivityEmail(toEmail, values, messageID)
 	default:
 		return fmt.Errorf("unsupported email template %q", templateType)
 	}
+}
+
+func (e *EmailService) sendMarketplaceActivityEmail(toEmail string, values map[string]string, messageID string) error {
+	subject := strings.TrimSpace(values["subject"])
+	if subject == "" {
+		subject = "Atlantic Express marketplace update"
+	}
+	title := strings.TrimSpace(values["title"])
+	if title == "" {
+		title = subject
+	}
+	message := strings.TrimSpace(values["message"])
+	plain := message
+	content := `<p style="margin:0;color:#344b47;font-size:16px;line-height:1.65;">` +
+		strings.ReplaceAll(html.EscapeString(message), "\n", "<br>") + `</p>`
+	if actionURL := strings.TrimSpace(values["action_url"]); actionURL != "" {
+		label := strings.TrimSpace(values["action_label"])
+		if label == "" {
+			label = "View update"
+		}
+		escapedURL := html.EscapeString(actionURL)
+		content += `<p style="margin:24px 0 0;"><a href="` + escapedURL + `" style="display:inline-block;background:#ff4e55;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px;">` + html.EscapeString(label) + `</a></p>`
+		plain += "\n\n" + label + ": " + actionURL
+	}
+	return e.sendHTMLWithText(toEmail, subject, plain, e.layout(title, message, content), messageID)
 }
 
 func (e *EmailService) layout(title, preheader, content string) string {
