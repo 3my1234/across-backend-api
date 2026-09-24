@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com,https://atlanticexpress-admin.sportbanter.online"
+	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com"
 	defaultAPIBaseURL     = "https://api.atlxpres.com"
 	defaultAssetsCDNBase  = "https://media.atlxpres.com"
 	defaultWebsiteURL     = "https://atlxpres.com"
