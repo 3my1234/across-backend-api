@@ -6,7 +6,7 @@ func validMerchantProductPayload() merchantProductPayload {
 	return merchantProductPayload{
 		Title:                "Palm oil",
 		Description:          "Locally stocked palm oil",
-		ImageURLs:            []string{"https://media.sportbanter.online/products/palm-oil.jpg"},
+		ImageURLs:            []string{"https://media.atlxpres.com/products/palm-oil.jpg"},
 		Price:                50000,
 		InventoryCount:       100,
 		FulfillmentMode:      "merchant_local",

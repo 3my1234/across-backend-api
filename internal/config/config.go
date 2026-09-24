@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+const (
+	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com,https://atlanticexpress-admin.sportbanter.online"
+	defaultAPIBaseURL     = "https://api.atlxpres.com"
+	defaultAssetsCDNBase  = "https://media.atlxpres.com"
+	defaultWebsiteURL     = "https://atlxpres.com"
+)
+
 type Config struct {
 	AppEnv                   string
 	HTTPAddr                 string
@@ -52,7 +59,7 @@ func Load() Config {
 	brandLogoURL := strings.TrimSpace(env("BRAND_LOGO_URL", ""))
 	if brandLogoURL == "" || strings.Contains(brandLogoURL, "raw.githubusercontent.com/3my1234/across-mobile-app") {
 		if publicBaseURL == "" {
-			publicBaseURL = "https://atlanticexpress-api.sportbanter.online"
+			publicBaseURL = defaultAPIBaseURL
 		}
 		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png"
 	}
@@ -60,7 +67,7 @@ func Load() Config {
 	return Config{
 		AppEnv:                   env("APP_ENV", "development"),
 		HTTPAddr:                 env("HTTP_ADDR", ":8080"),
-		AllowedOrigins:           env("ALLOWED_ORIGINS", "*"),
+		AllowedOrigins:           env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		DatabaseURL:              databaseURL(),
 		RedisURL:                 env("REDIS_URL", ""),
 		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
@@ -81,18 +88,18 @@ func Load() Config {
 		AWSAccessKeyID:           env("AWS_ACCESS_KEY_ID", ""),
 		AWSSecretAccessKey:       env("AWS_SECRET_ACCESS_KEY", ""),
 		S3BucketName:             firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
-		AssetsCDNBase:            env("ASSETS_CDN_BASE", ""),
+		AssetsCDNBase:            env("ASSETS_CDN_BASE", defaultAssetsCDNBase),
 		PublicBaseURL:            publicBaseURL,
 		SMTPHost:                 env("SMTP_HOST", ""),
 		SMTPPort:                 env("SMTP_PORT", "587"),
 		SMTPUsername:             env("SMTP_USERNAME", ""),
 		SMTPPassword:             env("SMTP_PASSWORD", ""),
-		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@sportbanter.online"),
+		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@atlxpres.com"),
 		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
 		SMTPReplyTo:              env("SMTP_REPLY_TO", ""),
 		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:             brandLogoURL,
-		WebsiteURL:               env("WEBSITE_URL", "https://atlanticexpress-web.sportbanter.online"),
+		WebsiteURL:               env("WEBSITE_URL", defaultWebsiteURL),
 	}
 }
 

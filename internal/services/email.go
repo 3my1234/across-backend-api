@@ -170,7 +170,7 @@ func (e *EmailService) sendHTMLWithText(toEmail, subject, textBody, htmlBody, me
 	if messageID == "" {
 		messageID = fmt.Sprintf("%d.%s", time.Now().UnixNano(), strings.ReplaceAll(toEmail, "@", "."))
 	}
-	messageDomain := "sportbanter.online"
+	messageDomain := "atlxpres.com"
 	if index := strings.LastIndex(e.cfg.SMTPFromEmail, "@"); index >= 0 && index < len(e.cfg.SMTPFromEmail)-1 {
 		messageDomain = e.cfg.SMTPFromEmail[index+1:]
 	}

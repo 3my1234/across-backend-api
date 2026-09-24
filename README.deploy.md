@@ -21,7 +21,7 @@ Health check:
 Recommended production domain:
 
 ```text
-https://api.sportbanter.online
+https://api.atlxpres.com
 ```
 
 ## Required Environment Variables
@@ -54,12 +54,13 @@ Set `SMTP_FROM_EMAIL` to an address on a domain you control and verify with the 
 Recommended runtime variables:
 
 ```env
-PUBLIC_BASE_URL=https://atlanticexpress-api.sportbanter.online
-WEBSITE_URL=https://atlanticexpress-web.sportbanter.online
-BRAND_LOGO_URL=https://your-public-domain.example/atlantic-express-logo.png
+PUBLIC_BASE_URL=https://api.atlxpres.com
+WEBSITE_URL=https://atlxpres.com
+ASSETS_CDN_BASE=https://media.atlxpres.com
+BRAND_LOGO_URL=https://api.atlxpres.com/api/v1/public/brand/logo.png
 SMTP_FROM_NAME=Atlantic Express
-SMTP_FROM_EMAIL=no-reply@your-domain.example
-SMTP_REPLY_TO=support@your-domain.example
+SMTP_FROM_EMAIL=welcome@atlxpres.com
+SMTP_REPLY_TO=support@atlxpres.com
 ```
 
 `BRAND_LOGO_URL` must be a publicly reachable HTTPS image because email clients cannot load assets bundled inside the mobile application.
