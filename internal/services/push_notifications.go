@@ -27,6 +27,7 @@ type pushDelivery struct {
 	Title          string
 	Body           string
 	Data           json.RawMessage
+	SoundEnabled   bool
 	Attempts       int
 	TicketID       string
 }
@@ -167,7 +168,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		SELECT d.notification_id::text, COALESCE(n.order_id::text, ''), d.push_token_id::text, token.expo_push_token,
-			n.title, n.body, n.data, d.attempts
+			n.title, n.body, n.data, d.attempts, token.sound_enabled
 		FROM notification_push_deliveries d
 		JOIN notifications n ON n.id = d.notification_id
 		JOIN user_push_tokens token ON token.id = d.push_token_id AND token.disabled_at IS NULL
@@ -182,7 +183,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	deliveries := make([]pushDelivery, 0, pushBatchLimit)
 	for rows.Next() {
 		var item pushDelivery
-		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts); err != nil {
+		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -217,10 +218,15 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		if item.OrderID != "" {
 			data["order_id"] = item.OrderID
 		}
-		messages = append(messages, map[string]any{
+		message := map[string]any{
 			"to": item.Token, "title": item.Title, "body": item.Body,
-			"sound": "default", "channelId": "orders", "data": data,
-		})
+			"channelId": "orders-silent", "data": data,
+		}
+		if item.SoundEnabled {
+			message["sound"] = "default"
+			message["channelId"] = "orders"
+		}
+		messages = append(messages, message)
 	}
 	payload, err := json.Marshal(messages)
 	if err != nil {

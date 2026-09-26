@@ -3,6 +3,8 @@ package controllers
 import "testing"
 
 func validMerchantProductPayload() merchantProductPayload {
+	latitude, longitude := 9.0765, 7.3986
+
 	return merchantProductPayload{
 		Title:                "Palm oil",
 		Description:          "Locally stocked palm oil",
@@ -14,6 +16,8 @@ func validMerchantProductPayload() merchantProductPayload {
 		InventoryCity:        "Abuja",
 		InventoryLocation:    "Banex, Wuse 2",
 		StockState:           "locally_available",
+		InventoryLatitude:    &latitude,
+		InventoryLongitude:   &longitude,
 		HandlingTimeHours:    24,
 		DeliveryMinDays:      1,
 		DeliveryMaxDays:      3,
@@ -65,5 +69,15 @@ func TestValidateMerchantProductRejectsCrossBorderStockInNigeria(t *testing.T) {
 
 	if err := validateMerchantProduct(req); err == nil {
 		t.Fatal("expected cross-border inventory in Nigeria to be rejected")
+	}
+}
+
+func TestValidateMerchantProductRequiresLocalCoordinates(t *testing.T) {
+	req := validMerchantProductPayload()
+	req.InventoryLatitude = nil
+	req.InventoryLongitude = nil
+
+	if err := validateMerchantProduct(req); err == nil {
+		t.Fatal("expected local stock without coordinates to be rejected")
 	}
 }

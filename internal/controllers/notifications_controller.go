@@ -103,8 +103,9 @@ func (nc *NotificationsController) MarkAllRead(c *fiber.Ctx) error {
 func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	var req struct {
-		Token    string `json:"token"`
-		Platform string `json:"platform"`
+		Token        string `json:"token"`
+		Platform     string `json:"platform"`
+		SoundEnabled *bool  `json:"sound_enabled"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid push token payload")
@@ -115,6 +116,10 @@ func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid push token")
 	}
 
+	soundEnabled := true
+	if req.SoundEnabled != nil {
+		soundEnabled = *req.SoundEnabled
+	}
 	tx, err := nc.db.Begin(c.Context())
 	if err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "push registration unavailable")
@@ -122,16 +127,17 @@ func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 	defer tx.Rollback(c.Context())
 	var tokenID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO user_push_tokens(user_id, expo_push_token, platform)
-		VALUES ($1::uuid, $2::text, $3::text)
+		INSERT INTO user_push_tokens(user_id, expo_push_token, platform, sound_enabled)
+		VALUES ($1::uuid, $2::text, $3::text, $4::boolean)
 		ON CONFLICT (expo_push_token) DO UPDATE
 		SET user_id = EXCLUDED.user_id,
 			platform = EXCLUDED.platform,
+			sound_enabled = EXCLUDED.sound_enabled,
 			disabled_at = NULL,
 			last_seen_at = now(),
 			updated_at = now()
 		RETURNING id::text
-	`, userID, req.Token, req.Platform).Scan(&tokenID); err != nil {
+	`, userID, req.Token, req.Platform, soundEnabled).Scan(&tokenID); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "push registration failed")
 	}
 	// Backfill only recent unread notifications. This covers the race between

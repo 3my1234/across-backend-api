@@ -433,6 +433,9 @@ func validateListing(req listingPayload) error {
 	if req.Price != nil && *req.Price < 0 {
 		return fmt.Errorf("price cannot be negative")
 	}
+	if directBookingType(req.ListingType) && (req.Latitude == nil || req.Longitude == nil) {
+		return fmt.Errorf("capture the service location before saving this listing")
+	}
 	if (req.Latitude == nil) != (req.Longitude == nil) {
 		return fmt.Errorf("latitude and longitude must be supplied together")
 	}
@@ -545,12 +548,12 @@ func (m *ProviderMarketplaceController) SubmitListing(c *fiber.Ctx) error {
 	} else if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET status='pending',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status IN ('draft','rejected')`, c.Params("listing_id"), providerID)
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET status='pending',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status IN ('draft','rejected') AND (listing_type NOT IN ('hotel','short_let','car_rental','car_wash','mechanic','plumber','carpenter','fuel_station','food_vendor','artisan') OR (latitude IS NOT NULL AND longitude IS NOT NULL))`, c.Params("listing_id"), providerID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
-		return fiber.NewError(fiber.StatusConflict, "listing cannot be submitted")
+		return fiber.NewError(fiber.StatusConflict, "listing cannot be submitted; service listings require a captured location")
 	}
 	var title, business string
 	if m.db.QueryRow(c.Context(), `SELECT l.title,p.business_name FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id WHERE l.id=$1::uuid`, c.Params("listing_id")).Scan(&title, &business) == nil {
@@ -599,20 +602,23 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 	}
 	lonDelta := radius / (111.32 * lonScale)
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
+	search := strings.TrimSpace(c.Query("search"))
 	availableOnly := strings.EqualFold(c.Query("available_now"), "true")
 	rows, err := m.db.Query(c.Context(), `WITH candidates AS (
 		SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.description,l.category,
 			l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.media_urls,
 			l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,
+			l.review_count,l.review_rating_sum,
 			6371 * 2 * asin(sqrt(power(sin(radians((l.latitude::float8-$1::float8)/2)),2)+cos(radians($1::float8))*cos(radians(l.latitude::float8))*power(sin(radians((l.longitude::float8-$2::float8)/2)),2))) AS distance_km
 		FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id
 		WHERE l.status='approved' AND p.verification_status='approved' AND p.is_active=true
 		  AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())
 		  AND l.latitude BETWEEN $3 AND $4 AND l.longitude BETWEEN $5 AND $6
 		  AND ($7='' OR l.listing_type=$7) AND (NOT $8 OR l.is_available_now=true)
+		  AND ($9='' OR (l.title||' '||l.description||' '||l.category||' '||p.business_name||' '||l.city||' '||l.state) ILIKE '%%'||$9||'%%')
 	)
-	SELECT * FROM candidates WHERE distance_km <= $9 AND (NOT is_mobile_service OR service_radius_km IS NULL OR distance_km <= service_radius_km)
-	ORDER BY distance_km ASC,id ASC LIMIT $10`, latitude, longitude, latitude-latDelta, latitude+latDelta, longitude-lonDelta, longitude+lonDelta, listingType, availableOnly, radius, limit+1)
+	SELECT * FROM candidates WHERE distance_km <= $10 AND (NOT is_mobile_service OR service_radius_km IS NULL OR distance_km <= service_radius_km)
+	ORDER BY distance_km ASC,id ASC LIMIT $11`, latitude, longitude, latitude-latDelta, latitude+latDelta, longitude-lonDelta, longitude+lonDelta, listingType, availableOnly, search, radius, limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "nearby services unavailable")
 	}
@@ -623,14 +629,19 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 		var price, lat, lon, serviceRadius *float64
 		var media []string
 		var mobile, available bool
+		var reviewCount, reviewRatingSum int
 		var distance float64
-		if err := rows.Scan(&id, &pid, &business, &lt, &title, &description, &category, &address, &city, &state, &country, &price, &currency, &unit, &media, &lat, &lon, &serviceRadius, &mobile, &available, &distance); err != nil {
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &description, &category, &address, &city, &state, &country, &price, &currency, &unit, &media, &lat, &lon, &serviceRadius, &mobile, &available, &reviewCount, &reviewRatingSum, &distance); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
 			break
 		}
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "description": description, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "media_urls": media, "latitude": lat, "longitude": lon, "service_radius_km": serviceRadius, "is_mobile_service": mobile, "is_available_now": available, "distance_km": math.Round(distance*10) / 10, "direct_booking": directBookingType(lt)})
+		rating := 0.0
+		if reviewCount > 0 {
+			rating = math.Round((float64(reviewRatingSum)/float64(reviewCount))*10) / 10
+		}
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "description": description, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "media_urls": media, "latitude": lat, "longitude": lon, "service_radius_km": serviceRadius, "is_mobile_service": mobile, "is_available_now": available, "distance_km": math.Round(distance*10) / 10, "direct_booking": directBookingType(lt), "review_count": reviewCount, "average_rating": rating})
 	}
 	return c.JSON(fiber.Map{"items": items, "has_more": len(items) == limit})
 }
@@ -893,7 +904,7 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 	}
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	search := strings.TrimSpace(c.Query("search"))
-	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,'') FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,''),review.rating FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id LEFT JOIN provider_listing_reviews review ON review.request_id=r.id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -905,15 +916,16 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 		var id, requestType, requestStatus, message, listingID, title, listingType, providerName, buyerName, buyerEmail, buyerPhone string
 		var startsAt, endsAt *time.Time
 		var partySize int
+		var reviewRating *int
 		var createdAt time.Time
-		if err := rows.Scan(&id, &requestType, &requestStatus, &startsAt, &endsAt, &partySize, &message, &createdAt, &listingID, &title, &listingType, &providerName, &buyerName, &buyerEmail, &buyerPhone); err != nil {
+		if err := rows.Scan(&id, &requestType, &requestStatus, &startsAt, &endsAt, &partySize, &message, &createdAt, &listingID, &title, &listingType, &providerName, &buyerName, &buyerEmail, &buyerPhone, &reviewRating); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
 			next = encodeMarketplaceCursor(lastCreated, lastID)
 			break
 		}
-		item := fiber.Map{"id": id, "request_type": requestType, "status": requestStatus, "starts_at": startsAt, "ends_at": endsAt, "party_size": partySize, "message": message, "created_at": createdAt, "listing_id": listingID, "listing_title": title, "listing_type": listingType, "provider_name": providerName}
+		item := fiber.Map{"id": id, "request_type": requestType, "status": requestStatus, "starts_at": startsAt, "ends_at": endsAt, "party_size": partySize, "message": message, "created_at": createdAt, "listing_id": listingID, "listing_title": title, "listing_type": listingType, "provider_name": providerName, "review_rating": reviewRating}
 		if scope == "provider" {
 			item["buyer"] = fiber.Map{"full_name": buyerName, "email": buyerEmail, "phone": buyerPhone}
 		}
@@ -950,6 +962,9 @@ func (m *ProviderMarketplaceController) UpdateProviderRequest(c *fiber.Ctx) erro
 	var listingTitle string
 	_ = m.db.QueryRow(c.Context(), `SELECT title FROM provider_listings WHERE id=$1::uuid`, listingID).Scan(&listingTitle)
 	message := "Your request for " + listingTitle + " was " + req.Status + "."
+	if req.Status == "completed" {
+		message += " Please rate the provider to help other customers. Your first review earns 50 XP."
+	}
 	data, _ := json.Marshal(map[string]string{"request_id": c.Params("request_id"), "listing_id": listingID, "status": req.Status})
 	_, _ = m.db.Exec(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,event_key) VALUES($1::uuid,'marketplace_request','Provider request updated',$2,$3::jsonb,$4) ON CONFLICT(event_key) DO NOTHING`, buyerID, message, data, "provider-request-status:"+c.Params("request_id")+":"+req.Status)
 	_ = services.QueueMarketplaceEmail(c.Context(), m.db, buyerID, "provider-request-email:"+c.Params("request_id")+":"+req.Status, map[string]string{"title": "Provider request updated", "body": message})
@@ -997,6 +1012,83 @@ func (m *ProviderMarketplaceController) MarkProviderNotificationsRead(c *fiber.C
 		return fiber.ErrInternalServerError
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (m *ProviderMarketplaceController) ListListingReviews(c *fiber.Ctx) error {
+	limit := marketplaceLimit(c)
+	rows, err := m.db.Query(c.Context(), `SELECT review.id::text,review.rating,review.review_text,review.created_at,COALESCE(NULLIF(u.full_name,''),'Atlantic Express customer')
+		FROM provider_listing_reviews review JOIN users u ON u.id=review.user_id
+		JOIN provider_listings listing ON listing.id=review.listing_id
+		WHERE review.listing_id=$1::uuid AND listing.status='approved'
+		ORDER BY review.created_at DESC,review.id DESC LIMIT $2`, c.Params("listing_id"), limit)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "reviews unavailable")
+	}
+	defer rows.Close()
+	items := make([]fiber.Map, 0, limit)
+	for rows.Next() {
+		var id, reviewText, name string
+		var rating int
+		var created time.Time
+		if err := rows.Scan(&id, &rating, &reviewText, &created, &name); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		items = append(items, fiber.Map{"id": id, "rating": rating, "review_text": reviewText, "created_at": created, "reviewer_name": name})
+	}
+	return c.JSON(fiber.Map{"items": items})
+}
+
+func (m *ProviderMarketplaceController) UpsertListingReview(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	var req struct {
+		RequestID  string `json:"request_id"`
+		Rating     int    `json:"rating"`
+		ReviewText string `json:"review_text"`
+	}
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.RequestID) == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "request_id is required")
+	}
+	if req.Rating < 1 || req.Rating > 5 {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "rating must be between 1 and 5")
+	}
+	req.ReviewText = strings.TrimSpace(req.ReviewText)
+	if len([]rune(req.ReviewText)) > 1000 {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "review_text must be 1000 characters or fewer")
+	}
+	tx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrServiceUnavailable
+	}
+	defer tx.Rollback(c.Context())
+	var listingID string
+	err = tx.QueryRow(c.Context(), `SELECT listing_id::text FROM provider_requests WHERE id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid AND status='completed' FOR UPDATE`, req.RequestID, c.Params("listing_id"), userID).Scan(&listingID)
+	if err == pgx.ErrNoRows {
+		return fiber.NewError(fiber.StatusForbidden, "a completed service request is required before reviewing")
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	tag, err := tx.Exec(c.Context(), `INSERT INTO provider_listing_reviews(request_id,listing_id,user_id,rating,review_text) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5) ON CONFLICT(request_id) DO NOTHING`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	created := tag.RowsAffected() > 0
+	if !created {
+		tag, err = tx.Exec(c.Context(), `UPDATE provider_listing_reviews SET rating=$4,review_text=$5,updated_at=now() WHERE request_id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
+		if err != nil || tag.RowsAffected() == 0 {
+			return fiber.ErrForbidden
+		}
+	} else if _, err = tx.Exec(c.Context(), `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,50,'provider_review','provider-review-'||$2::text) ON CONFLICT DO NOTHING`, userID, req.RequestID); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	xpAwarded := 0
+	if created {
+		xpAwarded = 50
+	}
+	return c.JSON(fiber.Map{"rating": req.Rating, "review_text": req.ReviewText, "xp_awarded": xpAwarded})
 }
 
 func (m *ProviderMarketplaceController) ReportListing(c *fiber.Ctx) error {

@@ -97,6 +97,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/marketplace/listings", marketplaceController.ListPublicListings)
 	v1.Get("/marketplace/nearby", marketplaceController.ListNearbyListings)
 	v1.Get("/marketplace/listings/:listing_id", marketplaceController.GetPublicListing)
+	v1.Get("/marketplace/listings/:listing_id/reviews", marketplaceController.ListListingReviews)
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
@@ -229,6 +230,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
 	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
+	authed.Put("/marketplace/listings/:listing_id/review", marketplaceController.UpsertListingReview)
 	authed.Post("/marketplace/listings/:listing_id/reports", marketplaceController.ReportListing)
 
 	// XP System

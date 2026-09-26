@@ -23,6 +23,24 @@ func NewCatalogController(db *pgxpool.Pool, cfg config.Config) *CatalogControlle
 }
 
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
+	latitudeRaw := strings.TrimSpace(c.Query("latitude"))
+	longitudeRaw := strings.TrimSpace(c.Query("longitude"))
+	hasLocation := latitudeRaw != "" || longitudeRaw != ""
+	latitude, longitude := 0.0, 0.0
+	var parseErr error
+	if hasLocation {
+		if latitudeRaw == "" || longitudeRaw == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "latitude and longitude must be supplied together")
+		}
+		latitude, parseErr = strconv.ParseFloat(latitudeRaw, 64)
+		if parseErr != nil || latitude < -90 || latitude > 90 {
+			return fiber.NewError(fiber.StatusBadRequest, "valid latitude is required")
+		}
+		longitude, parseErr = strconv.ParseFloat(longitudeRaw, 64)
+		if parseErr != nil || longitude < -180 || longitude > 180 {
+			return fiber.NewError(fiber.StatusBadRequest, "valid longitude is required")
+		}
+	}
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code,
@@ -33,14 +51,15 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
-			p.provider_id::text,p.fulfillment_mode
+			p.provider_id::text,p.fulfillment_mode,
+			CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 6371 * 2 * asin(sqrt(power(sin(radians((p.inventory_latitude::float8-$2::float8)/2)),2)+cos(radians($2::float8))*cos(radians(p.inventory_latitude::float8))*power(sin(radians((p.inventory_longitude::float8-$3::float8)/2)),2))) END AS distance_km
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved'
 		  AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
-		ORDER BY p.created_at DESC
+		ORDER BY CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
 		LIMIT 80
-	`)
+	`, hasLocation, latitude, longitude)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "catalog unavailable")
 	}
@@ -56,8 +75,9 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		var factoryRaw []byte
 		var isFlashSale bool
 		var providerID *string
+		var distanceKM *float64
 		var fulfillmentMode string
-		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode); err != nil {
+		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode, &distanceKM); err != nil {
 			return err
 		}
 		factory := map[string]any{}
@@ -79,6 +99,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			"provider_id":      stringValue(providerID),
 			"fulfillment_mode": fulfillmentMode,
 			"factory_details":  factory,
+			"distance_km":      distanceKM,
 			"origin_hub": fiber.Map{
 				"id":   hubID,
 				"name": hubName,
