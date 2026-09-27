@@ -482,7 +482,7 @@ const updateProductSQL = `
 		is_flash_sale = $9::boolean,
 		flash_sale_price = CASE WHEN $9::boolean THEN $10::numeric ELSE NULL::numeric END,
 		updated_at = now()
-	WHERE id = $1
+	WHERE id = $1 AND provider_id IS NULL
 `
 
 func validateProductPrices(regularPrice, compareAtPrice float64, isFlashSale bool, flashSalePrice float64) error {
@@ -583,7 +583,8 @@ func (a *AdminController) ListProducts(c *fiber.Ctx) error {
 			p.inventory_count, p.is_active, p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.created_at, p.updated_at,
 			COUNT(*) OVER() AS total_count
 		FROM products p
-		WHERE ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
+		WHERE p.provider_id IS NULL
+		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
 			OR p.description ILIKE '%' || $1 || '%' OR array_to_string(p.category_path, ' ') ILIKE '%' || $1 || '%')
 		  AND ($2::timestamptz IS NULL OR (p.created_at, p.id) < ($2, $3::uuid))
 		ORDER BY p.created_at DESC, p.id DESC
@@ -660,7 +661,7 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 	}
 	var currentPrice, currentCompareAtPrice, currentFlashPrice float64
 	var currentIsFlashSale bool
-	if err := a.db.QueryRow(c.Context(), `SELECT local_selling_price, COALESCE(compare_at_price, 0), is_flash_sale, COALESCE(flash_sale_price, 0) FROM products WHERE id = $1`, productID).Scan(&currentPrice, &currentCompareAtPrice, &currentIsFlashSale, &currentFlashPrice); err != nil {
+	if err := a.db.QueryRow(c.Context(), `SELECT local_selling_price, COALESCE(compare_at_price, 0), is_flash_sale, COALESCE(flash_sale_price, 0) FROM products WHERE id = $1 AND provider_id IS NULL`, productID).Scan(&currentPrice, &currentCompareAtPrice, &currentIsFlashSale, &currentFlashPrice); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
 	nextPrice := currentPrice
@@ -695,7 +696,7 @@ func (a *AdminController) UpdateProduct(c *fiber.Ctx) error {
 
 	var oldImageURLs []string
 	if req.ImageURLs != nil {
-		if err := a.db.QueryRow(c.Context(), `SELECT COALESCE(image_urls, '{}') FROM products WHERE id = $1`, productID).Scan(&oldImageURLs); err != nil {
+		if err := a.db.QueryRow(c.Context(), `SELECT COALESCE(image_urls, '{}') FROM products WHERE id = $1 AND provider_id IS NULL`, productID).Scan(&oldImageURLs); err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "product not found")
 		}
 	}
@@ -725,7 +726,7 @@ func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 			SELECT COUNT(*)::int FROM order_items oi WHERE oi.product_id = p.id
 		)
 		FROM products p
-		WHERE p.id = $1
+		WHERE p.id = $1 AND p.provider_id IS NULL
 	`, productID).Scan(&imageURLs, &orderItemCount)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
@@ -746,7 +747,7 @@ func (a *AdminController) DeleteProduct(c *fiber.Ctx) error {
 		}
 	}
 
-	tag, err := a.db.Exec(c.Context(), `DELETE FROM products WHERE id = $1`, productID)
+	tag, err := a.db.Exec(c.Context(), `DELETE FROM products WHERE id = $1 AND provider_id IS NULL`, productID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusConflict, "product could not be deleted")
 	}

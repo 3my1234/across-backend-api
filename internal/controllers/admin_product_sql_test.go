@@ -60,3 +60,9 @@ func TestValidateProductPrices(t *testing.T) {
 		})
 	}
 }
+
+func TestCoreAdminProductUpdateExcludesProviderProducts(t *testing.T) {
+	if !strings.Contains(updateProductSQL, "provider_id IS NULL") {
+		t.Fatal("core product updates must not bypass merchant-product moderation")
+	}
+}

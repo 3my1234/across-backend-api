@@ -323,22 +323,21 @@ func (m *ProviderMarketplaceController) AdminModerateMerchantProduct(c *fiber.Ct
 	if req.Status != "approved" && req.Status != "rejected" && req.Status != "suspended" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "invalid moderation status")
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE products SET moderation_status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,is_active=($2='approved' AND inventory_count>0),catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id IS NOT NULL AND moderation_status<>'archived'`, c.Params("product_id"), req.Status, strings.TrimSpace(req.Notes), adminID)
+	var providerID, title, persistedStatus string
+	var updatedAt time.Time
+	err := m.db.QueryRow(c.Context(), `UPDATE products SET moderation_status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,is_active=($2='approved' AND inventory_count>0),catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id IS NOT NULL AND moderation_status<>'archived' RETURNING provider_id::text,title,moderation_status::text,updated_at`, c.Params("product_id"), req.Status, strings.TrimSpace(req.Notes), adminID).Scan(&providerID, &title, &persistedStatus, &updatedAt)
+	if err == pgx.ErrNoRows {
+		return fiber.ErrNotFound
+	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	if tag.RowsAffected() == 0 {
-		return fiber.ErrNotFound
+	message := title + " was " + persistedStatus + " by Atlantic Express."
+	if strings.TrimSpace(req.Notes) != "" {
+		message += " " + strings.TrimSpace(req.Notes)
 	}
-	var providerID, title string
-	if m.db.QueryRow(c.Context(), `SELECT provider_id::text,title FROM products WHERE id=$1::uuid`, c.Params("product_id")).Scan(&providerID, &title) == nil {
-		message := title + " was " + req.Status + " by Atlantic Express."
-		if strings.TrimSpace(req.Notes) != "" {
-			message += " " + strings.TrimSpace(req.Notes)
-		}
-		m.queueProviderActivity(c.Context(), providerID, "", "product_"+req.Status, "Product moderation updated", message, "product-moderation:"+c.Params("product_id")+":"+req.Status, map[string]any{"product_id": c.Params("product_id"), "status": req.Status, "notes": strings.TrimSpace(req.Notes), "title": title})
-	}
-	return c.SendStatus(fiber.StatusNoContent)
+	m.queueProviderActivity(c.Context(), providerID, "", "product_"+persistedStatus, "Product moderation updated", message, "product-moderation:"+c.Params("product_id")+":"+persistedStatus, map[string]any{"product_id": c.Params("product_id"), "status": persistedStatus, "notes": strings.TrimSpace(req.Notes), "title": title})
+	return c.JSON(fiber.Map{"id": c.Params("product_id"), "title": title, "status": persistedStatus, "updated_at": updatedAt})
 }
 
 // ListMyMerchantOrders exposes paid merchant-fulfilment orders owned by the
