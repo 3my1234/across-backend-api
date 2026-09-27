@@ -1348,22 +1348,21 @@ func (m *ProviderMarketplaceController) AdminModerateListing(c *fiber.Ctx) error
 	if status != "approved" && status != "rejected" && status != "suspended" {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid moderation status")
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1::uuid AND status<>'archived'`, c.Params("listing_id"), status, strings.TrimSpace(req.Notes), adminID)
+	var providerID, title, persistedStatus string
+	var updatedAt time.Time
+	err := m.db.QueryRow(c.Context(), `UPDATE provider_listings SET status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1::uuid AND status<>'archived' RETURNING provider_id::text,title,status::text,updated_at`, c.Params("listing_id"), status, strings.TrimSpace(req.Notes), adminID).Scan(&providerID, &title, &persistedStatus, &updatedAt)
+	if err == pgx.ErrNoRows {
+		return fiber.ErrNotFound
+	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	if tag.RowsAffected() == 0 {
-		return fiber.ErrNotFound
+	message := title + " was " + persistedStatus + " by Atlantic Express."
+	if strings.TrimSpace(req.Notes) != "" {
+		message += " " + strings.TrimSpace(req.Notes)
 	}
-	var providerID, title string
-	if m.db.QueryRow(c.Context(), `SELECT provider_id::text,title FROM provider_listings WHERE id=$1::uuid`, c.Params("listing_id")).Scan(&providerID, &title) == nil {
-		message := title + " was " + status + " by Atlantic Express."
-		if strings.TrimSpace(req.Notes) != "" {
-			message += " " + strings.TrimSpace(req.Notes)
-		}
-		m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "listing_"+status, "Service listing updated", message, "listing-moderation:"+c.Params("listing_id")+":"+status, map[string]any{"status": status, "notes": strings.TrimSpace(req.Notes), "listing_title": title})
-	}
-	return c.SendStatus(fiber.StatusNoContent)
+	m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "listing_"+persistedStatus, "Service listing updated", message, "listing-moderation:"+c.Params("listing_id")+":"+persistedStatus, map[string]any{"status": persistedStatus, "notes": strings.TrimSpace(req.Notes), "listing_title": title})
+	return c.JSON(fiber.Map{"id": c.Params("listing_id"), "title": title, "status": persistedStatus, "updated_at": updatedAt})
 }
 
 func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
