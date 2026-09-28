@@ -508,26 +508,53 @@ func (o *OrderController) PaymentStatus(c *fiber.Ctx) error {
 		FlutterwaveTxRef         sql.NullString
 		FlutterwaveTransactionID sql.NullString
 		PaidAt                   sql.NullTime
+		Provider                 sql.NullString
+		ProviderReference        sql.NullString
+		ProviderTransactionID    sql.NullString
+		PaymentStatus            sql.NullString
+		RefundStatus             sql.NullString
+		ChargebackStatus         sql.NullString
+		SettlementStatus         sql.NullString
 	}
 	if err := o.db.QueryRow(c.Context(), `
-		SELECT order_status::text, current_tracking_stage::text,
-			flutterwave_tx_ref, flutterwave_transaction_id, paid_at
-		FROM orders
-		WHERE id = $1 AND user_id = $2
+		SELECT o.order_status::text,o.current_tracking_stage::text,
+			o.flutterwave_tx_ref,o.flutterwave_transaction_id,o.paid_at,
+			p.provider,p.provider_reference,p.provider_transaction_id,
+			p.payment_status,p.refund_status,p.chargeback_status,p.settlement_status
+		FROM orders o
+		LEFT JOIN LATERAL (
+			SELECT provider,provider_reference,provider_transaction_id,
+				payment_status,refund_status,chargeback_status,settlement_status
+			FROM payments
+			WHERE order_id=o.id
+			ORDER BY created_at DESC,id DESC
+			LIMIT 1
+		) p ON true
+		WHERE o.id = $1 AND o.user_id = $2
 	`, orderID, userID).Scan(
 		&status.OrderStatus,
 		&status.CurrentStage,
 		&status.FlutterwaveTxRef,
 		&status.FlutterwaveTransactionID,
 		&status.PaidAt,
+		&status.Provider,
+		&status.ProviderReference,
+		&status.ProviderTransactionID,
+		&status.PaymentStatus,
+		&status.RefundStatus,
+		&status.ChargebackStatus,
+		&status.SettlementStatus,
 	); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payment status unavailable")
 	}
 
-	paymentState := "pending"
-	if status.OrderStatus == "Paid" || status.OrderStatus == "Shipped" || status.OrderStatus == "Delivered" || status.OrderStatus == "Completed" {
+	paymentState := status.PaymentStatus.String
+	if paymentState == "" {
+		paymentState = "pending"
+	}
+	if status.SettlementStatus.String == "settled" || status.OrderStatus == "Paid" || status.OrderStatus == "Shipped" || status.OrderStatus == "Delivered" || status.OrderStatus == "Completed" {
 		paymentState = "settled"
-	} else if status.FlutterwaveTxRef.Valid {
+	} else if paymentState == "processing" || status.FlutterwaveTxRef.Valid {
 		paymentState = "processing"
 	}
 
@@ -537,6 +564,13 @@ func (o *OrderController) PaymentStatus(c *fiber.Ctx) error {
 		"current_tracking_stage":     status.CurrentStage,
 		"flutterwave_tx_ref":         status.FlutterwaveTxRef.String,
 		"flutterwave_transaction_id": status.FlutterwaveTransactionID.String,
+		"provider":                   status.Provider.String,
+		"provider_reference":         status.ProviderReference.String,
+		"provider_transaction_id":    status.ProviderTransactionID.String,
+		"payment_status":             status.PaymentStatus.String,
+		"refund_status":              status.RefundStatus.String,
+		"chargeback_status":          status.ChargebackStatus.String,
+		"settlement_status":          status.SettlementStatus.String,
 		"paid_at": func() any {
 			if status.PaidAt.Valid {
 				return status.PaidAt.Time

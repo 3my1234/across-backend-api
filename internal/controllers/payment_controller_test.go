@@ -1,9 +1,13 @@
 package controllers
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -11,6 +15,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+type paymentRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f paymentRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestNewPaymentReferenceIsUniqueAndParseable(t *testing.T) {
 	orderID := uuid.NewString()
@@ -79,5 +89,54 @@ func TestMissingPurchasingProfileFields(t *testing.T) {
 	}
 	if complete := missingPurchasingProfileFields("buyer@example.com", "Buyer Name", "+2348000000000"); len(complete) != 0 {
 		t.Fatalf("complete purchasing profile was rejected: %#v", complete)
+	}
+}
+
+func TestSelectPaymentMethodsUsesCountryPolicy(t *testing.T) {
+	methods, err := selectPaymentMethods([]string{"card", "mpesa"}, "mpesa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(methods) != 1 || methods[0] != "mpesa" {
+		t.Fatalf("unexpected selected methods: %#v", methods)
+	}
+	if _, err := selectPaymentMethods([]string{"card", "mpesa"}, "ussd"); err == nil {
+		t.Fatal("a payment method outside the country policy must be rejected")
+	}
+}
+
+func TestFlutterwaveCheckoutUsesImmutableServerValues(t *testing.T) {
+	var captured []byte
+	client := &http.Client{Transport: paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		captured, _ = io.ReadAll(req.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewBufferString(`{"status":"success","data":{"link":"https://checkout.example/payment"}}`)),
+		}, nil
+	})}
+	provider := newFlutterwaveProvider("secret", client)
+	result, err := provider.InitializeCheckout(context.Background(), paymentCheckoutInput{
+		Reference: "ACROSS-order-attempt", Amount: 1250.50, Currency: "kes",
+		RedirectURL: "across://payments/flutterwave", PaymentMethods: []string{"card", "mpesa"},
+		Customer: map[string]any{"email": "buyer@example.com"},
+		Title:    "Checkout", Description: "Test", Metadata: map[string]any{"order_id": "order"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(captured)
+	for _, required := range []string{
+		`"tx_ref":"ACROSS-order-attempt"`,
+		`"amount":1250.5`,
+		`"currency":"KES"`,
+		`"payment_options":"card,mpesa"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("provider payload %s does not contain %s", body, required)
+		}
+	}
+	if result.CheckoutURL != "https://checkout.example/payment" {
+		t.Fatalf("unexpected checkout URL: %q", result.CheckoutURL)
 	}
 }

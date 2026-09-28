@@ -71,3 +71,22 @@ func TestMigration034KeepsProviderIntegrityRepairComplete(t *testing.T) {
 		t.Fatalf("provider integrity migration is incomplete: %#v", statements)
 	}
 }
+
+func TestMigration042KeepsImmutablePaymentTriggerComplete(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "migrations", "042_provider_independent_payments.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := splitSQLStatements(string(content))
+	joined := strings.Join(statements, "\n")
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS payments",
+		"CREATE TABLE IF NOT EXISTS payment_webhook_events",
+		"CREATE OR REPLACE FUNCTION protect_payment_financial_identity()",
+		"RAISE EXCEPTION 'payment financial identity is immutable'",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("payment foundation migration is missing %q", required)
+		}
+	}
+}

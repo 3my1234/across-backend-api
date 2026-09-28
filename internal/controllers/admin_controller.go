@@ -411,16 +411,19 @@ func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 		cursorID = page.CursorID
 	}
 	rows, err := a.db.Query(c.Context(), `
-		SELECT o.id, u.email, o.total_amount, o.currency_code, o.order_status::text,
-			COALESCE(o.flutterwave_tx_ref, ''),
-			COALESCE(o.flutterwave_transaction_id, ''),
-			o.paid_at, o.created_at, COUNT(*) OVER() AS total_count
-		FROM orders o
-		JOIN users u ON u.id = o.user_id
-		WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%' OR o.id::text = $1
-			OR o.flutterwave_tx_ref ILIKE '%' || $1 || '%' OR o.flutterwave_transaction_id ILIKE '%' || $1 || '%')
-		  AND ($2::timestamptz IS NULL OR (o.created_at, o.id) < ($2, $3::uuid))
-		ORDER BY o.created_at DESC, o.id DESC
+		SELECT p.id,COALESCE(p.order_id::text,''),COALESCE(u.email::text,''),p.amount,p.currency_code,
+			COALESCE(o.order_status::text,''),p.provider,p.purpose,p.provider_reference,
+			COALESCE(p.provider_transaction_id,''),p.payment_status,p.refund_status,
+			p.chargeback_status,p.settlement_status,p.paid_at,p.created_at,
+			COUNT(*) OVER() AS total_count
+		FROM payments p
+		LEFT JOIN orders o ON o.id=p.order_id
+		LEFT JOIN users u ON u.id=p.user_id
+		WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%' OR p.id::text = $1
+			OR p.order_id::text = $1 OR p.provider_reference ILIKE '%' || $1 || '%'
+			OR p.provider_transaction_id ILIKE '%' || $1 || '%')
+		  AND ($2::timestamptz IS NULL OR (p.created_at,p.id)<($2,$3::uuid))
+		ORDER BY p.created_at DESC,p.id DESC
 		LIMIT $4
 	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
@@ -430,21 +433,35 @@ func (a *AdminController) ListTransactions(c *fiber.Ctx) error {
 	transactions := make([]fiber.Map, 0)
 	var totalCount int64
 	for rows.Next() {
-		var id, email, currency, orderStatus, txRef, transactionID string
+		var id, orderID, email, currency, orderStatus, provider, purpose, providerRef, transactionID string
+		var paymentStatus, refundStatus, chargebackStatus, settlementStatus string
 		var total float64
 		var paidAt *time.Time
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &total, &currency, &orderStatus, &txRef, &transactionID, &paidAt, &createdAt, &totalCount); err != nil {
+		if err := rows.Scan(&id, &orderID, &email, &total, &currency, &orderStatus,
+			&provider, &purpose, &providerRef, &transactionID, &paymentStatus,
+			&refundStatus, &chargebackStatus, &settlementStatus,
+			&paidAt, &createdAt, &totalCount); err != nil {
 			return err
 		}
-		paymentStatus := "pending"
-		if paidAt != nil {
-			paymentStatus = "settled"
-		}
 		transactions = append(transactions, fiber.Map{
-			"id": id, "order_id": id, "email": email, "total_amount": total, "currency": currency,
-			"order_status": orderStatus, "payment_status": paymentStatus,
-			"flutterwave_tx_ref": txRef, "flutterwave_transaction_id": transactionID,
+			"id": id, "order_id": orderID, "email": email, "total_amount": total, "currency": currency,
+			"order_status": orderStatus, "provider": provider, "purpose": purpose,
+			"payment_status": paymentStatus, "refund_status": refundStatus,
+			"chargeback_status": chargebackStatus, "settlement_status": settlementStatus,
+			"provider_reference": providerRef, "provider_transaction_id": transactionID,
+			"flutterwave_tx_ref": func() string {
+				if provider == "flutterwave" {
+					return providerRef
+				}
+				return ""
+			}(),
+			"flutterwave_transaction_id": func() string {
+				if provider == "flutterwave" {
+					return transactionID
+				}
+				return ""
+			}(),
 			"paid_at": paidAt, "created_at": createdAt,
 		})
 	}

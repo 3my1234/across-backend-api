@@ -179,6 +179,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/orders", orders.ListOrders)
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
 	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
+	authed.Get("/payments/options", payments.PaymentOptions)
 	authed.Post("/orders/:order_id/confirm-receipt", ops.ConfirmReceipt)
 	authed.Post("/orders/:order_id/review-reward/claim", ops.ClaimReviewReward)
 	authed.Post("/payments/flutterwave/checkout", countryGuard, payments.FlutterwaveCheckout)

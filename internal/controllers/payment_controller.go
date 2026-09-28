@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -29,17 +28,18 @@ type PaymentController struct {
 	db         *pgxpool.Pool
 	cfg        config.Config
 	httpClient *http.Client
+	provider   paymentProvider
 	rewards    *RewardService
 }
 
 func NewPaymentController(db *pgxpool.Pool, cfg config.Config) *PaymentController {
+	client := &http.Client{Timeout: 12 * time.Second}
 	return &PaymentController{
-		db:      db,
-		cfg:     cfg,
-		rewards: NewRewardService(db),
-		httpClient: &http.Client{
-			Timeout: 12 * time.Second,
-		},
+		db:         db,
+		cfg:        cfg,
+		rewards:    NewRewardService(db),
+		httpClient: client,
+		provider:   newFlutterwaveProvider(cfg.FlutterwaveSecretKey, client),
 	}
 }
 
@@ -50,10 +50,11 @@ type tokenizedChargeRequest struct {
 }
 
 type flutterwaveCheckoutRequest struct {
-	OrderID     string `json:"order_id"`
-	Amount      string `json:"amount"`
-	Currency    string `json:"currency"`
-	RedirectURL string `json:"redirect_url"`
+	OrderID       string `json:"order_id"`
+	Amount        string `json:"amount"`
+	Currency      string `json:"currency"`
+	RedirectURL   string `json:"redirect_url"`
+	PaymentMethod string `json:"payment_method"`
 }
 
 type flutterwaveVerifyRequest struct {
@@ -80,8 +81,12 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	}
 
 	var orderAmount float64
-	var orderCurrency, orderStatus string
-	err = p.db.QueryRow(c.Context(), `SELECT total_amount, currency_code, order_status::text FROM orders WHERE id = $1 AND user_id = $2`, req.OrderID, userID).Scan(&orderAmount, &orderCurrency, &orderStatus)
+	var orderCurrency, orderStatus, countryCode string
+	err = p.db.QueryRow(c.Context(), `
+		SELECT o.total_amount,o.currency_code,o.order_status::text,c.country_code
+		FROM orders o JOIN countries_config c ON c.id=o.country_id
+		WHERE o.id=$1 AND o.user_id=$2 AND $3=ANY(c.active_payment_gateways)
+	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &orderCurrency, &orderStatus, &countryCode)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
 	}
@@ -90,6 +95,10 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	}
 
 	txRef := newPaymentReference(req.OrderID)
+	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, "saved_token"); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
+	}
+	_ = markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, "")
 	if p.mockPaymentsEnabled() {
 		if err := p.settleOrderPayment(c.Context(), req.OrderID, txRef, "local-dev", orderAmount, orderCurrency); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
@@ -117,6 +126,7 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
+		_ = markPaymentInitializationFailed(c.Context(), p.db, p.provider.Name(), txRef, err)
 		return fiber.NewError(fiber.StatusBadGateway, "payment gateway unavailable")
 	}
 	defer resp.Body.Close()
@@ -126,6 +136,7 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
 	}
 	if resp.StatusCode >= 300 {
+		_ = markPaymentInitializationFailed(c.Context(), p.db, p.provider.Name(), txRef, fmt.Errorf("tokenized charge returned %d", resp.StatusCode))
 		return c.Status(fiber.StatusBadGateway).JSON(gatewayResp)
 	}
 
@@ -142,8 +153,8 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
-	if strings.TrimSpace(req.OrderID) == "" || strings.TrimSpace(req.Amount) == "" || strings.TrimSpace(req.Currency) == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "order_id, amount, and currency are required")
+	if strings.TrimSpace(req.OrderID) == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "order_id is required")
 	}
 
 	var email, fullName, phone string
@@ -164,8 +175,21 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	}
 
 	var orderAmount float64
-	var orderCurrency, orderStatus string
-	err = p.db.QueryRow(c.Context(), `SELECT total_amount, currency_code, order_status::text FROM orders WHERE id = $1 AND user_id = $2`, req.OrderID, userID).Scan(&orderAmount, &orderCurrency, &orderStatus)
+	var orderCurrency, orderStatus, countryCode string
+	var paymentMethods []string
+	err = p.db.QueryRow(c.Context(), `
+		SELECT o.total_amount,o.currency_code,o.order_status::text,c.country_code,
+			COALESCE(policy.payment_methods,ARRAY['card']::text[])
+		FROM orders o
+		JOIN countries_config c ON c.id=o.country_id
+		LEFT JOIN payment_method_policies policy
+		  ON policy.country_code=c.country_code
+		 AND policy.currency_code=o.currency_code
+		 AND policy.provider=$3
+		 AND policy.is_active=true
+		WHERE o.id=$1 AND o.user_id=$2
+		  AND $3=ANY(c.active_payment_gateways)
+	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &orderCurrency, &orderStatus, &countryCode, &paymentMethods)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
 	}
@@ -174,11 +198,19 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	}
 
 	txRef := newPaymentReference(req.OrderID)
+	selectedMethods, err := selectPaymentMethods(paymentMethods, req.PaymentMethod)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
 	redirectURL := strings.TrimSpace(req.RedirectURL)
 	if redirectURL == "" {
 		redirectURL = "across://payments/flutterwave"
 	}
+	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, selectedMethods[0]); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
+	}
 	if p.mockPaymentsEnabled() {
+		_ = markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, "https://www.flutterwave.com")
 		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
 			"tx_ref":        txRef,
 			"gateway":       "flutterwave",
@@ -188,62 +220,22 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		})
 	}
 
-	payload := map[string]any{
-		"tx_ref":          txRef,
-		"amount":          orderAmount,
-		"currency":        strings.ToUpper(orderCurrency),
-		"redirect_url":    redirectURL,
-		"payment_options": "card,banktransfer,ussd",
-		"customer":        buildFlutterwaveCustomer(email, fullName, phone),
-		"configurations": map[string]any{
-			"session_duration":  30,
-			"max_retry_attempt": 5,
-		},
-		"customizations": map[string]any{
-			"title":       "Atlantic Express Checkout",
-			"description": "Pay securely with Flutterwave",
-		},
-		"meta": map[string]any{
-			"order_id": req.OrderID,
-		},
-	}
-	body, _ := json.Marshal(payload)
-	httpReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, "https://api.flutterwave.com/v3/payments", bytes.NewReader(body))
+	checkout, err := p.provider.InitializeCheckout(c.Context(), paymentCheckoutInput{
+		Reference: txRef, Amount: orderAmount, Currency: orderCurrency,
+		RedirectURL: redirectURL, PaymentMethods: selectedMethods,
+		Customer: buildFlutterwaveCustomer(email, fullName, phone),
+		Title:    "Atlantic Express Checkout", Description: "Pay securely with " + p.provider.Name(),
+		Metadata: map[string]any{"order_id": req.OrderID, "payment_provider": p.provider.Name()},
+	})
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "checkout request failed")
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.FlutterwaveSecretKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
+		_ = markPaymentInitializationFailed(c.Context(), p.db, p.provider.Name(), txRef, err)
+		var providerErr *paymentProviderError
+		if errors.As(err, &providerErr) {
+			return fiber.NewError(fiber.StatusBadGateway, providerErr.Message)
+		}
 		return fiber.NewError(fiber.StatusBadGateway, "payment gateway unavailable")
 	}
-	defer resp.Body.Close()
-
-	var gatewayResp map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&gatewayResp); err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
-	}
-	if resp.StatusCode >= 300 {
-		// Extract actual Flutterwave error message
-		errMsg := "payment declined by gateway"
-		if msg, ok := gatewayResp["message"].(string); ok && msg != "" {
-			errMsg = msg
-		} else if data, ok := gatewayResp["data"].(map[string]any); ok {
-			if msg, ok := data["message"].(string); ok && msg != "" {
-				errMsg = msg
-			}
-		}
-		return fiber.NewError(fiber.StatusBadGateway, errMsg)
-	}
-
-	link := ""
-	if data, ok := gatewayResp["data"].(map[string]any); ok {
-		if rawLink, ok := data["link"].(string); ok {
-			link = rawLink
-		}
-	}
+	link := checkout.CheckoutURL
 	if _, err := p.db.Exec(c.Context(), `
 		UPDATE orders
 		SET flutterwave_tx_ref = $3, updated_at = now()
@@ -251,12 +243,15 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	`, req.OrderID, userID, txRef); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
 	}
+	if err := markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, link); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not finalize payment attempt")
+	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
 		"tx_ref":        txRef,
-		"gateway":       "flutterwave",
+		"gateway":       p.provider.Name(),
 		"checkout_link": link,
 		"redirect_url":  redirectURL,
-		"response":      gatewayResp,
+		"response":      checkout.Raw,
 	})
 }
 
@@ -320,41 +315,60 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 	if eventType == "" {
 		eventType = strings.TrimSpace(event.Event)
 	}
+	eventReference := firstNonEmpty(event.Data.TxRef, event.Data.Reference)
+	eventTransactionID := gatewayID(event.Data.ID)
+	receipt, err := beginPaymentWebhook(c.Context(), p.db, p.provider.Name(), eventType, eventReference, eventTransactionID, raw)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not record webhook")
+	}
+	if receipt.Done {
+		return c.SendStatus(fiber.StatusOK)
+	}
 	if eventType != "charge.completed" || !successfulFlutterwaveStatus(event.Data.Status) {
 		log.Printf("flutterwave payment not settled event=%q status=%q tx_ref=%q transaction_id=%s",
-			eventType, event.Data.Status, firstNonEmpty(event.Data.TxRef, event.Data.Reference), stringify(event.Data.ID))
+			eventType, event.Data.Status, eventReference, eventTransactionID)
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "ignored", nil)
 		return c.SendStatus(fiber.StatusAccepted)
 	}
 
-	verified, err := p.verifyFlutterwaveTransaction(c.Context(), gatewayID(event.Data.ID), firstNonEmpty(event.Data.TxRef, event.Data.Reference))
+	verified, err := p.verifyFlutterwaveTransaction(c.Context(), eventTransactionID, eventReference)
 	if err != nil {
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusBadGateway, "could not verify transaction")
 	}
 	if !successfulFlutterwaveStatus(verified.Data.Status) {
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "ignored", nil)
 		return c.SendStatus(fiber.StatusAccepted)
 	}
 	txRef := firstNonEmpty(verified.Data.TxRef, verified.Data.Reference)
 	if strings.HasPrefix(txRef, "PROVIDER-") {
 		paidAmount, err := amountValue(verified.Data.Amount)
 		if err != nil {
+			finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 			return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
 		}
 		if err := settleProviderSubscription(c.Context(), p.db, txRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
+			finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 			return fiber.NewError(fiber.StatusConflict, err.Error())
 		}
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "processed", nil)
 		return c.SendStatus(fiber.StatusOK)
 	}
 	orderID, err := parseOrderID(txRef)
 	if err != nil {
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusBadRequest, "invalid tx_ref")
 	}
 	paidAmount, err := amountValue(verified.Data.Amount)
 	if err != nil {
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
 	}
 	if err := p.settleAndNotify(c.Context(), orderID, txRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
+		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
+	finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "processed", nil)
 	return c.SendStatus(fiber.StatusOK)
 }
 
@@ -633,35 +647,16 @@ func (p *PaymentController) validWebhook(raw []byte, signature, legacySignature 
 
 func (p *PaymentController) verifyFlutterwaveTransaction(ctx context.Context, transactionID, txRef string) (flutterwaveVerifyResponse, error) {
 	var result flutterwaveVerifyResponse
-	endpoint := ""
-	if transactionID != "" {
-		if _, err := strconv.ParseInt(transactionID, 10, 64); err == nil {
-			endpoint = "https://api.flutterwave.com/v3/transactions/" + transactionID + "/verify"
-		}
-	}
-	if endpoint == "" && txRef != "" {
-		endpoint = "https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=" + url.QueryEscape(txRef)
-	}
-	if endpoint == "" {
-		return result, errors.New("transaction id or reference is required")
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	verified, err := p.provider.VerifyPayment(ctx, transactionID, txRef)
 	if err != nil {
 		return result, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.FlutterwaveSecretKey)
-	httpReq.Header.Set("Accept", "application/json")
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return result, err
-	}
-	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return result, err
-	}
-	if resp.StatusCode >= 300 {
-		return result, fmt.Errorf("flutterwave verification returned %d", resp.StatusCode)
-	}
+	result.Status = "success"
+	result.Data.ID = verified.TransactionID
+	result.Data.TxRef = verified.Reference
+	result.Data.Status = verified.Status
+	result.Data.Amount = verified.Amount
+	result.Data.Currency = verified.Currency
 	return result, nil
 }
 
@@ -691,9 +686,15 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	}
 	if orderStatus != "Pending" {
 		if existingTxRef == txRef && (orderStatus == "Paid" || orderStatus == "Shipped" || orderStatus == "Delivered" || orderStatus == "Completed") {
+			if err := settlePaymentLedger(ctx, tx, p.provider.Name(), txRef, gatewayID, "successful"); err != nil {
+				return err
+			}
 			return tx.Commit(ctx)
 		}
 		return errors.New("order is not payable")
+	}
+	if err := settlePaymentLedger(ctx, tx, p.provider.Name(), txRef, gatewayID, "successful"); err != nil {
+		return err
 	}
 
 	var batchID any

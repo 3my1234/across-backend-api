@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -31,14 +30,15 @@ const propertySafetyWarning = "Never pay a provider before you inspect and indep
 var slugCleaner = regexp.MustCompile(`[^a-z0-9]+`)
 
 type ProviderMarketplaceController struct {
-	db         *pgxpool.Pool
-	cfg        config.Config
-	httpClient *http.Client
-	s3         *storage.S3
+	db              *pgxpool.Pool
+	cfg             config.Config
+	paymentProvider paymentProvider
+	s3              *storage.S3
 }
 
 func NewProviderMarketplaceController(db *pgxpool.Pool, cfg config.Config) *ProviderMarketplaceController {
-	return &ProviderMarketplaceController{db: db, cfg: cfg, httpClient: &http.Client{Timeout: 12 * time.Second}, s3: storage.NewS3(cfg)}
+	client := &http.Client{Timeout: 12 * time.Second}
+	return &ProviderMarketplaceController{db: db, cfg: cfg, paymentProvider: newFlutterwaveProvider(cfg.FlutterwaveSecretKey, client), s3: storage.NewS3(cfg)}
 }
 
 func (m *ProviderMarketplaceController) queueProviderActivity(ctx context.Context, providerID, listingID, eventType, title, body, dedupeKey string, metadata map[string]any) {
@@ -1197,14 +1197,14 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if fwPlanID == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
 	}
-	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus string
+	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
 	err = m.db.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
-		p.business_name,p.contact_email,p.contact_phone,p.verification_status
+		p.business_name,p.contact_email,p.contact_phone,p.verification_status,p.country_code
 		FROM users u
 		JOIN provider_members member ON member.user_id=u.id AND member.provider_id=$2::uuid AND member.is_active=true
 		JOIN provider_organizations p ON p.id=member.provider_id AND p.is_active=true
-		WHERE u.id=$1::uuid AND u.is_active=true`, userID, providerID).Scan(&email, &fullName, &phone, &emailVerified, &providerName, &providerEmail, &providerPhone, &verificationStatus)
+		WHERE u.id=$1::uuid AND u.is_active=true`, userID, providerID).Scan(&email, &fullName, &phone, &emailVerified, &providerName, &providerEmail, &providerPhone, &verificationStatus, &countryCode)
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "complete your provider profile before subscribing")
 	}
@@ -1231,35 +1231,43 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if redirect == "" {
 		redirect = "across://providers/subscription"
 	}
-	payload := map[string]any{"tx_ref": txRef, "amount": amount, "currency": "NGN", "redirect_url": redirect, "payment_options": "card", "payment_plan": *fwPlanID, "customer": buildFlutterwaveCustomer(email, fullName, phone), "customizations": map[string]any{"title": "Atlantic Express Provider Subscription", "description": name + " monthly plan"}, "meta": map[string]any{"payment_kind": "provider_subscription", "provider_id": providerID, "plan_id": planID}}
-	body, _ := json.Marshal(payload)
-	httpReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, "https://api.flutterwave.com/v3/payments", bytes.NewReader(body))
+	var subscriptionID string
+	err = m.db.QueryRow(c.Context(), `
+		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email)
+		VALUES($1::uuid,$2::uuid,'pending',$3,$4)
+		RETURNING id::text
+	`, providerID, planID, txRef, email).Scan(&subscriptionID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+m.cfg.FlutterwaveSecretKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := m.httpClient.Do(httpReq)
+	if err := recordSubscriptionPaymentAttempt(c.Context(), m.db, m.paymentProvider.Name(), subscriptionID, userID, countryCode, amount, "NGN", txRef, "card"); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not record subscription payment")
+	}
+	checkout, err := m.paymentProvider.InitializeCheckout(c.Context(), paymentCheckoutInput{
+		Reference: txRef, Amount: amount, Currency: "NGN", RedirectURL: redirect,
+		PaymentMethods: []string{"card"}, PaymentPlanID: fwPlanID,
+		Customer: buildFlutterwaveCustomer(email, fullName, phone),
+		Title:    "Atlantic Express Provider Subscription", Description: name + " monthly plan",
+		Metadata: map[string]any{
+			"payment_kind": "provider_subscription", "provider_id": providerID,
+			"plan_id": planID, "payment_provider": m.paymentProvider.Name(),
+		},
+	})
 	if err != nil {
+		_ = markPaymentInitializationFailed(c.Context(), m.db, m.paymentProvider.Name(), txRef, err)
+		var providerErr *paymentProviderError
+		if errors.As(err, &providerErr) {
+			return fiber.NewError(fiber.StatusBadGateway, providerErr.Message)
+		}
 		return fiber.NewError(fiber.StatusBadGateway, "payment gateway unavailable")
 	}
-	defer resp.Body.Close()
-	var gateway map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&gateway); err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, "invalid payment gateway response")
+	if err := markPaymentCheckoutReady(c.Context(), m.db, m.paymentProvider.Name(), txRef, checkout.CheckoutURL); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not finalize subscription payment")
 	}
-	if resp.StatusCode >= 300 {
-		return c.Status(fiber.StatusBadGateway).JSON(gateway)
-	}
-	_, err = m.db.Exec(c.Context(), `INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email) VALUES($1::uuid,$2::uuid,'pending',$3,$4)`, providerID, planID, txRef, email)
-	if err != nil {
-		return fiber.ErrInternalServerError
-	}
-	link := ""
-	if data, ok := gateway["data"].(map[string]any); ok {
-		link, _ = data["link"].(string)
-	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"tx_ref": txRef, "checkout_link": link, "redirect_url": redirect})
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"tx_ref": txRef, "provider": m.paymentProvider.Name(),
+		"checkout_link": checkout.CheckoutURL, "redirect_url": redirect,
+	})
 }
 
 func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, transactionID string, paidAmount float64, currency string) error {
@@ -1273,14 +1281,27 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var subscriptionID, providerID string
+	var subscriptionID, providerID, ownerUserID, countryCode string
 	var expected float64
-	err = tx.QueryRow(ctx, `SELECT s.id::text,s.provider_id::text,p.amount_ngn FROM provider_subscriptions s JOIN provider_subscription_plans p ON p.id=s.plan_id WHERE s.tx_ref=$1::text FOR UPDATE`, txRef).Scan(&subscriptionID, &providerID, &expected)
+	err = tx.QueryRow(ctx, `
+		SELECT s.id::text,s.provider_id::text,p.amount_ngn,organization.owner_user_id::text,organization.country_code
+		FROM provider_subscriptions s
+		JOIN provider_subscription_plans p ON p.id=s.plan_id
+		JOIN provider_organizations organization ON organization.id=s.provider_id
+		WHERE s.tx_ref=$1::text
+		FOR UPDATE OF s
+	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode)
 	if err != nil {
 		return fmt.Errorf("provider subscription not found")
 	}
 	if strings.ToUpper(strings.TrimSpace(currency)) != "NGN" || paidAmount+0.01 < expected {
 		return fmt.Errorf("provider subscription amount mismatch")
+	}
+	if err := settleSubscriptionPaymentLedger(
+		ctx, tx, subscriptionID, ownerUserID, countryCode, txRef, transactionID,
+		paidAmount, currency, "successful",
+	); err != nil {
+		return err
 	}
 	// Serialize settlements per provider so two successful callbacks cannot
 	// calculate overlapping entitlement periods.
