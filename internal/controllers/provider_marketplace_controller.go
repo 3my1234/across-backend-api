@@ -122,6 +122,36 @@ func (m *ProviderMarketplaceController) providerForUser(ctx context.Context, use
 	return providerID, role, err
 }
 
+func normalizeProviderType(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "product_merchant", "service_professional", "property_host", "mobility_provider", "mixed", "other":
+		return value
+	default:
+		return ""
+	}
+}
+
+func providerTypeCapabilities(providerType string) (canSellProducts, canOfferServices bool) {
+	switch providerType {
+	case "product_merchant":
+		return true, false
+	case "service_professional", "property_host", "mobility_provider":
+		return false, true
+	default:
+		return true, true
+	}
+}
+
+func (m *ProviderMarketplaceController) providerCapabilities(ctx context.Context, providerID string) (bool, bool, error) {
+	var providerType string
+	if err := m.db.QueryRow(ctx, `SELECT provider_type FROM provider_organizations WHERE id=$1::uuid AND is_active=true`, providerID).Scan(&providerType); err != nil {
+		return false, false, err
+	}
+	products, services := providerTypeCapabilities(providerType)
+	return products, services, nil
+}
+
 func activeProviderPlan(ctx context.Context, db *pgxpool.Pool, providerID string) (int, error) {
 	var limit int
 	err := db.QueryRow(ctx, `SELECT plan.listing_limit
@@ -294,22 +324,31 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "sign in again to create a provider profile")
 	}
 	var req struct {
-		BusinessName string `json:"business_name"`
-		Description  string `json:"description"`
-		ContactEmail string `json:"contact_email"`
-		ContactPhone string `json:"contact_phone"`
-		WebsiteURL   string `json:"website_url"`
-		AddressLine  string `json:"address_line"`
-		City         string `json:"city"`
-		State        string `json:"state"`
-		CountryCode  string `json:"country_code"`
-		LogoURL      string `json:"logo_url"`
+		BusinessName      string `json:"business_name"`
+		ProviderType      string `json:"provider_type"`
+		ProviderTypeOther string `json:"provider_type_other"`
+		Description       string `json:"description"`
+		ContactEmail      string `json:"contact_email"`
+		ContactPhone      string `json:"contact_phone"`
+		WebsiteURL        string `json:"website_url"`
+		AddressLine       string `json:"address_line"`
+		City              string `json:"city"`
+		State             string `json:"state"`
+		CountryCode       string `json:"country_code"`
+		LogoURL           string `json:"logo_url"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid provider profile")
 	}
 	if strings.TrimSpace(req.BusinessName) == "" || strings.TrimSpace(req.ContactEmail) == "" || strings.TrimSpace(req.ContactPhone) == "" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "business_name, contact_email, and contact_phone are required")
+	}
+	providerType := normalizeProviderType(req.ProviderType)
+	if providerType == "" {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "choose the provider type that best describes your work")
+	}
+	if providerType == "other" && strings.TrimSpace(req.ProviderTypeOther) == "" {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "describe the products or services you intend to offer")
 	}
 	baseSlug := marketplaceSlug(req.BusinessName)
 	providerID := uuid.New()
@@ -320,15 +359,15 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 	defer tx.Rollback(c.Context())
 	_, err = tx.Exec(c.Context(), `
 		INSERT INTO provider_organizations(
-			id, owner_user_id, business_name, slug, description, contact_email,
+			id, owner_user_id, business_name, provider_type, provider_type_other, slug, description, contact_email,
 			contact_phone, website_url, address_line, city, state, country_code, logo_url
 		)
 		VALUES(
-			$1::uuid, $2::uuid, $3::text, $4::text || '-' || left($1::text, 8),
-			$5::text, $6::text, $7::text, $8::text, $9::text, $10::text,
-			$11::text, COALESCE(NULLIF($12::text, ''), 'NG'), $13::text
+			$1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::text || '-' || left($1::text, 8),
+			$7::text, $8::text, $9::text, $10::text, $11::text, $12::text,
+			$13::text, COALESCE(NULLIF($14::text, ''), 'NG'), $15::text
 		)
-	`, providerID, userID, strings.TrimSpace(req.BusinessName), baseSlug, strings.TrimSpace(req.Description), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), strings.TrimSpace(req.LogoURL))
+	`, providerID, userID, strings.TrimSpace(req.BusinessName), providerType, strings.TrimSpace(req.ProviderTypeOther), baseSlug, strings.TrimSpace(req.Description), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), strings.TrimSpace(req.LogoURL))
 	if err != nil {
 		log.Printf("provider onboarding organization insert failed user_id=%s provider_id=%s: %v", userID, providerID, err)
 		var pgErr *pgconn.PgError
@@ -352,24 +391,26 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		log.Printf("provider onboarding commit failed user_id=%s provider_id=%s: %v", userID, providerID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "could not finish provider onboarding")
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": providerID, "verification_status": "pending"})
+	products, services := providerTypeCapabilities(providerType)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": providerID, "provider_type": providerType, "can_sell_products": products, "can_offer_services": services, "verification_status": "pending"})
 }
 
 func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
-	var id, business, slug, description, email, phone, website, logo, address, city, state, country, verification, notes string
+	var id, business, providerType, providerTypeOther, slug, description, email, phone, website, logo, address, city, state, country, verification, notes string
 	var active bool
 	var created time.Time
 	var subStatus string
 	var periodEnd *time.Time
-	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd)
+	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &providerType, &providerTypeOther, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusNotFound, "provider profile not found")
 	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return c.JSON(fiber.Map{"id": id, "business_name": business, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "current_period_end": periodEnd}})
+	products, services := providerTypeCapabilities(providerType)
+	return c.JSON(fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "current_period_end": periodEnd}})
 }
 
 type listingPayload struct {
@@ -453,6 +494,13 @@ func (m *ProviderMarketplaceController) CreateListing(c *fiber.Ctx) error {
 	providerID, _, err := m.providerForUser(c.Context(), userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusForbidden, "provider access required")
+	}
+	_, canOfferServices, err := m.providerCapabilities(c.Context(), providerID)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if !canOfferServices {
+		return fiber.NewError(fiber.StatusForbidden, "this provider profile is registered for products, not service listings")
 	}
 	var req listingPayload
 	if err := c.BodyParser(&req); err != nil {
@@ -1281,7 +1329,7 @@ func (m *ProviderMarketplaceController) AdminListProviders(c *fiber.Ctx) error {
 	}
 	search := strings.TrimSpace(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.business_name,p.contact_email,p.contact_phone,p.city,p.state,p.verification_status,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p LEFT JOIN LATERAL(SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1)s ON true WHERE ($1='' OR p.verification_status=$1) AND ($2='' OR (p.business_name||' '||p.contact_email||' '||p.contact_phone||' '||p.city||' '||p.state) ILIKE '%'||$2||'%') AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, status, search, cursorTime, cursorID, limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.contact_email,p.contact_phone,p.city,p.state,p.verification_status,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p LEFT JOIN LATERAL(SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1)s ON true WHERE ($1='' OR p.verification_status=$1) AND ($2='' OR (p.business_name||' '||p.contact_email||' '||p.contact_phone||' '||p.city||' '||p.state) ILIKE '%'||$2||'%') AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, status, search, cursorTime, cursorID, limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1290,17 +1338,17 @@ func (m *ProviderMarketplaceController) AdminListProviders(c *fiber.Ctx) error {
 	var lastCreated time.Time
 	var lastID, next string
 	for rows.Next() {
-		var id, name, email, phone, city, state, status, sub string
+		var id, name, providerType, providerTypeOther, email, phone, city, state, status, sub string
 		var created time.Time
 		var end *time.Time
-		if err := rows.Scan(&id, &name, &email, &phone, &city, &state, &status, &created, &sub, &end); err != nil {
+		if err := rows.Scan(&id, &name, &providerType, &providerTypeOther, &email, &phone, &city, &state, &status, &created, &sub, &end); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
 			next = encodeMarketplaceCursor(lastCreated, lastID)
 			break
 		}
-		items = append(items, fiber.Map{"id": id, "business_name": name, "contact_email": email, "contact_phone": phone, "city": city, "state": state, "verification_status": status, "created_at": created, "subscription_status": sub, "subscription_ends_at": end})
+		items = append(items, fiber.Map{"id": id, "business_name": name, "provider_type": providerType, "provider_type_other": providerTypeOther, "contact_email": email, "contact_phone": phone, "city": city, "state": state, "verification_status": status, "created_at": created, "subscription_status": sub, "subscription_ends_at": end})
 		lastCreated, lastID = created, id
 	}
 	return c.JSON(fiber.Map{"items": items, "next_cursor": next, "has_more": next != ""})

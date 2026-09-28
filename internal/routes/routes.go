@@ -225,6 +225,9 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
 	authed.Get("/providers/me/notifications", marketplaceController.ListProviderNotifications)
 	authed.Patch("/providers/me/notifications/read-all", marketplaceController.MarkProviderNotificationsRead)
+	authed.Get("/providers/me/conversations", marketplaceController.ListProviderConversations)
+	authed.Get("/providers/me/conversations/:conversation_id/messages", marketplaceController.ProviderConversationMessages)
+	authed.Post("/providers/me/conversations/:conversation_id/messages", marketplaceController.SendProviderConversationMessage)
 	authed.Post("/providers/me/subscription-checkout", countryGuard, marketplaceController.SubscriptionCheckout)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
@@ -232,6 +235,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
 	authed.Put("/marketplace/listings/:listing_id/review", marketplaceController.UpsertListingReview)
 	authed.Post("/marketplace/listings/:listing_id/reports", marketplaceController.ReportListing)
+	authed.Post("/marketplace/listings/:listing_id/conversations", marketplaceController.StartProviderConversation)
+	authed.Get("/marketplace/conversations", marketplaceController.ListBuyerConversations)
+	authed.Get("/marketplace/conversations/:conversation_id/messages", marketplaceController.BuyerConversationMessages)
+	authed.Post("/marketplace/conversations/:conversation_id/messages", marketplaceController.SendBuyerConversationMessage)
 
 	// XP System
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)
@@ -243,6 +250,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Post("/support/tickets", supportController.CreateTicket)
 	authed.Get("/support/tickets", supportController.ListMyTickets)
 	authed.Get("/support/tickets/:ticket_id/messages", supportController.GetTicketMessages)
+	authed.Post("/support/tickets/:ticket_id/reply", supportController.UserReply)
 
 	// Admin Support Tickets
 	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)

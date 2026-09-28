@@ -146,6 +146,44 @@ func (s *SupportController) GetTicketMessages(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"messages": messages})
 }
 
+// UserReply adds a buyer reply to an existing open support conversation.
+func (s *SupportController) UserReply(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	ticketID := c.Params("ticket_id")
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request")
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" || len(req.Message) > 5000 {
+		return fiber.NewError(fiber.StatusBadRequest, "message must be between 1 and 5000 characters")
+	}
+	tx, err := s.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to send reply")
+	}
+	defer tx.Rollback(c.Context())
+	var status string
+	if err = tx.QueryRow(c.Context(), `SELECT status FROM support_tickets WHERE id=$1::uuid AND user_id=$2::uuid FOR UPDATE`, ticketID, userID).Scan(&status); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "ticket not found")
+	}
+	if status == "closed" {
+		return fiber.NewError(fiber.StatusConflict, "ticket is closed")
+	}
+	if _, err = tx.Exec(c.Context(), `INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) VALUES($1::uuid,'user',$2::uuid,$3)`, ticketID, userID, req.Message); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to save reply")
+	}
+	if _, err = tx.Exec(c.Context(), `UPDATE support_tickets SET status='open',updated_at=now() WHERE id=$1::uuid`, ticketID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to update ticket")
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to send reply")
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": "Reply sent"})
+}
+
 // AdminGetTicketMessages returns a complete ticket conversation to authorized support admins.
 func (s *SupportController) AdminGetTicketMessages(c *fiber.Ctx) error {
 	ticketID := c.Params("ticket_id")

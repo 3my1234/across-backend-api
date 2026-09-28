@@ -157,6 +157,13 @@ func (m *ProviderMarketplaceController) CreateMerchantProduct(c *fiber.Ctx) erro
 	if err != nil {
 		return fiber.NewError(fiber.StatusForbidden, "provider access required")
 	}
+	canSellProducts, _, err := m.providerCapabilities(c.Context(), providerID)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if !canSellProducts {
+		return fiber.NewError(fiber.StatusForbidden, "this provider profile is registered for services, not products")
+	}
 	listingLimit, err := activeProviderPlan(c.Context(), m.db, providerID)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusPaymentRequired, "an active provider subscription is required")
