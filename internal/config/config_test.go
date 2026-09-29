@@ -11,6 +11,7 @@ func TestProductionURLDefaults(t *testing.T) {
 	t.Setenv("ASSETS_CDN_BASE", "")
 	t.Setenv("PUBLIC_BASE_URL", "")
 	t.Setenv("SMTP_FROM_EMAIL", "")
+	t.Setenv("DEFAULT_FROM_EMAIL", "")
 	t.Setenv("WEBSITE_URL", "")
 	t.Setenv("BRAND_LOGO_URL", "")
 
@@ -30,8 +31,14 @@ func TestProductionURLDefaults(t *testing.T) {
 	if cfg.WebsiteURL != "https://atlxpres.com" {
 		t.Fatalf("WebsiteURL = %q", cfg.WebsiteURL)
 	}
-	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
+	if cfg.SMTPFromEmail != "support@atlxpres.com" {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
+	}
+	if cfg.SMTPFromName != "Atlantic Express Support" {
+		t.Fatalf("SMTPFromName = %q", cfg.SMTPFromName)
+	}
+	if cfg.SMTPReplyTo != "support@atlxpres.com" {
+		t.Fatalf("SMTPReplyTo = %q", cfg.SMTPReplyTo)
 	}
 }
 
@@ -40,10 +47,35 @@ func TestLegacyEmailDomainCannotOverrideMigratedSender(t *testing.T) {
 	t.Setenv("SMTP_REPLY_TO", "support@sportbanter.online")
 
 	cfg := Load()
-	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
+	if cfg.SMTPFromEmail != "support@atlxpres.com" {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
 	}
 	if cfg.SMTPReplyTo != "support@atlxpres.com" {
 		t.Fatalf("SMTPReplyTo = %q", cfg.SMTPReplyTo)
+	}
+}
+
+func TestSMTPEnvironmentAliases(t *testing.T) {
+	t.Setenv("SMTP_USERNAME", "")
+	t.Setenv("SMTP_PASSWORD", "")
+	t.Setenv("SMTP_FROM_EMAIL", "")
+	t.Setenv("SMTP_FROM_NAME", "")
+	t.Setenv("SMTP_USER", "alias-user")
+	t.Setenv("SMTP_PASS", "alias-password")
+	t.Setenv("DEFAULT_FROM_EMAIL", "support@atlxpres.com")
+	t.Setenv("DEFAULT_FROM_NAME", "Atlantic Express Support")
+
+	cfg := Load()
+	if cfg.SMTPUsername != "alias-user" {
+		t.Fatalf("SMTPUsername = %q", cfg.SMTPUsername)
+	}
+	if cfg.SMTPPassword != "alias-password" {
+		t.Fatalf("SMTPPassword = %q", cfg.SMTPPassword)
+	}
+	if cfg.SMTPFromEmail != "support@atlxpres.com" {
+		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
+	}
+	if cfg.SMTPFromName != "Atlantic Express Support" {
+		t.Fatalf("SMTPFromName = %q", cfg.SMTPFromName)
 	}
 }

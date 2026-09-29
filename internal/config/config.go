@@ -63,11 +63,20 @@ func Load() Config {
 		}
 		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png?v=20260929-atl"
 	}
-	smtpFromEmail := strings.TrimSpace(env("SMTP_FROM_EMAIL", "welcome@atlxpres.com"))
-	if strings.HasSuffix(strings.ToLower(smtpFromEmail), "@sportbanter.online") {
-		smtpFromEmail = "welcome@atlxpres.com"
+	smtpUsername := strings.TrimSpace(firstEnv("SMTP_USERNAME", "SMTP_USER"))
+	smtpPassword := strings.TrimSpace(firstEnv("SMTP_PASSWORD", "SMTP_PASS"))
+	smtpFromEmail := strings.TrimSpace(firstEnv("SMTP_FROM_EMAIL", "DEFAULT_FROM_EMAIL"))
+	if smtpFromEmail == "" {
+		smtpFromEmail = "support@atlxpres.com"
 	}
-	smtpReplyTo := strings.TrimSpace(env("SMTP_REPLY_TO", ""))
+	if strings.HasSuffix(strings.ToLower(smtpFromEmail), "@sportbanter.online") {
+		smtpFromEmail = "support@atlxpres.com"
+	}
+	smtpFromName := strings.TrimSpace(firstEnv("SMTP_FROM_NAME", "DEFAULT_FROM_NAME"))
+	if smtpFromName == "" {
+		smtpFromName = "Atlantic Express Support"
+	}
+	smtpReplyTo := strings.TrimSpace(env("SMTP_REPLY_TO", "support@atlxpres.com"))
 	if strings.HasSuffix(strings.ToLower(smtpReplyTo), "@sportbanter.online") {
 		smtpReplyTo = "support@atlxpres.com"
 	}
@@ -100,10 +109,10 @@ func Load() Config {
 		PublicBaseURL:            publicBaseURL,
 		SMTPHost:                 env("SMTP_HOST", ""),
 		SMTPPort:                 env("SMTP_PORT", "587"),
-		SMTPUsername:             env("SMTP_USERNAME", ""),
-		SMTPPassword:             env("SMTP_PASSWORD", ""),
+		SMTPUsername:             smtpUsername,
+		SMTPPassword:             smtpPassword,
 		SMTPFromEmail:            smtpFromEmail,
-		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
+		SMTPFromName:             smtpFromName,
 		SMTPReplyTo:              smtpReplyTo,
 		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:             brandLogoURL,
