@@ -362,7 +362,7 @@ func (a *AdminController) ListOrders(c *fiber.Ctx) error {
 	}
 	rows, err := a.db.Query(c.Context(), `
 		SELECT o.id, u.email, o.currency_code, o.total_amount, o.shipping_fee,
-			COALESCE(o.customs_fee, 0), COALESCE(o.vat_fee, 0),
+			COALESCE(o.customs_fee, 0), COALESCE(o.vat_fee, 0), COALESCE(o.platform_fee, 0),
 			o.order_status, o.current_tracking_stage, o.created_at,
 			COUNT(*) OVER() AS total_count
 		FROM orders o
@@ -381,15 +381,16 @@ func (a *AdminController) ListOrders(c *fiber.Ctx) error {
 	var totalCount int64
 	for rows.Next() {
 		var id, email, currency, status, stage string
-		var total, shipping, customs, vat float64
+		var total, shipping, customs, vat, platformFee float64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &currency, &total, &shipping, &customs, &vat, &status, &stage, &createdAt, &totalCount); err != nil {
+		if err := rows.Scan(&id, &email, &currency, &total, &shipping, &customs, &vat, &platformFee, &status, &stage, &createdAt, &totalCount); err != nil {
 			return err
 		}
 		orders = append(orders, fiber.Map{
 			"id": id, "email": email, "currency": currency, "total_amount": total,
 			"shipping_fee": shipping, "customs_fee": customs, "vat_fee": vat,
-			"status": status, "stage": stage, "created_at": createdAt,
+			"platform_fee": platformFee,
+			"status":       status, "stage": stage, "created_at": createdAt,
 		})
 	}
 	nextCursor := ""

@@ -182,8 +182,10 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	// identity system but operate through a separate organization membership;
 	// none of these routes grant administrator privileges.
 	authed.Post("/providers/onboarding", marketplaceController.Onboard)
+	authed.Get("/providers/payout-banks", marketplaceController.ListPayoutBanks)
 	authed.Get("/providers/me", marketplaceController.MyProvider)
 	authed.Patch("/providers/me", marketplaceController.UpdateMyProvider)
+	authed.Post("/providers/me/payout-account", marketplaceController.ConfigurePayoutAccount)
 	authed.Post("/providers/me/uploads/presign", marketplaceController.PresignProviderUpload)
 	authed.Get("/providers/me/verification-documents", marketplaceController.ListVerificationDocuments)
 	authed.Post("/providers/me/verification-documents", marketplaceController.AddVerificationDocument)

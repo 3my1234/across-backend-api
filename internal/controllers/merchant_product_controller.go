@@ -229,9 +229,9 @@ func (m *ProviderMarketplaceController) SubmitMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrForbidden
 	}
 	var eligible bool
-	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()) FROM provider_organizations p WHERE p.id=$1::uuid`, providerID).Scan(&eligible)
+	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()) AND EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active') FROM provider_organizations p WHERE p.id=$1::uuid`, providerID).Scan(&eligible)
 	if err != nil || !eligible {
-		return fiber.NewError(fiber.StatusPaymentRequired, "verified provider profile and active subscription are required")
+		return fiber.NewError(fiber.StatusPaymentRequired, "verified provider profile, active subscription, and Flutterwave settlement account are required")
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE products SET moderation_status='pending',is_active=false,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status IN ('draft','rejected') AND (fulfillment_mode<>'merchant_local' OR (inventory_latitude IS NOT NULL AND inventory_longitude IS NOT NULL))`, c.Params("product_id"), providerID)
 	if err != nil {

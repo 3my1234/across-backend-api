@@ -112,6 +112,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
 			  AND provider_id IS NOT NULL AND fulfillment_mode IN ('merchant_local','merchant_cross_border')
 			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+			  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
 		}
@@ -130,10 +131,10 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "this product does not have seller-managed fulfilment")
 	}
 	// Sellers publish the complete product price for both local and imported
-	// stock. Atlantic Express does not add an import/procurement charge.
-	customsFee := 0.0
-	vatFee := 100.0
-	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
+	// stock. Atlantic Express adds one clearly disclosed marketplace service
+	// fee; Flutterwave handles its own processing and statutory deductions.
+	platformFee := roundMoney(itemsTotal * marketplaceServiceFeeRate)
+	grandTotal := roundMoney(itemsTotal + platformFee)
 	if deliveryMaxDays <= 0 {
 		if fulfillmentMode == "merchant_local" {
 			deliveryMaxDays = 3
@@ -152,10 +153,10 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, delivery_promised_at, fulfillment_contact_snapshot,provider_id,fulfillment_mode)
-		VALUES ($1, $2, $3, $4, 0, $5, $6, 0, $7, $8::jsonb,$9,$10)
+		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, platform_fee, delivery_promised_at, fulfillment_contact_snapshot,provider_id,fulfillment_mode)
+		VALUES ($1, $2, $3, $4, 0, 0, 0, 0, $5, $6, $7::jsonb,$8,$9)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, platformFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(c.Context(), `
@@ -259,12 +260,15 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"order_id":    orderID,
-		"items_total": itemsTotal,
-		"customs_fee": customsFee,
-		"vat_fee":     vatFee,
-		"grand_total": grandTotal,
-		"currency":    currency,
+		"order_id":       orderID,
+		"items_total":    itemsTotal,
+		"shipping_fee":   0,
+		"customs_fee":    0,
+		"vat_fee":        0,
+		"stamp_duty_fee": 0,
+		"platform_fee":   platformFee,
+		"grand_total":    grandTotal,
+		"currency":       currency,
 	})
 }
 
@@ -292,7 +296,7 @@ func missingPurchasingProfileFields(email, fullName, phone string) []string {
 func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	rows, err := o.db.Query(c.Context(), `
-		SELECT o.id, o.currency_code, o.total_amount, o.shipping_fee, o.customs_fee, o.vat_fee,
+		SELECT o.id, o.currency_code, o.total_amount, o.shipping_fee, o.customs_fee, o.vat_fee, o.platform_fee,
 			o.order_status::text, o.current_tracking_stage::text, COALESCE(o.package_label, ''),
 			o.created_at,
 			COALESCE((SELECT SUM(oi.quantity)::int FROM order_items oi WHERE oi.order_id = o.id), 0),
@@ -315,12 +319,12 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, currency, status, stage, packageLabel, itemsSummary string
 		var route, owner, fulfillmentStatus, carrier, trackingNumber, trackingURL, currentLocation string
-		var totalAmount, shippingFee, customsFee, vatFee float64
+		var totalAmount, shippingFee, customsFee, vatFee, platformFee float64
 		var createdAt time.Time
 		var estimatedDelivery *time.Time
 		var fulfillmentVersion int64
 		var itemCount int
-		if err := rows.Scan(&id, &currency, &totalAmount, &shippingFee, &customsFee, &vatFee,
+		if err := rows.Scan(&id, &currency, &totalAmount, &shippingFee, &customsFee, &vatFee, &platformFee,
 			&status, &stage, &packageLabel, &createdAt, &itemCount, &itemsSummary,
 			&route, &owner, &fulfillmentStatus, &carrier, &trackingNumber, &trackingURL,
 			&currentLocation, &estimatedDelivery, &fulfillmentVersion); err != nil {
@@ -329,6 +333,7 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 		order := fiber.Map{
 			"id": id, "currency": currency, "total_amount": totalAmount,
 			"shipping_fee": shippingFee, "customs_fee": customsFee, "vat_fee": vatFee,
+			"platform_fee": platformFee,
 			"order_status": status, "current_tracking_stage": stage,
 			"package_label": packageLabel, "created_at": createdAt,
 			"item_count": itemCount, "items_summary": itemsSummary,

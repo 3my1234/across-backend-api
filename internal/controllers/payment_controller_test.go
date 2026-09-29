@@ -92,6 +92,13 @@ func TestMissingPurchasingProfileFields(t *testing.T) {
 	}
 }
 
+func TestMarketplaceServiceFeeIsOnePercent(t *testing.T) {
+	fee := roundMoney(10000 * marketplaceServiceFeeRate)
+	if fee != 100 {
+		t.Fatalf("expected a 100 NGN service fee for a 10,000 NGN subtotal, got %.2f", fee)
+	}
+}
+
 func TestSelectPaymentMethodsUsesCountryPolicy(t *testing.T) {
 	methods, err := selectPaymentMethods([]string{"card", "mpesa"}, "mpesa")
 	if err != nil {
@@ -121,6 +128,7 @@ func TestFlutterwaveCheckoutUsesImmutableServerValues(t *testing.T) {
 		RedirectURL: "across://payments/flutterwave", PaymentMethods: []string{"card", "mpesa"},
 		Customer: map[string]any{"email": "buyer@example.com"},
 		Title:    "Checkout", Description: "Test", Metadata: map[string]any{"order_id": "order"},
+		Subaccounts: []paymentSubaccount{{ID: "RS_SELLER", TransactionChargeType: "flat", TransactionCharge: 87.25}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +139,7 @@ func TestFlutterwaveCheckoutUsesImmutableServerValues(t *testing.T) {
 		`"amount":1250.5`,
 		`"currency":"KES"`,
 		`"payment_options":"card,mpesa"`,
+		`"subaccounts":[{"id":"RS_SELLER","transaction_charge_type":"flat","transaction_charge":87.25}]`,
 	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("provider payload %s does not contain %s", body, required)

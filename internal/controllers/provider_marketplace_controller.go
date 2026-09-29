@@ -143,6 +143,29 @@ func providerTypeCapabilities(providerType string) (canSellProducts, canOfferSer
 	}
 }
 
+func payoutCurrencyForCountry(country string) string {
+	switch strings.ToUpper(strings.TrimSpace(country)) {
+	case "NG":
+		return "NGN"
+	case "GH":
+		return "GHS"
+	case "KE":
+		return "KES"
+	case "UG":
+		return "UGX"
+	case "TZ":
+		return "TZS"
+	case "ZA":
+		return "ZAR"
+	case "GB":
+		return "GBP"
+	case "US":
+		return "USD"
+	default:
+		return "USD"
+	}
+}
+
 func (m *ProviderMarketplaceController) providerCapabilities(ctx context.Context, providerID string) (bool, bool, error) {
 	var providerType string
 	if err := m.db.QueryRow(ctx, `SELECT provider_type FROM provider_organizations WHERE id=$1::uuid AND is_active=true`, providerID).Scan(&providerType); err != nil {
@@ -395,6 +418,94 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": providerID, "provider_type": providerType, "can_sell_products": products, "can_offer_services": services, "verification_status": "pending"})
 }
 
+func (m *ProviderMarketplaceController) ListPayoutBanks(c *fiber.Ctx) error {
+	country := strings.ToUpper(strings.TrimSpace(c.Query("country", "NG")))
+	if len(country) != 2 {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "use a two-letter bank country code")
+	}
+	banks, err := m.paymentProvider.ListBanks(c.Context(), country)
+	if err != nil {
+		var providerErr *paymentProviderError
+		if errors.As(err, &providerErr) {
+			return fiber.NewError(fiber.StatusBadGateway, providerErr.Message)
+		}
+		return fiber.NewError(fiber.StatusBadGateway, "bank list is temporarily unavailable")
+	}
+	return c.JSON(fiber.Map{"country_code": country, "items": banks})
+}
+
+func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	providerID, role, err := m.providerForUser(c.Context(), userID)
+	if err != nil || role != "owner" {
+		return fiber.ErrForbidden
+	}
+	products, _, err := m.providerCapabilities(c.Context(), providerID)
+	if err != nil || !products {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "settlement accounts are only required for providers that sell products")
+	}
+	var req struct {
+		CountryCode   string `json:"country_code"`
+		AccountBank   string `json:"account_bank"`
+		AccountNumber string `json:"account_number"`
+		SwiftCode     string `json:"swift_code"`
+		RoutingNumber string `json:"routing_number"`
+		BankBranch    string `json:"bank_branch"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid settlement account")
+	}
+	country := strings.ToUpper(strings.TrimSpace(req.CountryCode))
+	bank := strings.TrimSpace(req.AccountBank)
+	account := strings.ReplaceAll(strings.TrimSpace(req.AccountNumber), " ", "")
+	if len(country) != 2 || bank == "" || len(account) < 4 || len(account) > 34 {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "country, bank, and a valid account number are required")
+	}
+	var existingStatus string
+	if err := m.db.QueryRow(c.Context(), `SELECT status FROM provider_payout_accounts WHERE provider_id=$1::uuid`, providerID).Scan(&existingStatus); err == nil {
+		return fiber.NewError(fiber.StatusConflict, "a settlement account is already connected; contact Atlantic Express support to replace it safely")
+	} else if err != pgx.ErrNoRows {
+		return fiber.ErrInternalServerError
+	}
+	var business, phone, email string
+	if err := m.db.QueryRow(c.Context(), `SELECT business_name,contact_phone,contact_email FROM provider_organizations WHERE id=$1::uuid`, providerID).Scan(&business, &phone, &email); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	result, err := m.paymentProvider.CreateCollectionSubaccount(c.Context(), collectionSubaccountInput{
+		AccountBank: bank, AccountNumber: account, BusinessName: business,
+		BusinessMobile: phone, BusinessEmail: email, Country: country,
+		SwiftCode: req.SwiftCode, RoutingNumber: req.RoutingNumber, BankBranch: req.BankBranch,
+	})
+	if err != nil {
+		var providerErr *paymentProviderError
+		if errors.As(err, &providerErr) {
+			return fiber.NewError(fiber.StatusBadGateway, providerErr.Message)
+		}
+		return fiber.NewError(fiber.StatusBadGateway, "could not connect the Flutterwave settlement account")
+	}
+	last4 := account
+	if len(last4) > 4 {
+		last4 = last4[len(last4)-4:]
+	}
+	_, err = m.db.Exec(c.Context(), `
+		INSERT INTO provider_payout_accounts(
+			provider_id,country_code,currency_code,account_bank,account_number_last4,
+			account_name,bank_name,flutterwave_subaccount_id,flutterwave_subaccount_numeric_id,status
+		) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,'active')
+	`, providerID, country, payoutCurrencyForCountry(country), bank, last4,
+		strings.TrimSpace(result.AccountName), strings.TrimSpace(result.BankName),
+		result.SubaccountID, result.NumericID)
+	if err != nil {
+		log.Printf("Flutterwave subaccount created but local settlement save failed provider_id=%s subaccount_id=%s: %v", providerID, result.SubaccountID, err)
+		return fiber.NewError(fiber.StatusInternalServerError, "Flutterwave connected the account, but Atlantic Express could not finish saving it; contact support before retrying")
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status": "active", "provider": "flutterwave", "bank_name": result.BankName,
+		"account_name": result.AccountName, "account_number_masked": "****" + last4,
+		"service_fee_percent": marketplaceServiceFeeRate * 100,
+	})
+}
+
 func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var id, business, providerType, providerTypeOther, slug, description, email, phone, website, logo, address, city, state, country, verification, notes string
@@ -410,7 +521,17 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 		return fiber.ErrInternalServerError
 	}
 	products, services := providerTypeCapabilities(providerType)
-	return c.JSON(fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "current_period_end": periodEnd}})
+	payout := fiber.Map{"status": "not_configured", "provider": "flutterwave", "service_fee_percent": marketplaceServiceFeeRate * 100}
+	if products {
+		var payoutStatus, payoutCountry, payoutCurrency, payoutBank, payoutLast4, payoutName string
+		payoutErr := m.db.QueryRow(c.Context(), `SELECT status,country_code,currency_code,bank_name,account_number_last4,account_name FROM provider_payout_accounts WHERE provider_id=$1::uuid`, id).Scan(&payoutStatus, &payoutCountry, &payoutCurrency, &payoutBank, &payoutLast4, &payoutName)
+		if payoutErr == nil {
+			payout = fiber.Map{"status": payoutStatus, "provider": "flutterwave", "country_code": payoutCountry, "currency_code": payoutCurrency, "bank_name": payoutBank, "account_number_masked": "****" + payoutLast4, "account_name": payoutName, "service_fee_percent": marketplaceServiceFeeRate * 100}
+		} else if payoutErr != pgx.ErrNoRows {
+			return fiber.ErrInternalServerError
+		}
+	}
+	return c.JSON(fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "current_period_end": periodEnd}, "payout_account": payout})
 }
 
 type listingPayload struct {

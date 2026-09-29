@@ -174,14 +174,18 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		})
 	}
 
-	var orderAmount float64
-	var orderCurrency, orderStatus, countryCode string
+	var orderAmount, platformFee float64
+	var orderCurrency, orderStatus, countryCode, sellerSubaccountID string
 	var paymentMethods []string
 	err = p.db.QueryRow(c.Context(), `
-		SELECT o.total_amount,o.currency_code,o.order_status::text,c.country_code,
-			COALESCE(policy.payment_methods,ARRAY['card']::text[])
+		SELECT o.total_amount,o.platform_fee,o.currency_code,o.order_status::text,c.country_code,
+			COALESCE(policy.payment_methods,ARRAY['card']::text[]),payout.flutterwave_subaccount_id
 		FROM orders o
 		JOIN countries_config c ON c.id=o.country_id
+		JOIN provider_payout_accounts payout
+		  ON payout.provider_id=o.provider_id
+		 AND payout.payment_provider='flutterwave'
+		 AND payout.status='active'
 		LEFT JOIN payment_method_policies policy
 		  ON policy.country_code=c.country_code
 		 AND policy.currency_code=o.currency_code
@@ -189,7 +193,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		 AND policy.is_active=true
 		WHERE o.id=$1 AND o.user_id=$2
 		  AND $3=ANY(c.active_payment_gateways)
-	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &orderCurrency, &orderStatus, &countryCode, &paymentMethods)
+	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &platformFee, &orderCurrency, &orderStatus, &countryCode, &paymentMethods, &sellerSubaccountID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
 	}
@@ -226,6 +230,9 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		Customer: buildFlutterwaveCustomer(email, fullName, phone),
 		Title:    "Atlantic Express Checkout", Description: "Pay securely with " + p.provider.Name(),
 		Metadata: map[string]any{"order_id": req.OrderID, "payment_provider": p.provider.Name()},
+		Subaccounts: []paymentSubaccount{{
+			ID: sellerSubaccountID, TransactionChargeType: "flat", TransactionCharge: platformFee,
+		}},
 	})
 	if err != nil {
 		_ = markPaymentInitializationFailed(c.Context(), p.db, p.provider.Name(), txRef, err)
@@ -669,16 +676,16 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 
 	var countryID, currencyCode, orderStatus, existingTxRef, fulfillmentMode string
 	var providerID *string
-	var orderAmount float64
+	var orderAmount, platformFee float64
 	var promisedAt time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT country_id, currency_code, total_amount,
+		SELECT country_id, currency_code, total_amount, platform_fee,
 			COALESCE(delivery_promised_at, now() + interval '14 days'),
 			order_status::text, COALESCE(flutterwave_tx_ref, ''), fulfillment_mode, provider_id::text
 		FROM orders
 		WHERE id = $1
 		FOR UPDATE
-	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &promisedAt, &orderStatus, &existingTxRef, &fulfillmentMode, &providerID); err != nil {
+	`, orderID).Scan(&countryID, &currencyCode, &orderAmount, &platformFee, &promisedAt, &orderStatus, &existingTxRef, &fulfillmentMode, &providerID); err != nil {
 		return err
 	}
 	if !strings.EqualFold(currencyCode, strings.TrimSpace(paidCurrency)) || paidAmount+0.001 < orderAmount {
@@ -733,7 +740,8 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	`, orderID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,0,$5,'pending',now()+interval '7 days') ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount); err != nil {
+	sellerAmount := roundMoney(orderAmount - platformFee)
+	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,'available',now()) ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount, platformFee, sellerAmount); err != nil {
 		return err
 	}
 
