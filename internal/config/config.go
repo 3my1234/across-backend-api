@@ -61,7 +61,7 @@ func Load() Config {
 		if publicBaseURL == "" {
 			publicBaseURL = defaultAPIBaseURL
 		}
-		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png"
+		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png?v=20260929-atl"
 	}
 	smtpFromEmail := strings.TrimSpace(env("SMTP_FROM_EMAIL", "welcome@atlxpres.com"))
 	if strings.HasSuffix(strings.ToLower(smtpFromEmail), "@sportbanter.online") {

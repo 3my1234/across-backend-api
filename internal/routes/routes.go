@@ -87,7 +87,9 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/products", catalog.ListProducts)
 	v1.Get("/products/flash-sale", catalog.ListFlashSales)
 	v1.Get("/public/brand/logo.png", func(c *fiber.Ctx) error {
-		c.Set(fiber.HeaderCacheControl, "public, max-age=604800, immutable")
+		// The versioned email URL allows a logo refresh while keeping normal CDN
+		// caching. Avoid immutable here because email image proxies cache hard.
+		c.Set(fiber.HeaderCacheControl, "public, max-age=3600")
 		c.Type("png")
 		return c.Send(atlanticExpressLogo)
 	})
