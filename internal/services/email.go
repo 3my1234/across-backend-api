@@ -37,13 +37,13 @@ func (e *EmailService) sendVerificationEmail(toEmail, toName, verificationURL, m
 	}
 	name := html.EscapeString(plainName)
 	link := html.EscapeString(strings.TrimSpace(verificationURL))
-	body := e.layout("Verify your email", "Confirm your email address to activate your Atlantic Express account.", fmt.Sprintf(`
+	body := e.layout("Verify your email", "Finish setting up your Atlantic Express account.", fmt.Sprintf(`
 <p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Hello %s,</p>
-<p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">Confirm your email address to activate your Atlantic Express account.</p>
+<p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">You created an Atlantic Express account. Verify this email address to finish setting it up.</p>
 <p style="margin:24px 0;text-align:center;"><a href="%s" style="display:inline-block;background:#FF4747;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">Verify email address</a></p>
 <p style="margin:0 0 8px;color:#66736F;font-size:13px;line-height:1.5;">This secure link expires in 24 hours. If you did not create this account, you can safely ignore this email.</p>
 <p style="margin:18px 0 0;color:#7B8783;font-size:12px;line-height:1.5;word-break:break-all;">Button not working? Copy and paste this link into your browser:<br><a href="%s" style="color:#0F6B5A;">%s</a></p>`, name, link, link, link))
-	plain := fmt.Sprintf("Hello %s,\n\nConfirm your email address to activate your Atlantic Express account:\n%s\n\nThis secure link expires in 24 hours. If you did not create this account, you can safely ignore this email.", plainName, strings.TrimSpace(verificationURL))
+	plain := fmt.Sprintf("Hello %s,\n\nYou created an Atlantic Express account. Verify this email address to finish setting it up:\n%s\n\nThis secure link expires in 24 hours. If you did not create this account, you can safely ignore this email.", plainName, strings.TrimSpace(verificationURL))
 	return e.sendHTMLWithText(toEmail, "Verify your Atlantic Express email", plain, body, messageID)
 }
 
@@ -147,9 +147,9 @@ func (e *EmailService) layout(title, preheader, content string) string {
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F3F7F6;"><tr><td align="center" style="padding:28px 12px;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E2EBE8;box-shadow:0 8px 24px rgba(15,61,53,.08);">
 <tr><td style="height:5px;background:#FF4747;font-size:0;line-height:0;">&nbsp;</td></tr>
-<tr><td align="center" style="padding:24px 32px 20px;background:#F8FBFA;border-bottom:1px solid #E2EBE8;">` + logo + `<div style="margin-top:8px;color:#516660;font-size:12px;letter-spacing:.8px;text-transform:uppercase;">From China to Africa, delivering possibilities</div></td></tr>
+<tr><td align="center" style="padding:24px 32px 20px;background:#F8FBFA;border-bottom:1px solid #E2EBE8;">` + logo + `<div style="margin-top:8px;color:#516660;font-size:12px;letter-spacing:.8px;text-transform:uppercase;">Products, trusted services and delivery in one place</div></td></tr>
 <tr><td style="padding:32px;"><h1 style="margin:0 0 20px;color:#142522;font-size:25px;line-height:1.25;">` + html.EscapeString(title) + `</h1>` + content + `</td></tr>
-<tr><td style="padding:22px 32px;background:#0F3D35;color:#DCEAE6;font-size:12px;line-height:1.6;"><strong style="color:#FFFFFF;">ATLANTIC SHANSU LOGISTICS LIMITED</strong><br>Procurement and supply-chain logistics.<br><span style="color:#AFC8C1;">This is an automated service email. Reply to reach our support team.</span></td></tr>
+<tr><td style="padding:22px 32px;background:#0F3D35;color:#DCEAE6;font-size:12px;line-height:1.6;"><strong style="color:#FFFFFF;">Atlantic Express</strong><br>Marketplace, services and logistics.<br><span style="color:#AFC8C1;">Operated by ATLANTIC SHANSU LOGISTICS LIMITED. This is an automated security email.</span></td></tr>
 </table></td></tr></table></body></html>`
 }
 

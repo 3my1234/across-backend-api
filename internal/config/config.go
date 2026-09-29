@@ -63,6 +63,14 @@ func Load() Config {
 		}
 		brandLogoURL = publicBaseURL + "/api/v1/public/brand/logo.png"
 	}
+	smtpFromEmail := strings.TrimSpace(env("SMTP_FROM_EMAIL", "welcome@atlxpres.com"))
+	if strings.HasSuffix(strings.ToLower(smtpFromEmail), "@sportbanter.online") {
+		smtpFromEmail = "welcome@atlxpres.com"
+	}
+	smtpReplyTo := strings.TrimSpace(env("SMTP_REPLY_TO", ""))
+	if strings.HasSuffix(strings.ToLower(smtpReplyTo), "@sportbanter.online") {
+		smtpReplyTo = "support@atlxpres.com"
+	}
 
 	return Config{
 		AppEnv:                   env("APP_ENV", "development"),
@@ -94,9 +102,9 @@ func Load() Config {
 		SMTPPort:                 env("SMTP_PORT", "587"),
 		SMTPUsername:             env("SMTP_USERNAME", ""),
 		SMTPPassword:             env("SMTP_PASSWORD", ""),
-		SMTPFromEmail:            env("SMTP_FROM_EMAIL", "welcome@atlxpres.com"),
+		SMTPFromEmail:            smtpFromEmail,
 		SMTPFromName:             env("SMTP_FROM_NAME", "Atlantic Express"),
-		SMTPReplyTo:              env("SMTP_REPLY_TO", ""),
+		SMTPReplyTo:              smtpReplyTo,
 		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:             brandLogoURL,
 		WebsiteURL:               env("WEBSITE_URL", defaultWebsiteURL),

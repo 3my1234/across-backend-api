@@ -293,7 +293,7 @@ func applyTransitionOrderEffects(ctx context.Context, tx pgx.Tx, batchID string,
 	var trackingStage, orderStatus, trackingNote string
 	switch targetStatus {
 	case "purchasing":
-		trackingStage = "Arrived at China Hub"
+		trackingStage = "Arrived at International Hub"
 		trackingNote = "Procurement started at the China operations hub"
 	case "enroute_nigeria":
 		trackingStage = "In Transit Internationally"

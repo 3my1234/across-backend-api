@@ -95,6 +95,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	var itemsTotal float64
 	fulfillmentMode := ""
 	var orderProviderID *string
+	deliveryMaxDays := 0
 	for _, item := range req.Items {
 		if item.Quantity <= 0 {
 			return fiber.NewError(fiber.StatusBadRequest, "quantity must be positive")
@@ -102,20 +103,24 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		var unitPrice float64
 		var itemMode string
 		var itemProviderID *string
+		var itemDeliveryMaxDays int
 		if err := tx.QueryRow(c.Context(), `
 			SELECT CASE WHEN is_flash_sale AND flash_sale_price > 0 AND flash_sale_price < local_selling_price
 				THEN flash_sale_price ELSE local_selling_price END,
-				fulfillment_mode, provider_id::text
+				fulfillment_mode, provider_id::text, COALESCE(delivery_max_days, 0)
 			FROM products p
 			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
 			  AND (provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
-		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID); err != nil {
+		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
 		}
 		if fulfillmentMode == "" {
 			fulfillmentMode, orderProviderID = itemMode, itemProviderID
 		} else if fulfillmentMode != itemMode || stringValue(orderProviderID) != stringValue(itemProviderID) {
 			return fiber.NewError(fiber.StatusUnprocessableEntity, "products from different sellers or fulfilment routes must be checked out separately")
+		}
+		if itemDeliveryMaxDays > deliveryMaxDays {
+			deliveryMaxDays = itemDeliveryMaxDays
 		}
 		itemsTotal += unitPrice * float64(item.Quantity)
 	}
@@ -126,7 +131,14 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 	vatFee := 100.0
 	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
-	deliveryPromise := time.Now().UTC().Add(21 * 24 * time.Hour)
+	if deliveryMaxDays <= 0 {
+		if fulfillmentMode == "merchant_local" {
+			deliveryMaxDays = 3
+		} else {
+			deliveryMaxDays = 21
+		}
+	}
+	deliveryPromise := time.Now().UTC().Add(time.Duration(deliveryMaxDays) * 24 * time.Hour)
 	contactSnapshot, err := json.Marshal(fiber.Map{
 		"full_name": fullName, "email": email, "phone": phone,
 		"address": address, "city": city, "state": state, "postal_code": postalCode,

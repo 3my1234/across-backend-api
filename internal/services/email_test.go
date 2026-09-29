@@ -18,7 +18,8 @@ func TestEmailLayoutUsesBrandingAndEscapesMetadata(t *testing.T) {
 
 	for _, expected := range []string{
 		`alt="Atlantic Express"`,
-		`From China to Africa, delivering possibilities`,
+		`Products, trusted services and delivery in one place`,
+		`Operated by ATLANTIC SHANSU LOGISTICS LIMITED`,
 		`ATLANTIC SHANSU LOGISTICS LIMITED`,
 		`https://media.example/logo.png?size=large&amp;format=png`,
 		`&lt;Welcome&gt;`,

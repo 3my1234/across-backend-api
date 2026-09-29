@@ -1165,9 +1165,9 @@ func syncBatchOrders(ctx context.Context, tx pgx.Tx, batchID, status string) err
 	deliveryComplete := false
 	switch status {
 	case "funds_sent_to_china":
-		trackingStage = "Arrived at China Hub"
+			trackingStage = "Arrived at International Hub"
 	case "purchasing":
-		trackingStage = "Arrived at China Hub"
+		trackingStage = "Arrived at International Hub"
 	case "enroute_nigeria":
 		trackingStage = "In Transit Internationally"
 	case "arrived_local":

@@ -34,3 +34,16 @@ func TestProductionURLDefaults(t *testing.T) {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
 	}
 }
+
+func TestLegacyEmailDomainCannotOverrideMigratedSender(t *testing.T) {
+	t.Setenv("SMTP_FROM_EMAIL", "welcome@sportbanter.online")
+	t.Setenv("SMTP_REPLY_TO", "support@sportbanter.online")
+
+	cfg := Load()
+	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
+		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
+	}
+	if cfg.SMTPReplyTo != "support@atlxpres.com" {
+		t.Fatalf("SMTPReplyTo = %q", cfg.SMTPReplyTo)
+	}
+}

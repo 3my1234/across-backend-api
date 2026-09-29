@@ -76,9 +76,9 @@ func legacyStageForFulfillment(route, status string) (string, string) {
 		if route == "merchant_local" {
 			return "Order Placed", "Paid"
 		}
-		return "Arrived at China Hub", "Paid"
+		return "Arrived at International Hub", "Paid"
 	case "processing", "dispatched_from_origin":
-		return "Arrived at China Hub", "Paid"
+		return "Arrived at International Hub", "Paid"
 	default:
 		return "Order Placed", "Paid"
 	}
@@ -454,13 +454,13 @@ func (m *ProviderMarketplaceController) TransitionMerchantManifest(c *fiber.Ctx)
 			if updateErr != nil || tag.RowsAffected() != 1 {
 				return fiber.NewError(fiber.StatusConflict, "a manifest order changed; refresh and retry")
 			}
-			if _, updateErr = tx.Exec(c.Context(), `UPDATE orders SET current_tracking_stage='Arrived at China Hub'::tracking_stage,order_status='Paid'::order_status,updated_at=now() WHERE id=$1::uuid`, member.orderID); updateErr != nil {
+			if _, updateErr = tx.Exec(c.Context(), `UPDATE orders SET current_tracking_stage='Arrived at International Hub'::tracking_stage,order_status='Paid'::order_status,updated_at=now() WHERE id=$1::uuid`, member.orderID); updateErr != nil {
 				return fiber.ErrInternalServerError
 			}
 			if _, updateErr = tx.Exec(c.Context(), `INSERT INTO fulfillment_events(fulfillment_id,actor_type,actor_id,previous_status,status,notes,idempotency_key) VALUES($1::uuid,'merchant',$2::uuid,$3,'dispatched_from_origin',$4,$5)`, member.id, userID, member.status, strings.TrimSpace(req.Notes), eventKey); updateErr != nil {
 				return fiber.ErrInternalServerError
 			}
-			if _, updateErr = tx.Exec(c.Context(), `INSERT INTO tracking_events(order_id,stage,notes) VALUES($1::uuid,'Arrived at China Hub'::tracking_stage,$2)`, member.orderID, strings.TrimSpace(req.Notes)); updateErr != nil {
+			if _, updateErr = tx.Exec(c.Context(), `INSERT INTO tracking_events(order_id,stage,notes) VALUES($1::uuid,'Arrived at International Hub'::tracking_stage,$2)`, member.orderID, strings.TrimSpace(req.Notes)); updateErr != nil {
 				return fiber.ErrInternalServerError
 			}
 			title, body := fulfillmentNotification("dispatched_from_origin")

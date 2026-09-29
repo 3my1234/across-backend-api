@@ -15,7 +15,7 @@ CREATE TYPE escrow_status AS ENUM ('held_in_escrow', 'released', 'frozen');
 CREATE TYPE dispute_status AS ENUM ('none', 'active', 'resolved');
 CREATE TYPE tracking_stage AS ENUM (
   'Order Placed',
-  'Arrived at China Hub',
+  'Arrived at International Hub',
   'In Transit Internationally',
   'Arrived at Local Hub',
   'Out for Delivery',
