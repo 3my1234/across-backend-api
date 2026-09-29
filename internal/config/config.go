@@ -67,14 +67,14 @@ func Load() Config {
 	smtpPassword := strings.TrimSpace(firstEnv("SMTP_PASSWORD", "SMTP_PASS"))
 	smtpFromEmail := strings.TrimSpace(firstEnv("SMTP_FROM_EMAIL", "DEFAULT_FROM_EMAIL"))
 	if smtpFromEmail == "" {
-		smtpFromEmail = "support@atlxpres.com"
+		smtpFromEmail = "welcome@atlxpres.com"
 	}
 	if strings.HasSuffix(strings.ToLower(smtpFromEmail), "@sportbanter.online") {
-		smtpFromEmail = "support@atlxpres.com"
+		smtpFromEmail = "welcome@atlxpres.com"
 	}
 	smtpFromName := strings.TrimSpace(firstEnv("SMTP_FROM_NAME", "DEFAULT_FROM_NAME"))
 	if smtpFromName == "" {
-		smtpFromName = "Atlantic Express Support"
+		smtpFromName = "Atlantic Express"
 	}
 	smtpReplyTo := strings.TrimSpace(env("SMTP_REPLY_TO", "support@atlxpres.com"))
 	if strings.HasSuffix(strings.ToLower(smtpReplyTo), "@sportbanter.online") {

@@ -31,10 +31,10 @@ func TestProductionURLDefaults(t *testing.T) {
 	if cfg.WebsiteURL != "https://atlxpres.com" {
 		t.Fatalf("WebsiteURL = %q", cfg.WebsiteURL)
 	}
-	if cfg.SMTPFromEmail != "support@atlxpres.com" {
+	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
 	}
-	if cfg.SMTPFromName != "Atlantic Express Support" {
+	if cfg.SMTPFromName != "Atlantic Express" {
 		t.Fatalf("SMTPFromName = %q", cfg.SMTPFromName)
 	}
 	if cfg.SMTPReplyTo != "support@atlxpres.com" {
@@ -47,7 +47,7 @@ func TestLegacyEmailDomainCannotOverrideMigratedSender(t *testing.T) {
 	t.Setenv("SMTP_REPLY_TO", "support@sportbanter.online")
 
 	cfg := Load()
-	if cfg.SMTPFromEmail != "support@atlxpres.com" {
+	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)
 	}
 	if cfg.SMTPReplyTo != "support@atlxpres.com" {
