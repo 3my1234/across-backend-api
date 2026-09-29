@@ -308,8 +308,12 @@ func retryEmail(ctx context.Context, db *pgxpool.Pool, item emailDelivery, messa
 	if err != nil {
 		return err
 	}
-	log.Printf("email outbox delivery deferred id=%s template=%s attempt=%d status=%s", item.ID, item.TemplateType, item.Attempts, status)
-	return nil
+	reason := strings.TrimSpace(message)
+	if reason == "" {
+		reason = "unknown SMTP delivery error"
+	}
+	log.Printf("email outbox delivery deferred id=%s template=%s attempt=%d status=%s reason=%q", item.ID, item.TemplateType, item.Attempts, status, reason)
+	return fmt.Errorf("email delivery deferred: %s", reason)
 }
 
 func tokenDigest(token string) string {
