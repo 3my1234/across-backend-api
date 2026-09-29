@@ -20,12 +20,12 @@ func TestValidateBatchActionEnforcesRoleAndOrder(t *testing.T) {
 		{name: "admin I closes collection", role: "catalog_admin", status: "collecting_funds", action: "close_collection", wantTo: "closed"},
 		{name: "super admin approves procurement", role: "super_admin", status: "closed", action: "approve_procurement", wantTo: "funds_sent_to_procurement"},
 		{name: "admin I approves procurement", role: "catalog_admin", status: "closed", action: "approve_procurement", wantTo: "funds_sent_to_procurement"},
-		{name: "procurement starts directly after approval", role: "procurement_admin", status: "funds_sent_to_procurement", action: "start_procurement", wantTo: "purchasing"},
-		{name: "procurement dispatches directly after checklist", role: "procurement_admin", status: "purchasing", action: "dispatch", wantTo: "enroute_nigeria"},
-		{name: "courier confirms ready directly after receipt", role: "courier_admin", status: "enroute_nigeria", action: "confirm_ready_for_pickup", wantTo: "ready_for_pickup"},
+		{name: "retired procurement role cannot act", role: "procurement_admin", status: "funds_sent_to_procurement", action: "start_procurement", wantErr: fiber.StatusForbidden},
+		{name: "retired procurement dispatch cannot act", role: "procurement_admin", status: "purchasing", action: "dispatch", wantErr: fiber.StatusForbidden},
+		{name: "retired courier role cannot act", role: "courier_admin", status: "enroute_nigeria", action: "confirm_ready_for_pickup", wantErr: fiber.StatusForbidden},
 		{name: "super admin cannot perform procurement action", role: "super_admin", status: "purchasing", action: "dispatch", wantErr: fiber.StatusForbidden},
 		{name: "courier cannot procure", role: "courier_admin", status: "procurement_acknowledged", action: "start_procurement", wantErr: fiber.StatusForbidden},
-		{name: "cannot skip funds handoff", role: "procurement_admin", status: "settled", action: "start_procurement", wantErr: fiber.StatusConflict},
+		{name: "retired procurement cannot skip funds handoff", role: "procurement_admin", status: "settled", action: "start_procurement", wantErr: fiber.StatusForbidden},
 		{name: "cannot move backward", role: "catalog_admin", status: "settled", action: "close_collection", wantErr: fiber.StatusConflict},
 	}
 	for _, test := range tests {

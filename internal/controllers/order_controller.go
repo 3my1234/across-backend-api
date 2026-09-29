@@ -110,7 +110,8 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 				fulfillment_mode, provider_id::text, COALESCE(delivery_max_days, 0)
 			FROM products p
 			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
-			  AND (provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+			  AND provider_id IS NOT NULL AND fulfillment_mode IN ('merchant_local','merchant_cross_border')
+			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
 		}
@@ -125,10 +126,12 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		itemsTotal += unitPrice * float64(item.Quantity)
 	}
 
-	customsFee := 0.0
-	if fulfillmentMode == "atlantic_import" {
-		customsFee = roundMoney(itemsTotal * 0.20)
+	if orderProviderID == nil || (fulfillmentMode != "merchant_local" && fulfillmentMode != "merchant_cross_border") {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "this product does not have seller-managed fulfilment")
 	}
+	// Sellers publish the complete product price for both local and imported
+	// stock. Atlantic Express does not add an import/procurement charge.
+	customsFee := 0.0
 	vatFee := 100.0
 	grandTotal := roundMoney(itemsTotal + customsFee + vatFee)
 	if deliveryMaxDays <= 0 {
@@ -155,8 +158,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	`, userID, countryID, currency, grandTotal, customsFee, vatFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
 		return err
 	}
-	if fulfillmentMode != "atlantic_import" {
-		tag, err := tx.Exec(c.Context(), `
+	tag, err := tx.Exec(c.Context(), `
 			INSERT INTO order_fulfillments(
 				order_id, provider_id, route, owner, status,
 				origin_snapshot, delivery_snapshot, current_location,
@@ -175,7 +177,6 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 					'delivery_max_days', p.delivery_max_days,
 					'delivery_methods', p.delivery_methods,
 					'return_policy', p.return_policy,
-					'atlantic_last_mile', p.atlantic_last_mile,
 					'buyer_contact', $3::jsonb
 				),
 				p.inventory_location,
@@ -183,9 +184,8 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			FROM products p
 			WHERE p.id=$2::uuid AND p.provider_id=$4::uuid
 		`, orderID, req.Items[0].ProductID, contactSnapshot, orderProviderID)
-		if err != nil || tag.RowsAffected() != 1 {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not create merchant fulfilment")
-		}
+	if err != nil || tag.RowsAffected() != 1 {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not create seller fulfilment")
 	}
 
 	for _, item := range req.Items {

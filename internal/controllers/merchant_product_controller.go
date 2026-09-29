@@ -38,6 +38,9 @@ type merchantProductPayload struct {
 }
 
 func normalizeMerchantProduct(req *merchantProductPayload) {
+	// Marketplace sellers always retain fulfilment responsibility. Ignore the
+	// retired Atlantic last-mile flag from older cached portal builds.
+	req.AtlanticLastMile = false
 	req.FulfillmentMode = strings.ToLower(strings.TrimSpace(req.FulfillmentMode))
 	if req.FulfillmentMode == "" {
 		req.FulfillmentMode = "merchant_local"
@@ -128,13 +131,10 @@ func validateMerchantProduct(req merchantProductPayload) error {
 	if req.FulfillmentMode == "merchant_local" && req.InventoryLatitude == nil {
 		return fmt.Errorf("capture the local stock location so nearby customers can discover this product")
 	}
-	if req.FulfillmentMode == "merchant_local" && (req.InventoryCountryCode != "NG" || req.StockState != "locally_available") {
-		return fmt.Errorf("local products must be available in Nigeria")
+	if req.FulfillmentMode == "merchant_local" && req.StockState != "locally_available" {
+		return fmt.Errorf("local products must already be available in the stated stock country")
 	}
 	if req.FulfillmentMode == "merchant_cross_border" {
-		if req.InventoryCountryCode == "NG" {
-			return fmt.Errorf("cross-border products must use a non-Nigerian stock country")
-		}
 		if req.StockState != "foreign_stock" && req.StockState != "import_on_demand" {
 			return fmt.Errorf("cross-border products must use foreign_stock or import_on_demand")
 		}
@@ -142,7 +142,7 @@ func validateMerchantProduct(req merchantProductPayload) error {
 	if req.HandlingTimeHours < 0 || req.DeliveryMinDays < 0 || req.DeliveryMaxDays < req.DeliveryMinDays {
 		return fmt.Errorf("delivery window is invalid")
 	}
-	allowedMethods := map[string]bool{"delivery": true, "pickup": true, "atlantic_last_mile": true}
+	allowedMethods := map[string]bool{"delivery": true, "pickup": true}
 	for _, method := range req.DeliveryMethods {
 		if !allowedMethods[method] {
 			return fmt.Errorf("unsupported delivery method: %s", method)

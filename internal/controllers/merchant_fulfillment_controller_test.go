@@ -11,9 +11,8 @@ func TestValidFulfillmentTransition(t *testing.T) {
 		{"local merchant cannot enter international transit", "merchant_local", "merchant", "packed", "international_transit", false},
 		{"cross border dispatches", "merchant_cross_border", "merchant", "processing", "dispatched_from_origin", true},
 		{"cross border cannot skip to delivered", "merchant_cross_border", "merchant", "accepted", "delivered", false},
-		{"merchant hands off to Atlantic", "merchant_cross_border", "merchant", "local_hub", "handed_to_atlantic", true},
-		{"Atlantic last mile receives handoff", "merchant_cross_border", "atlantic_last_mile", "handed_to_atlantic", "local_hub", true},
-		{"Atlantic cannot change merchant processing", "merchant_cross_border", "atlantic_last_mile", "processing", "dispatched_from_origin", false},
+		{"retired handoff status rejected", "merchant_cross_border", "merchant", "local_hub", "handed_to_atlantic", false},
+		{"non-merchant owner rejected", "merchant_cross_border", "legacy_delivery", "local_hub", "out_for_delivery", false},
 		{"unknown route rejected", "unknown", "merchant", "pending", "accepted", false},
 	}
 	for _, tt := range tests {

@@ -26,7 +26,7 @@ type fulfillmentTransitionPayload struct {
 var merchantLocalTransitions = map[string]map[string]bool{
 	"pending":          {"accepted": true},
 	"accepted":         {"packed": true},
-	"packed":           {"ready_for_pickup": true, "out_for_delivery": true, "handed_to_atlantic": true},
+	"packed":           {"ready_for_pickup": true, "out_for_delivery": true},
 	"ready_for_pickup": {"delivered": true},
 	"out_for_delivery": {"delivered": true},
 }
@@ -38,23 +38,17 @@ var merchantCrossBorderTransitions = map[string]map[string]bool{
 	"dispatched_from_origin": {"international_transit": true},
 	"international_transit":  {"customs_clearance": true, "local_hub": true},
 	"customs_clearance":      {"local_hub": true},
-	"local_hub":              {"ready_for_pickup": true, "out_for_delivery": true, "handed_to_atlantic": true},
+	"local_hub":              {"ready_for_pickup": true, "out_for_delivery": true},
 	"ready_for_pickup":       {"delivered": true},
 	"out_for_delivery":       {"delivered": true},
 }
 
-var atlanticLastMileTransitions = map[string]map[string]bool{
-	"handed_to_atlantic": {"local_hub": true},
-	"local_hub":          {"ready_for_pickup": true, "out_for_delivery": true},
-	"ready_for_pickup":   {"delivered": true},
-	"out_for_delivery":   {"delivered": true},
-}
-
 func validFulfillmentTransition(route, owner, from, to string) bool {
 	var transitions map[string]map[string]bool
-	if owner == "atlantic_last_mile" {
-		transitions = atlanticLastMileTransitions
-	} else if route == "merchant_local" {
+	if owner != "merchant" {
+		return false
+	}
+	if route == "merchant_local" {
 		transitions = merchantLocalTransitions
 	} else if route == "merchant_cross_border" {
 		transitions = merchantCrossBorderTransitions
@@ -66,7 +60,7 @@ func legacyStageForFulfillment(route, status string) (string, string) {
 	switch status {
 	case "international_transit", "customs_clearance":
 		return "In Transit Internationally", "Shipped"
-	case "local_hub", "handed_to_atlantic", "ready_for_pickup":
+	case "local_hub", "ready_for_pickup":
 		return "Arrived at Local Hub", "Shipped"
 	case "out_for_delivery":
 		return "Out for Delivery", "Shipped"
@@ -100,8 +94,6 @@ func fulfillmentNotification(status string) (string, string) {
 		return "Customs clearance", "Your order is being processed by customs."
 	case "local_hub":
 		return "Arrived at local hub", "Your order has arrived at the local hub."
-	case "handed_to_atlantic":
-		return "Handed to Atlantic Express", "Atlantic Express is handling the last mile of your order."
 	case "ready_for_pickup":
 		return "Ready for pickup", "Your order is ready for pickup. Check the tracking page for the location."
 	case "out_for_delivery":
@@ -157,15 +149,6 @@ func (m *ProviderMarketplaceController) TransitionMerchantOrder(c *fiber.Ctx) er
 	return m.transitionFulfillment(c, c.Params("order_id"), providerID, "merchant", userID, req, estimated)
 }
 
-func (m *ProviderMarketplaceController) TransitionAtlanticLastMile(c *fiber.Ctx) error {
-	adminID, _ := c.Locals("admin_id").(string)
-	req, estimated, err := parseFulfillmentTransition(c)
-	if err != nil {
-		return err
-	}
-	return m.transitionFulfillment(c, c.Params("order_id"), "", "admin", adminID, req, estimated)
-}
-
 func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orderID, providerID, actorType, actorID string, req fulfillmentTransitionPayload, estimated *time.Time) error {
 	tx, err := m.db.Begin(c.Context())
 	if err != nil {
@@ -177,15 +160,9 @@ func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orde
 	var version int64
 	query := `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version
 		FROM order_fulfillments f JOIN orders o ON o.id=f.order_id
-		WHERE f.order_id=$1::uuid AND o.paid_at IS NOT NULL`
-	args := []any{orderID}
-	if actorType == "merchant" {
-		query += ` AND f.provider_id=$2::uuid AND f.owner='merchant'`
-		args = append(args, providerID)
-	} else {
-		query += ` AND f.owner='atlantic_last_mile'`
-	}
-	query += ` FOR UPDATE`
+		WHERE f.order_id=$1::uuid AND o.paid_at IS NOT NULL
+		AND f.provider_id=$2::uuid AND f.owner='merchant' FOR UPDATE`
+	args := []any{orderID, providerID}
 	if err = tx.QueryRow(c.Context(), query, args...).Scan(&fulfillmentID, &userID, &route, &owner, &currentStatus, &version); err != nil {
 		if err == pgx.ErrNoRows {
 			return fiber.NewError(fiber.StatusNotFound, "paid fulfilment not found or not assigned to you")
@@ -208,13 +185,9 @@ func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orde
 		return fiber.NewError(fiber.StatusConflict, fmt.Sprintf("cannot move %s fulfilment from %s to %s", route, currentStatus, req.Status))
 	}
 
-	newOwner := owner
-	if req.Status == "handed_to_atlantic" {
-		newOwner = "atlantic_last_mile"
-	}
 	stage, orderStatus := legacyStageForFulfillment(route, req.Status)
 	meta, _ := json.Marshal(map[string]any{"carrier": strings.TrimSpace(req.Carrier), "tracking_number": strings.TrimSpace(req.TrackingNumber), "tracking_url": strings.TrimSpace(req.TrackingURL)})
-	tag, err := tx.Exec(c.Context(), `UPDATE order_fulfillments SET owner=$3,status=$4,carrier=COALESCE(NULLIF($5,''),carrier),tracking_number=COALESCE(NULLIF($6,''),tracking_number),tracking_url=COALESCE(NULLIF($7,''),tracking_url),current_location=COALESCE(NULLIF($8,''),current_location),estimated_delivery_at=COALESCE($9,estimated_delivery_at),accepted_at=CASE WHEN $4='accepted' THEN COALESCE(accepted_at,now()) ELSE accepted_at END,dispatched_at=CASE WHEN $4 IN ('dispatched_from_origin','international_transit') THEN COALESCE(dispatched_at,now()) ELSE dispatched_at END,handed_to_atlantic_at=CASE WHEN $4='handed_to_atlantic' THEN COALESCE(handed_to_atlantic_at,now()) ELSE handed_to_atlantic_at END,delivered_at=CASE WHEN $4='delivered' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,version=version+1,updated_at=now() WHERE id=$1::uuid AND version=$2`, fulfillmentID, version, newOwner, req.Status, strings.TrimSpace(req.Carrier), strings.TrimSpace(req.TrackingNumber), strings.TrimSpace(req.TrackingURL), strings.TrimSpace(req.Location), estimated)
+	tag, err := tx.Exec(c.Context(), `UPDATE order_fulfillments SET status=$3,carrier=COALESCE(NULLIF($4,''),carrier),tracking_number=COALESCE(NULLIF($5,''),tracking_number),tracking_url=COALESCE(NULLIF($6,''),tracking_url),current_location=COALESCE(NULLIF($7,''),current_location),estimated_delivery_at=COALESCE($8,estimated_delivery_at),accepted_at=CASE WHEN $3='accepted' THEN COALESCE(accepted_at,now()) ELSE accepted_at END,dispatched_at=CASE WHEN $3 IN ('dispatched_from_origin','international_transit') THEN COALESCE(dispatched_at,now()) ELSE dispatched_at END,delivered_at=CASE WHEN $3='delivered' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,version=version+1,updated_at=now() WHERE id=$1::uuid AND version=$2`, fulfillmentID, version, req.Status, strings.TrimSpace(req.Carrier), strings.TrimSpace(req.TrackingNumber), strings.TrimSpace(req.TrackingURL), strings.TrimSpace(req.Location), estimated)
 	if err != nil || tag.RowsAffected() != 1 {
 		return fiber.NewError(fiber.StatusConflict, "fulfilment changed; refresh and retry")
 	}
@@ -234,7 +207,7 @@ func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orde
 	if err = tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return c.JSON(fiber.Map{"order_id": orderID, "route": route, "owner": newOwner, "status": req.Status, "tracking_stage": stage, "version": version + 1})
+	return c.JSON(fiber.Map{"order_id": orderID, "route": route, "owner": owner, "status": req.Status, "tracking_stage": stage, "version": version + 1})
 }
 
 func newMerchantManifestCode() string {

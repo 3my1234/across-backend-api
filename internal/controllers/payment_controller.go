@@ -697,16 +697,10 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 		return err
 	}
 
-	var batchID any
-	packageLabel := "LOCAL-" + shortOrderLabel(orderID)
-	if fulfillmentMode == "atlantic_import" {
-		importBatchID, batchCode, err := p.ensureDailyBatch(ctx, tx, countryID, promisedAt, orderAmount)
-		if err != nil {
-			return err
-		}
-		batchID = importBatchID
-		packageLabel = fmt.Sprintf("%s-%s", batchCode, shortOrderLabel(orderID))
+	if providerID == nil || (fulfillmentMode != "merchant_local" && fulfillmentMode != "merchant_cross_border") {
+		return errors.New("order does not have seller-managed fulfilment")
 	}
+	packageLabel := "SELLER-" + shortOrderLabel(orderID)
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE orders
@@ -718,7 +712,7 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 			paid_at = COALESCE(paid_at, now()),
 			updated_at = now()
 		WHERE id = $1 AND order_status = 'Pending'
-	`, orderID, batchID, packageLabel, txRef, gatewayID)
+	`, orderID, nil, packageLabel, txRef, gatewayID)
 	if err != nil {
 		return err
 	}
@@ -739,10 +733,8 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	`, orderID); err != nil {
 		return err
 	}
-	if fulfillmentMode != "atlantic_import" && providerID != nil {
-		if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,0,$5,'pending',now()+interval '7 days') ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,0,$5,'pending',now()+interval '7 days') ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

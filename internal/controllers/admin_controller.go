@@ -1165,7 +1165,7 @@ func syncBatchOrders(ctx context.Context, tx pgx.Tx, batchID, status string) err
 	deliveryComplete := false
 	switch status {
 	case "funds_sent_to_china":
-			trackingStage = "Arrived at International Hub"
+		trackingStage = "Arrived at International Hub"
 	case "purchasing":
 		trackingStage = "Arrived at International Hub"
 	case "enroute_nigeria":
@@ -1211,10 +1211,8 @@ func normalizeAdminRole(role string) string {
 		return "catalog_admin"
 	case "super_admin":
 		return "super_admin"
-	case "admin_ii", "procurement_admin":
-		return "procurement_admin"
-	case "admin_iii", "courier_admin":
-		return "courier_admin"
+	case "admin_ii", "procurement_admin", "admin_iii", "courier_admin":
+		return "catalog_admin"
 	default:
 		return ""
 	}
@@ -1222,7 +1220,7 @@ func normalizeAdminRole(role string) string {
 
 func isValidAdminRole(role string) bool {
 	switch role {
-	case "super_admin", "catalog_admin", "procurement_admin", "courier_admin":
+	case "super_admin", "catalog_admin":
 		return true
 	default:
 		return false

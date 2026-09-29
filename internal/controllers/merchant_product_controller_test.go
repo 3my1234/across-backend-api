@@ -62,13 +62,24 @@ func TestNormalizeMerchantProductAcceptsLegacyCrossBorderPortalValues(t *testing
 	}
 }
 
-func TestValidateMerchantProductRejectsCrossBorderStockInNigeria(t *testing.T) {
+func TestValidateMerchantProductAllowsSellersToExportFromNigeria(t *testing.T) {
 	req := validMerchantProductPayload()
 	req.FulfillmentMode = "merchant_cross_border"
 	req.StockState = "foreign_stock"
 
-	if err := validateMerchantProduct(req); err == nil {
-		t.Fatal("expected cross-border inventory in Nigeria to be rejected")
+	if err := validateMerchantProduct(req); err != nil {
+		t.Fatalf("expected Nigerian seller export stock to validate, got %v", err)
+	}
+}
+
+func TestNormalizeMerchantProductRetiresAtlanticLastMile(t *testing.T) {
+	req := validMerchantProductPayload()
+	req.AtlanticLastMile = true
+
+	normalizeMerchantProduct(&req)
+
+	if req.AtlanticLastMile {
+		t.Fatal("expected retired Atlantic last-mile flag to be disabled")
 	}
 }
 

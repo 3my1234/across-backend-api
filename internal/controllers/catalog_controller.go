@@ -47,7 +47,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
 			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
@@ -56,7 +56,8 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved'
-		  AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 		ORDER BY CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
 		LIMIT 80
 	`, hasLocation, latitude, longitude)
@@ -135,14 +136,15 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			p.local_currency_code, p.flash_sale_price,
 			p.local_selling_price, p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.created_at, COUNT(*) OVER() AS total_count, p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved' AND p.is_flash_sale = true AND p.inventory_count > 0
-		  AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 		  AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
 		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
 			OR p.description ILIKE '%' || $1 || '%')
@@ -209,7 +211,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
 			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
 			p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
@@ -217,7 +219,8 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		FROM products p
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved'
-		  AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
@@ -292,7 +295,8 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			WHERE p.id <> $1
 				AND p.is_active = true
 				AND p.moderation_status='approved'
-				AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 				AND p.inventory_count > 0
 				AND cardinality($2::text[]) > 0
 				AND p.category_path && $2::text[]
@@ -304,7 +308,8 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			WHERE p.id <> $1
 				AND p.is_active = true
 				AND p.moderation_status='approved'
-				AND (p.provider_id IS NULL OR EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
+				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
 				AND p.inventory_count > 0
 				AND NOT EXISTS (SELECT 1 FROM related r WHERE r.id = p.id)
 			ORDER BY p.created_at DESC, p.id DESC
@@ -318,7 +323,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			p.local_currency_code,
 			CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE p.local_selling_price END,
 			CASE WHEN p.is_flash_sale THEN p.local_selling_price ELSE COALESCE(p.compare_at_price, 0) END,
-			p.inventory_count, p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'atlantic_last_mile',p.atlantic_last_mile),
+			p.inventory_count, p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.is_flash_sale, COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
