@@ -89,7 +89,16 @@ func QueueVerificationEmail(ctx context.Context, db emailQueryer, userID, token,
 }
 
 func QueueWelcomeEmail(ctx context.Context, db emailQueryer, userID string) error {
-	return queueUserEmail(ctx, db, userID, "welcome:"+userID, "welcome", map[string]string{})
+	return QueueWelcomeEmailForContext(ctx, db, userID, "buyer")
+}
+
+func QueueWelcomeEmailForContext(ctx context.Context, db emailQueryer, userID, accountContext string) error {
+	if accountContext != "provider" {
+		accountContext = "buyer"
+	}
+	return queueUserEmail(ctx, db, userID, "welcome:"+userID, "welcome", map[string]string{
+		"account_context": accountContext,
+	})
 }
 
 func QueuePasswordResetEmail(ctx context.Context, db emailQueryer, userID, token, publicBaseURL string) error {

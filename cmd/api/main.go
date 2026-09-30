@@ -95,7 +95,7 @@ func runEmailDelivery(ctx context.Context, db *pgxpool.Pool, sender *services.Em
 }
 
 func startPushNotificationWorker(ctx context.Context, db *pgxpool.Pool) {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	client := &http.Client{Timeout: 15 * time.Second}
 	runPushNotifications(ctx, db, client)

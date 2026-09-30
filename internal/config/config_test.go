@@ -13,6 +13,7 @@ func TestProductionURLDefaults(t *testing.T) {
 	t.Setenv("SMTP_FROM_EMAIL", "")
 	t.Setenv("DEFAULT_FROM_EMAIL", "")
 	t.Setenv("WEBSITE_URL", "")
+	t.Setenv("PROVIDER_PORTAL_URL", "")
 	t.Setenv("BRAND_LOGO_URL", "")
 
 	cfg := Load()
@@ -30,6 +31,9 @@ func TestProductionURLDefaults(t *testing.T) {
 	}
 	if cfg.WebsiteURL != "https://atlxpres.com" {
 		t.Fatalf("WebsiteURL = %q", cfg.WebsiteURL)
+	}
+	if cfg.ProviderPortalURL != "https://admin.atlxpres.com/provider.html" {
+		t.Fatalf("ProviderPortalURL = %q", cfg.ProviderPortalURL)
 	}
 	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {
 		t.Fatalf("SMTPFromEmail = %q", cfg.SMTPFromEmail)

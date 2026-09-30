@@ -23,6 +23,23 @@ type fulfillmentTransitionPayload struct {
 	EstimatedDelivery string `json:"estimated_delivery_at"`
 }
 
+type bulkFulfillmentItem struct {
+	OrderID         string `json:"order_id"`
+	ExpectedVersion int64  `json:"expected_version"`
+}
+
+type bulkFulfillmentPayload struct {
+	Status            string                `json:"status"`
+	IdempotencyKey    string                `json:"idempotency_key"`
+	Notes             string                `json:"notes"`
+	Location          string                `json:"location"`
+	Carrier           string                `json:"carrier"`
+	TrackingNumber    string                `json:"tracking_number"`
+	TrackingURL       string                `json:"tracking_url"`
+	EstimatedDelivery string                `json:"estimated_delivery_at"`
+	Orders            []bulkFulfillmentItem `json:"orders"`
+}
+
 var merchantLocalTransitions = map[string]map[string]bool{
 	"pending":          {"accepted": true},
 	"accepted":         {"packed": true},
@@ -147,6 +164,84 @@ func (m *ProviderMarketplaceController) TransitionMerchantOrder(c *fiber.Ctx) er
 		return err
 	}
 	return m.transitionFulfillment(c, c.Params("order_id"), providerID, "merchant", userID, req, estimated)
+}
+
+func (m *ProviderMarketplaceController) BulkTransitionMerchantOrders(c *fiber.Ctx) error {
+	userID, _ := c.Locals("user_id").(string)
+	providerID, role, err := m.providerForUser(c.Context(), userID)
+	if err != nil || (role != "owner" && role != "manager" && role != "staff") {
+		return fiber.ErrForbidden
+	}
+	var req bulkFulfillmentPayload
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.ErrBadRequest
+	}
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if len(req.Orders) < 1 || len(req.Orders) > 200 || req.Status == "" || req.IdempotencyKey == "" || len(req.IdempotencyKey) > 100 {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "status, idempotency_key, and 1-200 orders are required")
+	}
+	estimated, err := parseEstimatedDelivery(req.EstimatedDelivery)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
+	seen := make(map[string]bool, len(req.Orders))
+	for _, item := range req.Orders {
+		if _, err := uuid.Parse(item.OrderID); err != nil || item.ExpectedVersion < 1 || seen[item.OrderID] {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "orders must contain unique order_id UUIDs and expected_version")
+		}
+		seen[item.OrderID] = true
+	}
+
+	tx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrServiceUnavailable
+	}
+	defer tx.Rollback(c.Context())
+	results := make([]fiber.Map, 0, len(req.Orders))
+	for _, item := range req.Orders {
+		var fulfillmentID, buyerID, route, owner, currentStatus string
+		var version int64
+		err = tx.QueryRow(c.Context(), `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version
+			FROM order_fulfillments f JOIN orders o ON o.id=f.order_id
+			WHERE f.order_id=$1::uuid AND o.paid_at IS NOT NULL AND f.provider_id=$2::uuid
+			AND f.owner='merchant' FOR UPDATE`, item.OrderID, providerID).
+			Scan(&fulfillmentID, &buyerID, &route, &owner, &currentStatus, &version)
+		if err == pgx.ErrNoRows {
+			return fiber.NewError(fiber.StatusNotFound, "one or more paid orders are unavailable or not assigned to you")
+		}
+		if err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if version != item.ExpectedVersion || !validFulfillmentTransition(route, owner, currentStatus, req.Status) {
+			return fiber.NewError(fiber.StatusConflict, fmt.Sprintf("order %s cannot move from %s to %s; refresh and select orders at the same stage", item.OrderID, currentStatus, req.Status))
+		}
+		stage, orderStatus := legacyStageForFulfillment(route, req.Status)
+		meta, _ := json.Marshal(map[string]any{"carrier": strings.TrimSpace(req.Carrier), "tracking_number": strings.TrimSpace(req.TrackingNumber), "tracking_url": strings.TrimSpace(req.TrackingURL)})
+		tag, updateErr := tx.Exec(c.Context(), `UPDATE order_fulfillments SET status=$3,carrier=COALESCE(NULLIF($4,''),carrier),tracking_number=COALESCE(NULLIF($5,''),tracking_number),tracking_url=COALESCE(NULLIF($6,''),tracking_url),current_location=COALESCE(NULLIF($7,''),current_location),estimated_delivery_at=COALESCE($8,estimated_delivery_at),accepted_at=CASE WHEN $3='accepted' THEN COALESCE(accepted_at,now()) ELSE accepted_at END,dispatched_at=CASE WHEN $3 IN ('dispatched_from_origin','international_transit') THEN COALESCE(dispatched_at,now()) ELSE dispatched_at END,delivered_at=CASE WHEN $3='delivered' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,version=version+1,updated_at=now() WHERE id=$1::uuid AND version=$2`, fulfillmentID, version, req.Status, strings.TrimSpace(req.Carrier), strings.TrimSpace(req.TrackingNumber), strings.TrimSpace(req.TrackingURL), strings.TrimSpace(req.Location), estimated)
+		if updateErr != nil || tag.RowsAffected() != 1 {
+			return fiber.NewError(fiber.StatusConflict, "an order changed while the bulk update was running; refresh and retry")
+		}
+		if _, err = tx.Exec(c.Context(), `UPDATE orders SET current_tracking_stage=$2::tracking_stage,order_status=$3::order_status,delivered_at=CASE WHEN $3='Delivered' THEN COALESCE(delivered_at,now()) ELSE delivered_at END,updated_at=now() WHERE id=$1::uuid`, item.OrderID, stage, orderStatus); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		itemKey := req.IdempotencyKey + ":" + item.OrderID
+		if _, err = tx.Exec(c.Context(), `INSERT INTO fulfillment_events(fulfillment_id,actor_type,actor_id,previous_status,status,notes,location,metadata,idempotency_key) VALUES($1::uuid,'merchant',$2::uuid,$3,$4,$5,$6,$7::jsonb,$8)`, fulfillmentID, userID, currentStatus, req.Status, strings.TrimSpace(req.Notes), strings.TrimSpace(req.Location), meta, itemKey); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if _, err = tx.Exec(c.Context(), `INSERT INTO tracking_events(order_id,stage,notes) VALUES($1::uuid,$2::tracking_stage,$3)`, item.OrderID, stage, strings.TrimSpace(req.Notes)); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		title, body := fulfillmentNotification(req.Status)
+		if err = insertNotification(c.Context(), tx, buyerID, item.OrderID, nil, "fulfillment_update", title, body, map[string]any{"order_id": item.OrderID, "route": route, "status": req.Status, "location": strings.TrimSpace(req.Location)}, "fulfillment:"+fulfillmentID+":"+itemKey); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		results = append(results, fiber.Map{"order_id": item.OrderID, "status": req.Status, "version": version + 1})
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"updated": len(results), "items": results})
 }
 
 func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orderID, providerID, actorType, actorID string, req fulfillmentTransitionPayload, estimated *time.Time) error {

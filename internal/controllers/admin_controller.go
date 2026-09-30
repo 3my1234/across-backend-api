@@ -253,27 +253,12 @@ func (a *AdminController) ListUsers(c *fiber.Ctx) error {
 
 func (a *AdminController) DeleteUser(c *fiber.Ctx) error {
 	userID := c.Params("user_id")
-	tx, err := a.db.Begin(c.Context())
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(c.Context())
-
-	if _, err := tx.Exec(c.Context(), `DELETE FROM orders WHERE user_id = $1`, userID); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user orders")
-	}
-	if _, err := tx.Exec(c.Context(), `DELETE FROM reviews WHERE user_id = $1`, userID); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user reviews")
-	}
-	tag, err := tx.Exec(c.Context(), `DELETE FROM users WHERE id = $1`, userID)
+	tag, err := a.db.Exec(c.Context(), `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete user")
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "user not found")
-	}
-	if err := tx.Commit(c.Context()); err != nil {
-		return err
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

@@ -13,6 +13,7 @@ const (
 	defaultAPIBaseURL     = "https://api.atlxpres.com"
 	defaultAssetsCDNBase  = "https://media.atlxpres.com"
 	defaultWebsiteURL     = "https://atlxpres.com"
+	defaultProviderURL    = "https://admin.atlxpres.com/provider.html"
 )
 
 type Config struct {
@@ -51,6 +52,7 @@ type Config struct {
 	SESSNSTopicARN           string
 	BrandLogoURL             string
 	WebsiteURL               string
+	ProviderPortalURL        string
 }
 
 func Load() Config {
@@ -117,6 +119,7 @@ func Load() Config {
 		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:             brandLogoURL,
 		WebsiteURL:               env("WEBSITE_URL", defaultWebsiteURL),
+		ProviderPortalURL:        env("PROVIDER_PORTAL_URL", defaultProviderURL),
 	}
 }
 

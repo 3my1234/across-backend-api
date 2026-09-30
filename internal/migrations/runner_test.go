@@ -90,3 +90,38 @@ func TestMigration042KeepsImmutablePaymentTriggerComplete(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration046DefinesCompleteAccountDeletionPolicy(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "migrations", "046_account_hard_delete_cascades.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(splitSQLStatements(string(content)), "\n")
+	for _, required := range []string{
+		"orders_user_id_fkey",
+		"provider_organizations_owner_user_id_fkey",
+		"payments_provider_subscription_id_fkey",
+		"payments_user_id_fkey",
+		"products_provider_id_fkey",
+		"provider_conversations_user_id_fkey",
+		"ON DELETE CASCADE",
+		"ON DELETE SET NULL",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("account deletion migration is missing %q", required)
+		}
+	}
+}
+
+func TestMigration047AddsRegistrationContext(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "migrations", "047_registration_context.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(splitSQLStatements(string(content)), "\n")
+	for _, required := range []string{"registration_context", "'buyer'", "'provider'"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("registration context migration is missing %q", required)
+		}
+	}
+}

@@ -173,8 +173,8 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Get("/notifications", notifications.List)
 	authed.Get("/notifications/unread-count", notifications.UnreadCount)
 	authed.Get("/notifications/activity", notifications.Activity)
-	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
+	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Post("/notifications/push-token", notifications.RegisterPushToken)
 	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
 
@@ -200,6 +200,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	authed.Delete("/providers/me/products/:product_id", marketplaceController.ArchiveMerchantProduct)
 	authed.Post("/providers/me/products/:product_id/submit", marketplaceController.SubmitMerchantProduct)
 	authed.Get("/providers/me/merchant-orders", marketplaceController.ListMyMerchantOrders)
+	authed.Patch("/providers/me/merchant-orders/fulfillment/bulk", marketplaceController.BulkTransitionMerchantOrders)
 	authed.Patch("/providers/me/merchant-orders/:order_id/fulfillment", marketplaceController.TransitionMerchantOrder)
 	authed.Get("/providers/me/manifests", marketplaceController.ListMerchantManifests)
 	authed.Post("/providers/me/manifests", marketplaceController.CreateMerchantManifest)

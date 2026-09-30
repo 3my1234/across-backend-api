@@ -85,10 +85,11 @@ func NewAuthController(db *pgxpool.Pool, cfg config.Config) *AuthController {
 
 func (a *AuthController) Signup(c *fiber.Ctx) error {
 	var req struct {
-		FullName string `json:"full_name"`
-		Email    string `json:"email"`
-		Phone    string `json:"phone"`
-		Password string `json:"password"`
+		FullName            string `json:"full_name"`
+		Email               string `json:"email"`
+		Phone               string `json:"phone"`
+		Password            string `json:"password"`
+		RegistrationContext string `json:"registration_context"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
@@ -98,6 +99,9 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	req.FullName = strings.TrimSpace(req.FullName)
 	if req.FullName == "" || !validEmail || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name, email, and 8+ character password are required")
+	}
+	if req.RegistrationContext != "provider" {
+		req.RegistrationContext = "buyer"
 	}
 
 	countryID, err := ensureCountry(c, a.db)
@@ -121,10 +125,10 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	defer tx.Rollback(c.Context())
 	var userID string
 	err = tx.QueryRow(c.Context(), `
-		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at, verification_sent_at, verification_resend_count)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, false, false, $6, $7, now(), 0)
+		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at, verification_sent_at, verification_resend_count, registration_context)
+		VALUES ($1, $2, NULLIF($3, ''), $4, $5, false, false, $6, $7, now(), 0, $8)
 		RETURNING id
-	`, countryID, req.Email, strings.TrimSpace(req.Phone), string(hash), req.FullName, verificationToken, expiresAt).Scan(&userID)
+	`, countryID, req.Email, strings.TrimSpace(req.Phone), string(hash), req.FullName, verificationToken, expiresAt, req.RegistrationContext).Scan(&userID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -835,7 +839,7 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		return err
 	}
 	defer tx.Rollback(c.Context())
-	var userID, email, fullName string
+	var userID, email, fullName, registrationContext string
 	err = tx.QueryRow(c.Context(), `
 		UPDATE users
 		SET email_verified = true,
@@ -847,14 +851,14 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 			updated_at = now()
 		WHERE verification_token = $1
 		  AND verification_token_expires_at >= now()
-		RETURNING id, email, full_name
-	`, token).Scan(&userID, &email, &fullName)
+		RETURNING id, email, full_name, registration_context
+	`, token).Scan(&userID, &email, &fullName, &registrationContext)
 	if err != nil {
 		c.Status(fiber.StatusBadRequest)
 		c.Type("html", "utf-8")
 		return c.SendString(a.verificationResultPage(false, "Verification link unavailable", "This link is invalid or has expired. Return to the app and request a new verification email."))
 	}
-	if err := services.QueueWelcomeEmail(c.Context(), tx, userID); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
+	if err := services.QueueWelcomeEmailForContext(c.Context(), tx, userID, registrationContext); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
 		return err
 	}
 	if err := tx.Commit(c.Context()); err != nil {
@@ -865,7 +869,11 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 	}
 
 	c.Type("html", "utf-8")
-	return c.SendString(a.verificationResultPage(true, "Email verified successfully", "Your Atlantic Express account is active. Return to the mobile app and sign in to continue."))
+	verificationMessage := "Your Atlantic Express account is active. Return to the mobile app and sign in to continue."
+	if registrationContext == "provider" {
+		verificationMessage = "Your Atlantic Express account is active. Return to the provider portal and sign in to complete provider onboarding."
+	}
+	return c.SendString(a.verificationResultPage(true, "Email verified successfully", verificationMessage))
 }
 
 func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
@@ -901,7 +909,13 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"message": "account is already verified"})
 	}
 	if sentAt != nil && time.Since(*sentAt) < 5*time.Minute {
-		return fiber.NewError(fiber.StatusTooManyRequests, "please wait before requesting another verification email")
+		remaining := 5*time.Minute - time.Since(*sentAt)
+		retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
+		c.Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"message":             "Your verification email is still being delivered. Please wait before requesting another.",
+			"retry_after_seconds": retryAfterSeconds,
+		})
 	}
 
 	verificationToken, err := newVerificationToken()

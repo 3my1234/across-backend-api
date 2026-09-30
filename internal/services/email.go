@@ -48,27 +48,43 @@ func (e *EmailService) sendVerificationEmail(toEmail, toName, verificationURL, m
 }
 
 func (e *EmailService) SendWelcomeEmail(toEmail, toName string) error {
-	return e.sendWelcomeEmail(toEmail, toName, "")
+	return e.sendWelcomeEmail(toEmail, toName, "", "buyer")
 }
 
-func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID string) error {
+func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountContext string) error {
 	plainName := strings.TrimSpace(toName)
 	if plainName == "" {
 		plainName = "there"
 	}
 	name := html.EscapeString(plainName)
-	website := html.EscapeString(strings.TrimSpace(e.cfg.WebsiteURL))
+	destination := strings.TrimSpace(e.cfg.WebsiteURL)
+	introduction := "Explore products and trusted services, pay securely in your supported currency, and follow each order from payment to delivery."
+	featureOneTitle, featureOneCopy := "Discover", "Products and services"
+	featureTwoTitle, featureTwoCopy := "Pay", "Secure checkout"
+	featureThreeTitle, featureThreeCopy := "Track", "Order progress"
+	actionLabel := "Explore Atlantic Express"
+	plainAction := "Explore Atlantic Express"
+	if accountContext == "provider" {
+		destination = strings.TrimSpace(e.cfg.ProviderPortalURL)
+		introduction = "Open the provider portal to complete your business or professional profile, submit verification documents, and prepare your products or services for review."
+		featureOneTitle, featureOneCopy = "Verify", "Complete your profile"
+		featureTwoTitle, featureTwoCopy = "List", "Products or services"
+		featureThreeTitle, featureThreeCopy = "Grow", "Reach verified buyers"
+		actionLabel = "Open provider portal"
+		plainAction = "Open the provider portal"
+	}
+	website := html.EscapeString(destination)
 	body := e.layout("Welcome to Atlantic Express", "Your Atlantic Express account is ready.", fmt.Sprintf(`
 <p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Hello %s,</p>
 <p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Your Atlantic Express account is ready. You also received <strong>100 XP</strong>, worth <strong>&#8358;100</strong> in discounts.</p>
-<p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">Shop international products, pay securely in Naira, and follow delivery progress from purchase to arrival.</p>
+<p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">%s</p>
 <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="margin:22px 0;background:#F3F7F6;border:1px solid #DDE9E5;border-radius:12px;"><tr>
-<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;"><strong>Browse</strong><br>Curated products</td>
-<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;border-left:1px solid #DDE9E5;"><strong>Pay</strong><br>Securely in Naira</td>
-<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;border-left:1px solid #DDE9E5;"><strong>Track</strong><br>Every delivery stage</td>
+<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;"><strong>%s</strong><br>%s</td>
+<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;border-left:1px solid #DDE9E5;"><strong>%s</strong><br>%s</td>
+<td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;border-left:1px solid #DDE9E5;"><strong>%s</strong><br>%s</td>
 </tr></table>
-<p style="margin:24px 0 4px;text-align:center;"><a href="%s" style="display:inline-block;background:#0F3D35;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">Explore Atlantic Express</a></p>`, name, website))
-	plain := fmt.Sprintf("Hello %s,\n\nWelcome to Atlantic Express. Your account is ready, and you received 100 XP worth N100 in discounts.\n\nShop international products, pay securely in Naira, and track every delivery stage.\n\n%s", plainName, strings.TrimSpace(e.cfg.WebsiteURL))
+<p style="margin:24px 0 4px;text-align:center;"><a href="%s" style="display:inline-block;background:#0F3D35;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">%s</a></p>`, name, html.EscapeString(introduction), featureOneTitle, featureOneCopy, featureTwoTitle, featureTwoCopy, featureThreeTitle, featureThreeCopy, website, actionLabel))
+	plain := fmt.Sprintf("Hello %s,\n\nWelcome to Atlantic Express. Your account is ready, and you received 100 XP worth N100 in discounts.\n\n%s\n\n%s: %s", plainName, introduction, plainAction, destination)
 	return e.sendHTMLWithText(toEmail, "Welcome to Atlantic Express", plain, body, messageID)
 }
 
@@ -101,7 +117,7 @@ func (e *EmailService) SendOutboxTemplate(toEmail, toName, templateType string, 
 	case "verification":
 		return e.sendVerificationEmail(toEmail, toName, values["verification_url"], messageID)
 	case "welcome":
-		return e.sendWelcomeEmail(toEmail, toName, messageID)
+		return e.sendWelcomeEmail(toEmail, toName, messageID, values["account_context"])
 	case "password_reset":
 		return e.sendPasswordResetEmail(toEmail, toName, values["reset_url"], messageID)
 	case "marketplace_activity":
