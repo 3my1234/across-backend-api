@@ -220,7 +220,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		}
 		message := map[string]any{
 			"to": item.Token, "title": item.Title, "body": item.Body,
-			"channelId": "orders-silent", "data": data,
+			"channelId": "orders-silent", "priority": "high", "data": data,
 		}
 		if item.SoundEnabled {
 			message["sound"] = "default"
