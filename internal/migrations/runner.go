@@ -14,6 +14,20 @@ import (
 )
 
 func Run(ctx context.Context, db *pgxpool.Pool) error {
+	// Hold a session-level advisory lock for the complete migration pass. This
+	// lets several API replicas start together without racing the same DDL.
+	lockConn, err := db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer lockConn.Release()
+	if _, err = lockConn.Exec(ctx, `SELECT pg_advisory_lock(hashtext('atlantic-express-schema-migrations'))`); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext('atlantic-express-schema-migrations'))`)
+	}()
+
 	if err := ensureTrackingTable(ctx, db); err != nil {
 		return err
 	}

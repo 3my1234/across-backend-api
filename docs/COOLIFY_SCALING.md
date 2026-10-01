@@ -1,0 +1,84 @@
+# Atlantic Express production scaling on Coolify
+
+The repository now builds two processes from one Docker image:
+
+- API: `/app/across-api`
+- durable background worker: `/app/across-worker`
+
+Email and push delivery use PostgreSQL outbox tables with row leases,
+`FOR UPDATE SKIP LOCKED`, retries, and idempotency. This is the durable queue.
+Redis is used for cross-replica rate limiting and short-lived public catalogue
+caching. Losing Redis therefore does not lose an order, payment, email, or push
+job.
+
+## Safe migration from the current single Coolify resource
+
+1. Deploy the new backend normally with `RUN_INLINE_WORKERS=true`. This is
+   backward-compatible and applies all migrations.
+2. Add a private Redis resource in Coolify with persistence and a password.
+   Set `REDIS_URL` and `REDIS_OPTIONAL=false` on the API.
+3. Duplicate the backend resource as **atlxpres-worker**. Use the same repository,
+   branch, Dockerfile, database, Redis, SES, Expo, and application secrets.
+   Leave `DATABASE_READ_URL` blank on worker resources because workers never
+   serve catalogue reads. Start with `DB_MAX_CONNS=10` and `DB_MIN_CONNS=1`.
+   Override its start command with:
+
+   ```
+   /app/across-worker
+   ```
+
+   Do not attach a public domain to the worker.
+   Configure its internal health check as `/api/v1/health` on port 8080.
+4. Confirm the worker logs show `Atlantic Express background worker started`.
+5. Change the API resource to `RUN_INLINE_WORKERS=false` and redeploy it.
+   This prevents the API replicas from also running the worker loops.
+6. Scale the API to at least two replicas behind Coolify's proxy. Scale workers
+   independently when email/push queue age grows. Queue claiming is replica-safe.
+
+## PostgreSQL and PgBouncer
+
+Use a managed PostgreSQL service with automated backups, point-in-time recovery,
+multi-zone failover, monitoring, and PgBouncer (transaction mode). Put the
+PgBouncer URL in `DATABASE_URL`. Configure `DB_MAX_CONNS` so:
+
+```
+(API replicas x DB_MAX_CONNS) + (worker replicas x DB_MAX_CONNS)
+  < PgBouncer/server connection limit
+```
+
+A safe initial value is 20 connections per API replica and 10 per worker.
+The previous hard-coded 80 connections per process would exhaust PostgreSQL as
+replicas were added; connection budgets are now configurable.
+
+When a managed read replica is available, set `DATABASE_READ_URL`. Public
+catalogue product reads use it; payments, checkout, inventory, accounts, and all
+writes continue to use the primary database. Replication lag is therefore never
+used as proof of payment.
+
+## Health checks and scaling signals
+
+- Liveness: `/api/v1/health`
+- Readiness: `/api/v1/ready`
+
+Readiness verifies primary PostgreSQL, the optional read database, and required
+Redis. It also reports current database pool usage. Email, storage, and Google
+authentication configuration are reported as capabilities but do not remove all
+API replicas from service because one external provider is temporarily slow.
+Authenticated admins can inspect `/api/v1/admin/ops/queue-health` for
+pending email/push counts, oldest-job age, and database-pool usage.
+
+Scale API replicas based on sustained CPU, memory, p95 latency, request rate,
+database-pool saturation, and HTTP 5xx rates. Scale workers based on the oldest
+pending outbox job and pending-job count. A larger single server is only a
+temporary capacity increase, not the million-user architecture.
+
+## CDN and mobile behavior
+
+Cloudflare/CloudFront remain the first cache layer for public assets and
+catalogue responses. Redis supplies a five-second shared origin cache so every
+API replica sees the same short-lived entry. Mobile foreground polling is only
+a fallback; push notifications are the immediate update mechanism.
+
+No EAS build is needed for API/worker scaling alone. The currently unbuilt
+mobile changes from commit `74fdb22` still require one new EAS build after
+the backend and provider portal are deployed and smoke-tested.

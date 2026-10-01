@@ -21,6 +21,36 @@ func NewOpsController(db *pgxpool.Pool) *OpsController {
 	return &OpsController{db: db}
 }
 
+// QueueHealth exposes bounded aggregate signals for worker autoscaling and
+// incident diagnosis without returning recipients, tokens, or message bodies.
+func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
+	var emailPending, pushPending int64
+	var emailOldestSeconds, pushOldestSeconds float64
+	if err := o.db.QueryRow(c.Context(), `
+		SELECT COUNT(*)::bigint,
+			COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at))), 0)
+		FROM email_outbox
+		WHERE status IN ('pending', 'retry', 'sending')
+	`).Scan(&emailPending, &emailOldestSeconds); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "email queue health unavailable")
+	}
+	if err := o.db.QueryRow(c.Context(), `
+		SELECT COUNT(*)::bigint,
+			COALESCE(EXTRACT(EPOCH FROM (now() - MIN(n.created_at))), 0)
+		FROM notification_push_deliveries d
+		JOIN notifications n ON n.id = d.notification_id
+		WHERE d.status IN ('pending', 'retry', 'sending')
+	`).Scan(&pushPending, &pushOldestSeconds); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "push queue health unavailable")
+	}
+	pool := o.db.Stat()
+	return c.JSON(fiber.Map{
+		"email":         fiber.Map{"pending": emailPending, "oldest_seconds": emailOldestSeconds},
+		"push":          fiber.Map{"pending": pushPending, "oldest_seconds": pushOldestSeconds},
+		"database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "idle": pool.IdleConns(), "max": pool.MaxConns()},
+	})
+}
+
 // ---------- Admin II: Purchase Confirmation ----------
 
 type BatchPurchaseItem struct {

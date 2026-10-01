@@ -3,6 +3,7 @@ package routes
 import (
 	_ "embed"
 	"strings"
+	"time"
 
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
@@ -10,16 +11,20 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 //go:embed atlantic-express-logo.png
 var atlanticExpressLogo []byte
 
-func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
+func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db)
-	catalog := controllers.NewCatalogController(db, cfg)
+	if readDB == nil {
+		readDB = db
+	}
+	catalog := controllers.NewCatalogController(readDB, cfg)
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
 	notifications := controllers.NewNotificationsController(db)
@@ -33,6 +38,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	profileController := controllers.NewProfileController(db)
 	marketplaceController := controllers.NewProviderMarketplaceController(db, cfg)
 	countryGuard := middleware.RequireAllowedCountry(cfg)
+	authRateLimit := middleware.DistributedRateLimit(cache, "auth", 20, time.Minute)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -57,19 +63,24 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 		return err
 	})
 	v1.Get("/health", func(c *fiber.Ctx) error {
-		databaseReady := db.Ping(c.Context()) == nil
-		status := fiber.StatusOK
-		if !databaseReady {
-			status = fiber.StatusServiceUnavailable
-		}
-		return c.Status(status).JSON(fiber.Map{"ok": databaseReady})
+		return c.JSON(fiber.Map{"ok": true})
 	})
 	v1.Get("/ready", func(c *fiber.Ctx) error {
 		databaseReady := db.Ping(c.Context()) == nil
-		privyReady := authController.PrivyReady(c.Context()) == nil
+		readDatabaseReady := readDB.Ping(c.Context()) == nil
+		redisReady := cache != nil
+		if redisReady {
+			redisReady = cache.Ping(c.Context()).Err() == nil
+		} else if cfg.RedisOptional {
+			redisReady = true
+		}
+		// Readiness must never depend on a live call to an external identity
+		// provider; that would eject every healthy replica during a Privy outage.
+		privyReady := strings.TrimSpace(cfg.PrivyAppID) != "" && strings.TrimSpace(cfg.PrivyAppSecret) != ""
 		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
 		emailReady := strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "" && strings.TrimSpace(cfg.SMTPFromEmail) != ""
-		ready := databaseReady && privyReady && storageReady && emailReady
+		ready := databaseReady && readDatabaseReady && redisReady
+		pool := db.Stat()
 		status := fiber.StatusOK
 		if !ready {
 			status = fiber.StatusServiceUnavailable
@@ -78,9 +89,16 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 			"ok": ready,
 			"checks": fiber.Map{
 				"database":        databaseReady,
+				"read_database":   readDatabaseReady,
+				"redis":           redisReady,
 				"email_delivery":  emailReady,
 				"google_auth":     privyReady,
 				"profile_uploads": storageReady,
+			},
+			"database_pool": fiber.Map{
+				"acquired": pool.AcquiredConns(),
+				"idle":     pool.IdleConns(),
+				"max":      pool.MaxConns(),
 			},
 		})
 	})
@@ -104,19 +122,19 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
 	v1.Post("/dev/login", dev.Login)
-	v1.Post("/auth/signup", countryGuard, authController.Signup)
-	v1.Post("/auth/login", countryGuard, authController.Login)
-	v1.Post("/auth/gmail", countryGuard, authController.Gmail)
-	v1.Post("/auth/privy/verify", countryGuard, authController.VerifyPrivy)
-	v1.Post("/auth/resend-verification", countryGuard, authController.ResendVerification)
+	v1.Post("/auth/signup", authRateLimit, countryGuard, authController.Signup)
+	v1.Post("/auth/login", authRateLimit, countryGuard, authController.Login)
+	v1.Post("/auth/gmail", authRateLimit, countryGuard, authController.Gmail)
+	v1.Post("/auth/privy/verify", authRateLimit, countryGuard, authController.VerifyPrivy)
+	v1.Post("/auth/resend-verification", authRateLimit, countryGuard, authController.ResendVerification)
 	v1.Get("/auth/verify-email", authController.VerifyEmail)
-	v1.Post("/auth/forgot-password", authController.ForgotPassword)
+	v1.Post("/auth/forgot-password", authRateLimit, authController.ForgotPassword)
 	v1.Get("/auth/reset-password", authController.ResetPasswordPage)
-	v1.Post("/auth/reset-password", authController.ResetPassword)
+	v1.Post("/auth/reset-password", authRateLimit, authController.ResetPassword)
 	v1.Post("/webhooks/ses", sesController.Webhook)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
-	v1.Post("/admin/login", admin.Login)
+	v1.Post("/admin/login", authRateLimit, admin.Login)
 	v1.Post("/admin/pricing/calculate", controllers.PriceBreakdown)
 	adminRoutes := v1.Group("/admin")
 	allAdmins := middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin")
@@ -128,6 +146,7 @@ func Register(app *fiber.App, db *pgxpool.Pool, cfg config.Config) {
 	adminRoutes.Patch("/activity/read-all", allAdmins, admin.MarkAllActivityRead)
 	adminRoutes.Patch("/activity/:event_id/read", allAdmins, admin.MarkActivityRead)
 	adminRoutes.Get("/overview", allAdmins, admin.Overview)
+	adminRoutes.Get("/ops/queue-health", allAdmins, ops.QueueHealth)
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
 	adminRoutes.Delete("/admins/:admin_id", superOnly, admin.DeleteAdmin)

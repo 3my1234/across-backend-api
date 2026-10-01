@@ -19,13 +19,24 @@ const (
 type Config struct {
 	AppEnv                   string
 	HTTPAddr                 string
+	WorkerHealthAddr         string
 	AllowedOrigins           string
 	DatabaseURL              string
+	DatabaseReadURL          string
 	RedisURL                 string
 	RedisAddr                string
 	RedisPassword            string
 	RedisDB                  int
 	RedisOptional            bool
+	DatabaseMaxConns         int
+	DatabaseMinConns         int
+	DatabaseReadMaxConns     int
+	DatabaseReadMinConns     int
+	RedisPoolSize            int
+	RedisMinIdleConns        int
+	RunInlineWorkers         bool
+	RateLimitPerMinute       int
+	PublicCacheTTLSeconds    int
 	JWTSecret                string
 	FlutterwaveSecretKey     string
 	FlutterwaveWebhookSecret string
@@ -86,13 +97,24 @@ func Load() Config {
 	return Config{
 		AppEnv:                   env("APP_ENV", "development"),
 		HTTPAddr:                 env("HTTP_ADDR", ":8080"),
+		WorkerHealthAddr:         env("WORKER_HEALTH_ADDR", ":8080"),
 		AllowedOrigins:           env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		DatabaseURL:              databaseURL(),
+		DatabaseReadURL:          env("DATABASE_READ_URL", ""),
 		RedisURL:                 env("REDIS_URL", ""),
 		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:            env("REDIS_PASSWORD", ""),
 		RedisDB:                  envInt("REDIS_DB", 0),
 		RedisOptional:            envBool("REDIS_OPTIONAL", true),
+		DatabaseMaxConns:         envInt("DB_MAX_CONNS", 20),
+		DatabaseMinConns:         envInt("DB_MIN_CONNS", 2),
+		DatabaseReadMaxConns:     envInt("DB_READ_MAX_CONNS", 20),
+		DatabaseReadMinConns:     envInt("DB_READ_MIN_CONNS", 2),
+		RedisPoolSize:            envInt("REDIS_POOL_SIZE", 64),
+		RedisMinIdleConns:        envInt("REDIS_MIN_IDLE_CONNS", 4),
+		RunInlineWorkers:         envBool("RUN_INLINE_WORKERS", true),
+		RateLimitPerMinute:       envInt("RATE_LIMIT_PER_MINUTE", 600),
+		PublicCacheTTLSeconds:    envInt("PUBLIC_CACHE_TTL_SECONDS", 5),
 		JWTSecret:                env("JWT_SECRET", "dev-only"),
 		FlutterwaveSecretKey:     env("FLUTTERWAVE_SECRET_KEY", ""),
 		FlutterwaveWebhookSecret: env("FLUTTERWAVE_WEBHOOK_SECRET", ""),

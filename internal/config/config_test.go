@@ -17,6 +17,12 @@ func TestProductionURLDefaults(t *testing.T) {
 	t.Setenv("BRAND_LOGO_URL", "")
 
 	cfg := Load()
+	if cfg.DatabaseMaxConns != 20 || cfg.DatabaseMinConns != 2 {
+		t.Fatalf("unexpected database pool defaults: max=%d min=%d", cfg.DatabaseMaxConns, cfg.DatabaseMinConns)
+	}
+	if cfg.RateLimitPerMinute != 600 || cfg.PublicCacheTTLSeconds != 5 {
+		t.Fatalf("unexpected scale defaults: rate=%d cache=%d", cfg.RateLimitPerMinute, cfg.PublicCacheTTLSeconds)
+	}
 	origins := strings.Split(cfg.AllowedOrigins, ",")
 	for _, origin := range []string{"https://atlxpres.com", "https://admin.atlxpres.com"} {
 		if !slices.Contains(origins, origin) {
