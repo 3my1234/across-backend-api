@@ -33,8 +33,10 @@ func main() {
 	}
 	defer store.Close()
 
-	if err := migrations.Run(ctx, store.PG); err != nil {
-		log.Fatal(err)
+	if cfg.RunMigrations {
+		if err := migrations.Run(ctx, store.PG); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	app := fiber.New(fiber.Config{

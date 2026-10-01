@@ -16,13 +16,13 @@ type Store struct {
 }
 
 func New(ctx context.Context, cfg config.Config) (*Store, error) {
-	pool, err := newPostgresPool(ctx, cfg.DatabaseURL, cfg.DatabaseMaxConns, cfg.DatabaseMinConns)
+	pool, err := NewPostgresPool(ctx, cfg.DatabaseURL, cfg.DatabaseMaxConns, cfg.DatabaseMinConns)
 	if err != nil {
 		return nil, err
 	}
 	readPool := pool
 	if cfg.DatabaseReadURL != "" && cfg.DatabaseReadURL != cfg.DatabaseURL {
-		readPool, err = newPostgresPool(ctx, cfg.DatabaseReadURL, cfg.DatabaseReadMaxConns, cfg.DatabaseReadMinConns)
+		readPool, err = NewPostgresPool(ctx, cfg.DatabaseReadURL, cfg.DatabaseReadMaxConns, cfg.DatabaseReadMinConns)
 		if err != nil {
 			pool.Close()
 			return nil, err
@@ -53,7 +53,7 @@ func New(ctx context.Context, cfg config.Config) (*Store, error) {
 	return &Store{PG: pool, ReadPG: readPool, Redis: rdb}, nil
 }
 
-func newPostgresPool(ctx context.Context, databaseURL string, configuredMax, configuredMin int) (*pgxpool.Pool, error) {
+func NewPostgresPool(ctx context.Context, databaseURL string, configuredMax, configuredMin int) (*pgxpool.Pool, error) {
 	pgxCfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, err

@@ -23,6 +23,7 @@ type Config struct {
 	AllowedOrigins           string
 	DatabaseURL              string
 	DatabaseReadURL          string
+	MigrationDatabaseURL     string
 	RedisURL                 string
 	RedisAddr                string
 	RedisPassword            string
@@ -35,6 +36,7 @@ type Config struct {
 	RedisPoolSize            int
 	RedisMinIdleConns        int
 	RunInlineWorkers         bool
+	RunMigrations            bool
 	RateLimitPerMinute       int
 	PublicCacheTTLSeconds    int
 	JWTSecret                string
@@ -101,6 +103,7 @@ func Load() Config {
 		AllowedOrigins:           env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		DatabaseURL:              databaseURL(),
 		DatabaseReadURL:          env("DATABASE_READ_URL", ""),
+		MigrationDatabaseURL:     env("MIGRATION_DATABASE_URL", databaseURL()),
 		RedisURL:                 env("REDIS_URL", ""),
 		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:            env("REDIS_PASSWORD", ""),
@@ -113,6 +116,7 @@ func Load() Config {
 		RedisPoolSize:            envInt("REDIS_POOL_SIZE", 64),
 		RedisMinIdleConns:        envInt("REDIS_MIN_IDLE_CONNS", 4),
 		RunInlineWorkers:         envBool("RUN_INLINE_WORKERS", true),
+		RunMigrations:            envBool("RUN_MIGRATIONS", true),
 		RateLimitPerMinute:       envInt("RATE_LIMIT_PER_MINUTE", 600),
 		PublicCacheTTLSeconds:    envInt("PUBLIC_CACHE_TTL_SECONDS", 5),
 		JWTSecret:                env("JWT_SECRET", "dev-only"),

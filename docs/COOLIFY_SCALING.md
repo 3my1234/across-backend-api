@@ -4,6 +4,7 @@ The repository now builds two processes from one Docker image:
 
 - API: `/app/across-api`
 - durable background worker: `/app/across-worker`
+- schema migration job: `/app/across-migrate`
 
 Email and push delivery use PostgreSQL outbox tables with row leases,
 `FOR UPDATE SKIP LOCKED`, retries, and idempotency. This is the durable queue.
@@ -34,6 +35,22 @@ job.
    This prevents the API replicas from also running the worker loops.
 6. Scale the API to at least two replicas behind Coolify's proxy. Scale workers
    independently when email/push queue age grows. Queue claiming is replica-safe.
+
+## Dedicated migrations before PgBouncer
+
+PgBouncer transaction pooling is incompatible with session-level advisory locks.
+Before pointing API replicas at a transaction-pooled URL:
+
+1. Create a non-public **atlxpres-migrate** resource from the same image.
+2. Set its command to `/app/across-migrate`.
+3. Set `MIGRATION_DATABASE_URL` to the direct primary PostgreSQL URL,
+   never the PgBouncer transaction-pool URL.
+4. Run this one-shot resource once per backend release before rolling out API
+   replicas.
+5. Set `RUN_MIGRATIONS=false` on every API replica.
+
+Until the migration job is configured, leave `RUN_MIGRATIONS=true` on the
+single current API so deployments remain backward-compatible.
 
 ## PostgreSQL and PgBouncer
 
