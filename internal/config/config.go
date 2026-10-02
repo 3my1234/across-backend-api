@@ -9,63 +9,64 @@ import (
 )
 
 const (
-	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com"
+	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com,https://provider.atlxpres.com"
 	defaultAPIBaseURL     = "https://api.atlxpres.com"
 	defaultAssetsCDNBase  = "https://media.atlxpres.com"
 	defaultWebsiteURL     = "https://atlxpres.com"
-	defaultProviderURL    = "https://admin.atlxpres.com/provider.html"
+	defaultProviderURL    = "https://provider.atlxpres.com"
 )
 
 type Config struct {
-	AppEnv                   string
-	HTTPAddr                 string
-	WorkerHealthAddr         string
-	AllowedOrigins           string
-	DatabaseURL              string
-	DatabaseReadURL          string
-	MigrationDatabaseURL     string
-	RedisURL                 string
-	RedisAddr                string
-	RedisPassword            string
-	RedisDB                  int
-	RedisOptional            bool
-	DatabaseMaxConns         int
-	DatabaseMinConns         int
-	DatabaseReadMaxConns     int
-	DatabaseReadMinConns     int
-	RedisPoolSize            int
-	RedisMinIdleConns        int
-	RunInlineWorkers         bool
-	RunMigrations            bool
-	RateLimitPerMinute       int
-	PublicCacheTTLSeconds    int
-	JWTSecret                string
-	FlutterwaveSecretKey     string
-	FlutterwaveWebhookSecret string
-	PrivyAppID               string
-	PrivyAppSecret           string
-	PrivyVerificationKey     string
-	PrivyVerificationMode    string
-	DefaultCountry           string
-	AllowedCountries         string
-	AdminBootstrapToken      string
-	AWSRegion                string
-	AWSAccessKeyID           string
-	AWSSecretAccessKey       string
-	S3BucketName             string
-	AssetsCDNBase            string
-	PublicBaseURL            string
-	SMTPHost                 string
-	SMTPPort                 string
-	SMTPUsername             string
-	SMTPPassword             string
-	SMTPFromEmail            string
-	SMTPFromName             string
-	SMTPReplyTo              string
-	SESSNSTopicARN           string
-	BrandLogoURL             string
-	WebsiteURL               string
-	ProviderPortalURL        string
+	AppEnv                      string
+	HTTPAddr                    string
+	WorkerHealthAddr            string
+	AllowedOrigins              string
+	DatabaseURL                 string
+	DatabaseReadURL             string
+	MigrationDatabaseURL        string
+	RedisURL                    string
+	RedisAddr                   string
+	RedisPassword               string
+	RedisDB                     int
+	RedisOptional               bool
+	DatabaseMaxConns            int
+	DatabaseMinConns            int
+	DatabaseReadMaxConns        int
+	DatabaseReadMinConns        int
+	RedisPoolSize               int
+	RedisMinIdleConns           int
+	RunInlineWorkers            bool
+	RunMigrations               bool
+	RateLimitPerMinute          int
+	PublicCacheTTLSeconds       int
+	JWTSecret                   string
+	FlutterwaveSecretKey        string
+	FlutterwaveWebhookSecret    string
+	FlutterwaveCustomerPaysFees bool
+	PrivyAppID                  string
+	PrivyAppSecret              string
+	PrivyVerificationKey        string
+	PrivyVerificationMode       string
+	DefaultCountry              string
+	AllowedCountries            string
+	AdminBootstrapToken         string
+	AWSRegion                   string
+	AWSAccessKeyID              string
+	AWSSecretAccessKey          string
+	S3BucketName                string
+	AssetsCDNBase               string
+	PublicBaseURL               string
+	SMTPHost                    string
+	SMTPPort                    string
+	SMTPUsername                string
+	SMTPPassword                string
+	SMTPFromEmail               string
+	SMTPFromName                string
+	SMTPReplyTo                 string
+	SESSNSTopicARN              string
+	BrandLogoURL                string
+	WebsiteURL                  string
+	ProviderPortalURL           string
 }
 
 func Load() Config {
@@ -97,55 +98,56 @@ func Load() Config {
 	}
 
 	return Config{
-		AppEnv:                   env("APP_ENV", "development"),
-		HTTPAddr:                 env("HTTP_ADDR", ":8080"),
-		WorkerHealthAddr:         env("WORKER_HEALTH_ADDR", ":8080"),
-		AllowedOrigins:           env("ALLOWED_ORIGINS", defaultAllowedOrigins),
-		DatabaseURL:              databaseURL(),
-		DatabaseReadURL:          env("DATABASE_READ_URL", ""),
-		MigrationDatabaseURL:     env("MIGRATION_DATABASE_URL", databaseURL()),
-		RedisURL:                 env("REDIS_URL", ""),
-		RedisAddr:                env("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:            env("REDIS_PASSWORD", ""),
-		RedisDB:                  envInt("REDIS_DB", 0),
-		RedisOptional:            envBool("REDIS_OPTIONAL", true),
-		DatabaseMaxConns:         envInt("DB_MAX_CONNS", 20),
-		DatabaseMinConns:         envInt("DB_MIN_CONNS", 2),
-		DatabaseReadMaxConns:     envInt("DB_READ_MAX_CONNS", 20),
-		DatabaseReadMinConns:     envInt("DB_READ_MIN_CONNS", 2),
-		RedisPoolSize:            envInt("REDIS_POOL_SIZE", 64),
-		RedisMinIdleConns:        envInt("REDIS_MIN_IDLE_CONNS", 4),
-		RunInlineWorkers:         envBool("RUN_INLINE_WORKERS", true),
-		RunMigrations:            envBool("RUN_MIGRATIONS", true),
-		RateLimitPerMinute:       envInt("RATE_LIMIT_PER_MINUTE", 600),
-		PublicCacheTTLSeconds:    envInt("PUBLIC_CACHE_TTL_SECONDS", 5),
-		JWTSecret:                env("JWT_SECRET", "dev-only"),
-		FlutterwaveSecretKey:     env("FLUTTERWAVE_SECRET_KEY", ""),
-		FlutterwaveWebhookSecret: env("FLUTTERWAVE_WEBHOOK_SECRET", ""),
-		PrivyAppID:               env("PRIVY_APP_ID", ""),
-		PrivyAppSecret:           env("PRIVY_APP_SECRET", ""),
-		PrivyVerificationKey:     env("PRIVY_VERIFICATION_KEY", ""),
-		PrivyVerificationMode:    env("PRIVY_VERIFICATION_MODE", "auto"),
-		DefaultCountry:           env("DEFAULT_COUNTRY", "NG"),
-		AllowedCountries:         env("ALLOWED_COUNTRIES", "NG"),
-		AdminBootstrapToken:      env("ADMIN_BOOTSTRAP_TOKEN", ""),
-		AWSRegion:                env("AWS_REGION", "eu-north-1"),
-		AWSAccessKeyID:           env("AWS_ACCESS_KEY_ID", ""),
-		AWSSecretAccessKey:       env("AWS_SECRET_ACCESS_KEY", ""),
-		S3BucketName:             firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
-		AssetsCDNBase:            env("ASSETS_CDN_BASE", defaultAssetsCDNBase),
-		PublicBaseURL:            publicBaseURL,
-		SMTPHost:                 env("SMTP_HOST", ""),
-		SMTPPort:                 env("SMTP_PORT", "587"),
-		SMTPUsername:             smtpUsername,
-		SMTPPassword:             smtpPassword,
-		SMTPFromEmail:            smtpFromEmail,
-		SMTPFromName:             smtpFromName,
-		SMTPReplyTo:              smtpReplyTo,
-		SESSNSTopicARN:           env("SES_SNS_TOPIC_ARN", ""),
-		BrandLogoURL:             brandLogoURL,
-		WebsiteURL:               env("WEBSITE_URL", defaultWebsiteURL),
-		ProviderPortalURL:        env("PROVIDER_PORTAL_URL", defaultProviderURL),
+		AppEnv:                      env("APP_ENV", "development"),
+		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
+		WorkerHealthAddr:            env("WORKER_HEALTH_ADDR", ":8080"),
+		AllowedOrigins:              env("ALLOWED_ORIGINS", defaultAllowedOrigins),
+		DatabaseURL:                 databaseURL(),
+		DatabaseReadURL:             env("DATABASE_READ_URL", ""),
+		MigrationDatabaseURL:        env("MIGRATION_DATABASE_URL", databaseURL()),
+		RedisURL:                    env("REDIS_URL", ""),
+		RedisAddr:                   env("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:               env("REDIS_PASSWORD", ""),
+		RedisDB:                     envInt("REDIS_DB", 0),
+		RedisOptional:               envBool("REDIS_OPTIONAL", true),
+		DatabaseMaxConns:            envInt("DB_MAX_CONNS", 20),
+		DatabaseMinConns:            envInt("DB_MIN_CONNS", 2),
+		DatabaseReadMaxConns:        envInt("DB_READ_MAX_CONNS", 20),
+		DatabaseReadMinConns:        envInt("DB_READ_MIN_CONNS", 2),
+		RedisPoolSize:               envInt("REDIS_POOL_SIZE", 64),
+		RedisMinIdleConns:           envInt("REDIS_MIN_IDLE_CONNS", 4),
+		RunInlineWorkers:            envBool("RUN_INLINE_WORKERS", true),
+		RunMigrations:               envBool("RUN_MIGRATIONS", true),
+		RateLimitPerMinute:          envInt("RATE_LIMIT_PER_MINUTE", 600),
+		PublicCacheTTLSeconds:       envInt("PUBLIC_CACHE_TTL_SECONDS", 5),
+		JWTSecret:                   env("JWT_SECRET", "dev-only"),
+		FlutterwaveSecretKey:        env("FLUTTERWAVE_SECRET_KEY", ""),
+		FlutterwaveWebhookSecret:    env("FLUTTERWAVE_WEBHOOK_SECRET", ""),
+		FlutterwaveCustomerPaysFees: envBool("FLUTTERWAVE_CUSTOMER_PAYS_FEES", false),
+		PrivyAppID:                  env("PRIVY_APP_ID", ""),
+		PrivyAppSecret:              env("PRIVY_APP_SECRET", ""),
+		PrivyVerificationKey:        env("PRIVY_VERIFICATION_KEY", ""),
+		PrivyVerificationMode:       env("PRIVY_VERIFICATION_MODE", "auto"),
+		DefaultCountry:              env("DEFAULT_COUNTRY", "NG"),
+		AllowedCountries:            env("ALLOWED_COUNTRIES", "NG"),
+		AdminBootstrapToken:         env("ADMIN_BOOTSTRAP_TOKEN", ""),
+		AWSRegion:                   env("AWS_REGION", "eu-north-1"),
+		AWSAccessKeyID:              env("AWS_ACCESS_KEY_ID", ""),
+		AWSSecretAccessKey:          env("AWS_SECRET_ACCESS_KEY", ""),
+		S3BucketName:                firstEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"),
+		AssetsCDNBase:               env("ASSETS_CDN_BASE", defaultAssetsCDNBase),
+		PublicBaseURL:               publicBaseURL,
+		SMTPHost:                    env("SMTP_HOST", ""),
+		SMTPPort:                    env("SMTP_PORT", "587"),
+		SMTPUsername:                smtpUsername,
+		SMTPPassword:                smtpPassword,
+		SMTPFromEmail:               smtpFromEmail,
+		SMTPFromName:                smtpFromName,
+		SMTPReplyTo:                 smtpReplyTo,
+		SESSNSTopicARN:              env("SES_SNS_TOPIC_ARN", ""),
+		BrandLogoURL:                brandLogoURL,
+		WebsiteURL:                  env("WEBSITE_URL", defaultWebsiteURL),
+		ProviderPortalURL:           env("PROVIDER_PORTAL_URL", defaultProviderURL),
 	}
 }
 

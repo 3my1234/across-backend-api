@@ -38,7 +38,7 @@ func TestProductionURLDefaults(t *testing.T) {
 	if cfg.WebsiteURL != "https://atlxpres.com" {
 		t.Fatalf("WebsiteURL = %q", cfg.WebsiteURL)
 	}
-	if cfg.ProviderPortalURL != "https://admin.atlxpres.com/provider.html" {
+	if cfg.ProviderPortalURL != "https://provider.atlxpres.com" {
 		t.Fatalf("ProviderPortalURL = %q", cfg.ProviderPortalURL)
 	}
 	if cfg.SMTPFromEmail != "welcome@atlxpres.com" {

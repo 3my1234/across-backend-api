@@ -200,18 +200,22 @@ func (m *ProviderMarketplaceController) BulkTransitionMerchantOrders(c *fiber.Ct
 	defer tx.Rollback(c.Context())
 	results := make([]fiber.Map, 0, len(req.Orders))
 	for _, item := range req.Orders {
-		var fulfillmentID, buyerID, route, owner, currentStatus string
+		var fulfillmentID, buyerID, route, owner, currentStatus, settlementStatus string
 		var version int64
-		err = tx.QueryRow(c.Context(), `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version
+		err = tx.QueryRow(c.Context(), `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version,
+			COALESCE((SELECT settlement_status FROM merchant_ledger WHERE order_id=o.id ORDER BY created_at DESC LIMIT 1),'pending')
 			FROM order_fulfillments f JOIN orders o ON o.id=f.order_id
 			WHERE f.order_id=$1::uuid AND o.paid_at IS NOT NULL AND f.provider_id=$2::uuid
 			AND f.owner='merchant' FOR UPDATE`, item.OrderID, providerID).
-			Scan(&fulfillmentID, &buyerID, &route, &owner, &currentStatus, &version)
+			Scan(&fulfillmentID, &buyerID, &route, &owner, &currentStatus, &version, &settlementStatus)
 		if err == pgx.ErrNoRows {
 			return fiber.NewError(fiber.StatusNotFound, "one or more paid orders are unavailable or not assigned to you")
 		}
 		if err != nil {
 			return fiber.ErrInternalServerError
+		}
+		if route == "merchant_cross_border" && settlementStatus != "settled" {
+			return fiber.NewError(fiber.StatusConflict, "seller settlement is not released yet; imported orders cannot be processed")
 		}
 		if version != item.ExpectedVersion || !validFulfillmentTransition(route, owner, currentStatus, req.Status) {
 			return fiber.NewError(fiber.StatusConflict, fmt.Sprintf("order %s cannot move from %s to %s; refresh and select orders at the same stage", item.OrderID, currentStatus, req.Status))
@@ -251,18 +255,22 @@ func (m *ProviderMarketplaceController) transitionFulfillment(c *fiber.Ctx, orde
 	}
 	defer tx.Rollback(c.Context())
 
-	var fulfillmentID, userID, route, owner, currentStatus string
+	var fulfillmentID, userID, route, owner, currentStatus, settlementStatus string
 	var version int64
-	query := `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version
+	query := `SELECT f.id::text,o.user_id::text,f.route,f.owner,f.status,f.version,
+		COALESCE((SELECT settlement_status FROM merchant_ledger WHERE order_id=o.id ORDER BY created_at DESC LIMIT 1),'pending')
 		FROM order_fulfillments f JOIN orders o ON o.id=f.order_id
 		WHERE f.order_id=$1::uuid AND o.paid_at IS NOT NULL
 		AND f.provider_id=$2::uuid AND f.owner='merchant' FOR UPDATE`
 	args := []any{orderID, providerID}
-	if err = tx.QueryRow(c.Context(), query, args...).Scan(&fulfillmentID, &userID, &route, &owner, &currentStatus, &version); err != nil {
+	if err = tx.QueryRow(c.Context(), query, args...).Scan(&fulfillmentID, &userID, &route, &owner, &currentStatus, &version, &settlementStatus); err != nil {
 		if err == pgx.ErrNoRows {
 			return fiber.NewError(fiber.StatusNotFound, "paid fulfilment not found or not assigned to you")
 		}
 		return fiber.ErrInternalServerError
+	}
+	if route == "merchant_cross_border" && settlementStatus != "settled" {
+		return fiber.NewError(fiber.StatusConflict, "seller settlement is not released yet; do not purchase or dispatch this imported order")
 	}
 
 	var existingStatus string

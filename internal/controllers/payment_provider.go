@@ -70,6 +70,9 @@ type verifiedProviderPayment struct {
 	Reference     string
 	Status        string
 	Amount        any
+	ChargedAmount any
+	AppFee        any
+	MerchantFee   any
 	Currency      string
 }
 
@@ -301,6 +304,9 @@ func (p *flutterwaveProvider) VerifyPayment(ctx context.Context, transactionID, 
 		Reference:     firstNonEmpty(result.Data.TxRef, result.Data.Reference),
 		Status:        result.Data.Status,
 		Amount:        result.Data.Amount,
+		ChargedAmount: result.Data.ChargedAmount,
+		AppFee:        result.Data.AppFee,
+		MerchantFee:   result.Data.MerchantFee,
 		Currency:      result.Data.Currency,
 	}, nil
 }

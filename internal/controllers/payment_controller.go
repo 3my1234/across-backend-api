@@ -295,17 +295,22 @@ type flutterwaveWebhook struct {
 	} `json:"data"`
 }
 
+type flutterwaveTransactionData struct {
+	ID            any    `json:"id"`
+	TxRef         string `json:"tx_ref"`
+	Reference     string `json:"reference"`
+	Status        string `json:"status"`
+	Amount        any    `json:"amount"`
+	ChargedAmount any    `json:"charged_amount"`
+	AppFee        any    `json:"app_fee"`
+	MerchantFee   any    `json:"merchant_fee"`
+	Currency      string `json:"currency"`
+}
+
 type flutterwaveVerifyResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-	Data    struct {
-		ID        any    `json:"id"`
-		TxRef     string `json:"tx_ref"`
-		Reference string `json:"reference"`
-		Status    string `json:"status"`
-		Amount    any    `json:"amount"`
-		Currency  string `json:"currency"`
-	} `json:"data"`
+	Status  string                     `json:"status"`
+	Message string                     `json:"message"`
+	Data    flutterwaveTransactionData `json:"data"`
 }
 
 func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
@@ -371,6 +376,7 @@ func (p *PaymentController) FlutterwaveWebhook(c *fiber.Ctx) error {
 		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
 	}
+	p.recordVerifiedPaymentAmounts(c.Context(), txRef, verified.Data)
 	if err := p.settleAndNotify(c.Context(), orderID, txRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
 		finishPaymentWebhook(c.Context(), p.db, p.provider.Name(), receipt, "failed", err)
 		return fiber.NewError(fiber.StatusConflict, err.Error())
@@ -412,6 +418,7 @@ func (p *PaymentController) VerifyFlutterwavePayment(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
 	}
+	p.recordVerifiedPaymentAmounts(c.Context(), verifiedRef, verified.Data)
 	if err := p.settleAndNotify(c.Context(), orderID, verifiedRef, gatewayID(verified.Data.ID), paidAmount, verified.Data.Currency); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
@@ -463,6 +470,7 @@ func (p *PaymentController) AdminReconcileFlutterwavePayment(c *fiber.Ctx) error
 		return fiber.NewError(fiber.StatusBadGateway, "invalid verified payment amount")
 	}
 	transactionID := gatewayID(verified.Data.ID)
+	p.recordVerifiedPaymentAmounts(c.Context(), verifiedRef, verified.Data)
 	if err := p.settleAndNotify(c.Context(), verifiedOrderID, verifiedRef, transactionID, paidAmount, verified.Data.Currency); err != nil {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	}
@@ -636,6 +644,22 @@ func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef,
 	return nil
 }
 
+func (p *PaymentController) recordVerifiedPaymentAmounts(ctx context.Context, reference string, data flutterwaveTransactionData) {
+	chargedAmount, _ := amountValue(data.ChargedAmount)
+	appFee, _ := amountValue(data.AppFee)
+	merchantFee, _ := amountValue(data.MerchantFee)
+	if _, err := p.db.Exec(ctx, `
+		UPDATE payments
+		SET charged_amount=CASE WHEN $3>0 THEN $3 ELSE charged_amount END,
+			gateway_fee=CASE WHEN $4>0 THEN $4 ELSE gateway_fee END,
+			merchant_fee=CASE WHEN $5>0 THEN $5 ELSE merchant_fee END,
+			updated_at=now()
+		WHERE provider=$1 AND provider_reference=$2
+	`, p.provider.Name(), reference, chargedAmount, appFee, merchantFee); err != nil {
+		log.Printf("payment gateway amount recording failed tx_ref=%s: %v", reference, err)
+	}
+}
+
 func (p *PaymentController) validWebhook(raw []byte, signature, legacySignature string) bool {
 	if p.cfg.FlutterwaveWebhookSecret == "" {
 		return false
@@ -663,6 +687,9 @@ func (p *PaymentController) verifyFlutterwaveTransaction(ctx context.Context, tr
 	result.Data.TxRef = verified.Reference
 	result.Data.Status = verified.Status
 	result.Data.Amount = verified.Amount
+	result.Data.ChargedAmount = verified.ChargedAmount
+	result.Data.AppFee = verified.AppFee
+	result.Data.MerchantFee = verified.MerchantFee
 	result.Data.Currency = verified.Currency
 	return result, nil
 }
@@ -741,7 +768,7 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 		return err
 	}
 	sellerAmount := roundMoney(orderAmount - platformFee)
-	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,'available',now()) ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount, platformFee, sellerAmount); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,expected_net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$7,'available',now()) ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount, platformFee, sellerAmount); err != nil {
 		return err
 	}
 

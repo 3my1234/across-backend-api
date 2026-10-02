@@ -12,11 +12,12 @@ import (
 )
 
 type OrderController struct {
-	db *pgxpool.Pool
+	db                      *pgxpool.Pool
+	customerPaysGatewayFees bool
 }
 
-func NewOrderController(db *pgxpool.Pool) *OrderController {
-	return &OrderController{db: db}
+func NewOrderController(db *pgxpool.Pool, customerPaysGatewayFees bool) *OrderController {
+	return &OrderController{db: db, customerPaysGatewayFees: customerPaysGatewayFees}
 }
 
 func (o *OrderController) BootstrapProfile(c *fiber.Ctx) error {
@@ -260,15 +261,22 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"order_id":       orderID,
-		"items_total":    itemsTotal,
-		"shipping_fee":   0,
-		"customs_fee":    0,
-		"vat_fee":        0,
-		"stamp_duty_fee": 0,
-		"platform_fee":   platformFee,
-		"grand_total":    grandTotal,
-		"currency":       currency,
+		"order_id":                  orderID,
+		"items_total":               itemsTotal,
+		"shipping_fee":              0,
+		"customs_fee":               0,
+		"vat_fee":                   0,
+		"stamp_duty_fee":            0,
+		"platform_fee":              platformFee,
+		"grand_total":               grandTotal,
+		"currency":                  currency,
+		"customer_pays_gateway_fee": o.customerPaysGatewayFees,
+		"gateway_fee_note": func() string {
+			if o.customerPaysGatewayFees {
+				return "Flutterwave calculates and adds its processing charge at secure checkout."
+			}
+			return "Flutterwave processing charges are deducted during settlement."
+		}(),
 	})
 }
 

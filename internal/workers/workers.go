@@ -18,12 +18,39 @@ import (
 // and idempotent database keys, so multiple worker replicas can run safely.
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 	var group sync.WaitGroup
-	group.Add(4)
+	group.Add(5)
 	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runPushLoop(ctx, db) }()
 	go func() { defer group.Done(); runAutoConfirmLoop(ctx, db) }()
 	go func() { defer group.Done(); runBatchClosureLoop(ctx, db) }()
+	go func() { defer group.Done(); runSettlementReconciliationLoop(ctx, db, cfg) }()
 	group.Wait()
+}
+
+func runSettlementReconciliationLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	client := &http.Client{Timeout: 20 * time.Second}
+	runSettlementReconciliation(ctx, db, cfg, client)
+	for {
+		select {
+		case <-ticker.C:
+			runSettlementReconciliation(ctx, db, cfg, client)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func runSettlementReconciliation(ctx context.Context, db *pgxpool.Pool, cfg config.Config, client *http.Client) {
+	count, err := controllers.ReconcileFlutterwaveSettlements(ctx, db, cfg, client)
+	if err != nil {
+		log.Printf("settlement reconciliation worker error: %v", err)
+		return
+	}
+	if count > 0 {
+		log.Printf("settlement reconciliation worker: updated %d seller payouts", count)
+	}
 }
 
 func runEmailLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
