@@ -76,7 +76,7 @@ func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountConte
 	website := html.EscapeString(destination)
 	body := e.layout("Welcome to Atlantic Express", "Your Atlantic Express account is ready.", fmt.Sprintf(`
 <p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Hello %s,</p>
-<p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Your Atlantic Express account is ready. You also received <strong>100 XP</strong>, worth <strong>&#8358;100</strong> in discounts.</p>
+<p style="margin:0 0 16px;color:#30423D;font-size:16px;line-height:1.6;">Your Atlantic Express account is ready. You also received a one-time welcome bonus of <strong>650 XP</strong>, worth <strong>&#8358;650</strong> in discounts.</p>
 <p style="margin:0 0 18px;color:#30423D;font-size:16px;line-height:1.6;">%s</p>
 <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="margin:22px 0;background:#F3F7F6;border:1px solid #DDE9E5;border-radius:12px;"><tr>
 <td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;"><strong>%s</strong><br>%s</td>
@@ -84,7 +84,7 @@ func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountConte
 <td style="padding:16px;text-align:center;color:#0F3D35;font-size:14px;line-height:1.45;border-left:1px solid #DDE9E5;"><strong>%s</strong><br>%s</td>
 </tr></table>
 <p style="margin:24px 0 4px;text-align:center;"><a href="%s" style="display:inline-block;background:#0F3D35;color:#FFFFFF;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;">%s</a></p>`, name, html.EscapeString(introduction), featureOneTitle, featureOneCopy, featureTwoTitle, featureTwoCopy, featureThreeTitle, featureThreeCopy, website, actionLabel))
-	plain := fmt.Sprintf("Hello %s,\n\nWelcome to Atlantic Express. Your account is ready, and you received 100 XP worth N100 in discounts.\n\n%s\n\n%s: %s", plainName, introduction, plainAction, destination)
+	plain := fmt.Sprintf("Hello %s,\n\nWelcome to Atlantic Express. Your account is ready, and you received a one-time welcome bonus of 650 XP worth N650 in discounts.\n\n%s\n\n%s: %s", plainName, introduction, plainAction, destination)
 	return e.sendHTMLWithText(toEmail, "Welcome to Atlantic Express", plain, body, messageID)
 }
 

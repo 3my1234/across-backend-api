@@ -123,8 +123,9 @@ func TestFlutterwaveCheckoutUsesImmutableServerValues(t *testing.T) {
 		}, nil
 	})}
 	provider := newFlutterwaveProvider("secret", client)
+	planID := int64(3807)
 	result, err := provider.InitializeCheckout(context.Background(), paymentCheckoutInput{
-		Reference: "ACROSS-order-attempt", Amount: 1250.50, Currency: "kes",
+		Reference: "ACROSS-order-attempt", Amount: 1250.50, Currency: "kes", PaymentPlanID: &planID,
 		RedirectURL: "across://payments/flutterwave", PaymentMethods: []string{"card", "mpesa"},
 		Customer: map[string]any{"email": "buyer@example.com"},
 		Title:    "Checkout", Description: "Test", Metadata: map[string]any{"order_id": "order"},
@@ -139,6 +140,7 @@ func TestFlutterwaveCheckoutUsesImmutableServerValues(t *testing.T) {
 		`"amount":1250.5`,
 		`"currency":"KES"`,
 		`"payment_options":"card,mpesa"`,
+		`"payment_plan":3807`,
 		`"subaccounts":[{"id":"RS_SELLER","transaction_charge_type":"flat","transaction_charge":87.25}]`,
 	} {
 		if !strings.Contains(body, required) {

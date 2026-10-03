@@ -9,7 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const welcomeXP = 100
+const (
+	welcomeXP      = 650
+	reviewRewardXP = 10
+)
 
 type RewardService struct {
 	db *pgxpool.Pool
@@ -22,22 +25,22 @@ func NewRewardService(db *pgxpool.Pool) *RewardService {
 func purchaseXP(total float64) int {
 	switch {
 	case total < 1000:
-		return 10
+		return 1
 	case total < 10000:
-		return 100
+		return 2
 	case total < 100000:
-		return 500
+		return 5
 	case total < 500000:
-		return 1000
+		return 10
 	default:
-		return 2500
+		return 25
 	}
 }
 
 func (r *RewardService) AwardWelcome(ctx context.Context, userID string) (bool, error) {
 	return r.award(ctx, userID, "", welcomeXP, "welcome", "account-welcome", "welcome-xp:"+userID,
-		"Welcome to Atlantic Express - 100 XP earned",
-		"You received 100 XP, worth N100 in discounts. Earn more XP through daily logins and completed purchases.")
+		"Welcome to Atlantic Express - 650 XP earned",
+		"You received 650 XP, worth N650 in discounts. This welcome bonus is awarded once per account.")
 }
 
 func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now time.Time) (bool, error) {

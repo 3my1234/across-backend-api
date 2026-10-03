@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -358,7 +359,7 @@ func (o *OpsController) ConfirmDelivered(c *fiber.Ctx) error {
 		batchIDCopy := req.BatchID
 		if err := insertNotification(c.Context(), tx, delivered.UserID, delivered.OrderID, &batchIDCopy,
 			"confirm_receipt", "Package delivered!",
-			"Confirm that you received your package. After confirmation, leave a review to earn ₦500 off your next purchase.",
+			fmt.Sprintf("Confirm that you received your package. After confirmation, leave a review to earn ₦%d off your next purchase.", reviewRewardXP),
 			map[string]any{"order_id": delivered.OrderID, "confirmation_required": true},
 			"confirm-receipt:"+delivered.OrderID); err != nil {
 			return err
@@ -447,7 +448,7 @@ func (o *OpsController) ClaimReviewReward(c *fiber.Ctx) error {
 	if !claimed {
 		return fiber.NewError(fiber.StatusNotFound, "submit a review before claiming this reward")
 	}
-	return c.JSON(fiber.Map{"claimed": true, "reward": "₦500 off your next order", "xp_credited": 500})
+	return c.JSON(fiber.Map{"claimed": true, "reward": fmt.Sprintf("₦%d off your next order", reviewRewardXP), "xp_credited": reviewRewardXP})
 }
 
 func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID string) (bool, error) {
@@ -476,14 +477,14 @@ func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID s
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO xp_transactions(user_id, amount, reason, reference_id)
-		VALUES ($1::uuid, 500, 'review_reward', 'review-reward-' || $2::text)
+		VALUES ($1::uuid, $3, 'review_reward', 'review-reward-' || $2::text)
 		ON CONFLICT DO NOTHING
-	`, userID, orderID); err != nil {
+	`, userID, orderID, reviewRewardXP); err != nil {
 		return false, err
 	}
 	if err := insertNotification(ctx, tx, userID, orderID, nil,
-		"xp_earned", "Review reward claimed", "₦500 has been added to your rewards balance.",
-		map[string]any{"xp": 500, "naira_value": 500, "reason": "review_reward"},
+		"xp_earned", "Review reward claimed", fmt.Sprintf("₦%d has been added to your rewards balance.", reviewRewardXP),
+		map[string]any{"xp": reviewRewardXP, "naira_value": reviewRewardXP, "reason": "review_reward"},
 		"review-reward-claimed:"+orderID); err != nil {
 		return false, err
 	}
@@ -525,15 +526,15 @@ func (o *OpsController) AutoConfirmDeliveries(c *fiber.Ctx) error {
 func createReviewRewardTx(ctx context.Context, tx pgx.Tx, userID, orderID string) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO review_rewards(user_id, order_id, reward_amount, reward_currency)
-		VALUES ($1::uuid, $2::uuid, 500, 'NGN')
+		VALUES ($1::uuid, $2::uuid, $3, 'NGN')
 		ON CONFLICT (user_id, order_id) DO NOTHING
-	`, userID, orderID); err != nil {
+	`, userID, orderID, reviewRewardXP); err != nil {
 		return err
 	}
 	return insertNotification(ctx, tx, userID, orderID, nil,
-		"review_request", "Review and earn ₦500!",
-		"Your order is complete. Leave a review to earn ₦500 off your next purchase.",
-		map[string]any{"reward_amount": 500}, "review-request:"+orderID)
+		"review_request", fmt.Sprintf("Review and earn ₦%d!", reviewRewardXP),
+		fmt.Sprintf("Your order is complete. Leave a review to earn ₦%d off your next purchase.", reviewRewardXP),
+		map[string]any{"reward_amount": reviewRewardXP}, "review-request:"+orderID)
 }
 
 func completeBatchIfResolved(ctx context.Context, tx pgx.Tx, batchID string) error {

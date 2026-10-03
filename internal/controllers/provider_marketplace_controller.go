@@ -1133,7 +1133,7 @@ func (m *ProviderMarketplaceController) UpdateProviderRequest(c *fiber.Ctx) erro
 	_ = m.db.QueryRow(c.Context(), `SELECT title FROM provider_listings WHERE id=$1::uuid`, listingID).Scan(&listingTitle)
 	message := "Your request for " + listingTitle + " was " + req.Status + "."
 	if req.Status == "completed" {
-		message += " Please rate the provider to help other customers. Your first review earns 50 XP."
+		message += fmt.Sprintf(" Please rate the provider to help other customers. Your first review earns %d XP.", reviewRewardXP)
 	}
 	data, _ := json.Marshal(map[string]string{"request_id": c.Params("request_id"), "listing_id": listingID, "status": req.Status})
 	_, _ = m.db.Exec(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,event_key) VALUES($1::uuid,'marketplace_request','Provider request updated',$2,$3::jsonb,$4) ON CONFLICT(event_key) DO NOTHING`, buyerID, message, data, "provider-request-status:"+c.Params("request_id")+":"+req.Status)
@@ -1248,7 +1248,7 @@ func (m *ProviderMarketplaceController) UpsertListingReview(c *fiber.Ctx) error 
 		if err != nil || tag.RowsAffected() == 0 {
 			return fiber.ErrForbidden
 		}
-	} else if _, err = tx.Exec(c.Context(), `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,50,'provider_review','provider-review-'||$2::text) ON CONFLICT DO NOTHING`, userID, req.RequestID); err != nil {
+	} else if _, err = tx.Exec(c.Context(), `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,$3,'provider_review','provider-review-'||$2::text) ON CONFLICT DO NOTHING`, userID, req.RequestID, reviewRewardXP); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if err = tx.Commit(c.Context()); err != nil {
@@ -1256,7 +1256,7 @@ func (m *ProviderMarketplaceController) UpsertListingReview(c *fiber.Ctx) error 
 	}
 	xpAwarded := 0
 	if created {
-		xpAwarded = 50
+		xpAwarded = reviewRewardXP
 	}
 	return c.JSON(fiber.Map{"rating": req.Rating, "review_text": req.ReviewText, "xp_awarded": xpAwarded})
 }
