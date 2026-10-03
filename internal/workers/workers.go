@@ -28,7 +28,9 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 }
 
 func runSettlementReconciliationLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
-	ticker := time.NewTicker(30 * time.Minute)
+	// Durable jobs schedule full checks every 30 minutes and page continuations
+	// after one minute, independently of the number of sellers or replicas.
+	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	client := &http.Client{Timeout: 20 * time.Second}
 	runSettlementReconciliation(ctx, db, cfg, client)

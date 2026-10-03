@@ -12,7 +12,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/across-api ./cmd/api \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/across-worker ./cmd/worker \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/across-migrate ./cmd/migrate
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/across-migrate ./cmd/migrate \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/across-settlements ./cmd/settlements
 
 FROM alpine:3.20
 
@@ -23,6 +24,7 @@ RUN apk add --no-cache ca-certificates curl tzdata && adduser -D -H -u 10001 acr
 COPY --from=builder /out/across-api /app/across-api
 COPY --from=builder /out/across-worker /app/across-worker
 COPY --from=builder /out/across-migrate /app/across-migrate
+COPY --from=builder /out/across-settlements /app/across-settlements
 COPY --from=builder /src/migrations /app/migrations
 
 USER across

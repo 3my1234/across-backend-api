@@ -37,14 +37,17 @@ func selectPaymentMethods(allowed []string, requested string) ([]string, error) 
 	return nil, fmt.Errorf("payment method %q is not available for this country and currency", requested)
 }
 
-func recordOrderPaymentAttempt(ctx context.Context, db *pgxpool.Pool, provider, orderID, userID, countryCode string, amount float64, currency, reference, method string) error {
+func recordOrderPaymentAttempt(ctx context.Context, db *pgxpool.Pool, provider, orderID, userID, countryCode string, amount float64, currency, reference, method, sellerSubaccount string) error {
+	if strings.TrimSpace(sellerSubaccount) == "" {
+		return errors.New("seller split recipient is required")
+	}
 	_, err := db.Exec(ctx, `
 		INSERT INTO payments(
 			provider,purpose,order_id,user_id,country_code,amount,currency_code,
-			provider_reference,idempotency_key,payment_method
+			provider_reference,idempotency_key,payment_method,seller_subaccount_id
 		)
-		VALUES($1,'order',$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9)
-	`, provider, orderID, userID, strings.ToUpper(countryCode), amount, strings.ToUpper(currency), reference, "checkout:"+provider+":"+reference, method)
+		VALUES($1,'order',$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10)
+	`, provider, orderID, userID, strings.ToUpper(countryCode), amount, strings.ToUpper(currency), reference, "checkout:"+provider+":"+reference, method, sellerSubaccount)
 	return err
 }
 

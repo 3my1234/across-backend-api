@@ -20,7 +20,7 @@ var atlanticExpressLogo []byte
 func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
 	admin := controllers.NewAdminController(db, cfg)
-	orders := controllers.NewOrderController(db, cfg.FlutterwaveCustomerPaysFees)
+	orders := controllers.NewOrderController(db, cfg.FlutterwaveCustomerPaysFees, func() bool { return cfg.ProviderSubscriptionsRequired(time.Now().UTC()) })
 	if readDB == nil {
 		readDB = db
 	}

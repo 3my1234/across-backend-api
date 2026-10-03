@@ -14,12 +14,13 @@ import (
 )
 
 type CatalogController struct {
-	db *pgxpool.Pool
-	s3 *storage.S3
+	db  *pgxpool.Pool
+	s3  *storage.S3
+	cfg config.Config
 }
 
 func NewCatalogController(db *pgxpool.Pool, cfg config.Config) *CatalogController {
-	return &CatalogController{db: db, s3: storage.NewS3(cfg)}
+	return &CatalogController{db: db, s3: storage.NewS3(cfg), cfg: cfg}
 }
 
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
@@ -57,11 +58,11 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved'
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 		ORDER BY CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
 		LIMIT 80
-	`, hasLocation, latitude, longitude)
+	`, hasLocation, latitude, longitude, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "catalog unavailable")
 	}
@@ -145,14 +146,14 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved' AND p.is_flash_sale = true AND p.inventory_count > 0
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($5::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 		  AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
 		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
 			OR p.description ILIKE '%' || $1 || '%')
 		  AND ($2::timestamptz IS NULL OR (p.created_at, p.id) < ($2, $3::uuid))
 		ORDER BY p.created_at DESC, p.id DESC LIMIT $4
-	`, page.Search, page.CursorTime, cursorID, page.Limit+1)
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "flash sales unavailable")
 	}
@@ -222,9 +223,9 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved'
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
-	`, productID).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode)
+	`, productID, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC())).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
@@ -299,7 +300,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 				AND p.is_active = true
 				AND p.moderation_status='approved'
 				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 				AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 				AND p.inventory_count > 0
 				AND cardinality($2::text[]) > 0
@@ -313,7 +314,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 				AND p.is_active = true
 				AND p.moderation_status='approved'
 				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 				AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 				AND p.inventory_count > 0
 				AND NOT EXISTS (SELECT 1 FROM related r WHERE r.id = p.id)
@@ -339,7 +340,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 		ORDER BY candidate.recommendation_rank, p.created_at DESC, p.id DESC
 		LIMIT $3
 	`
-	rows, err := cc.db.Query(c.Context(), query, productID, sourceCategories, limit)
+	rows, err := cc.db.Query(c.Context(), query, productID, sourceCategories, limit, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "recommendations unavailable")
 	}

@@ -14,10 +14,11 @@ import (
 type OrderController struct {
 	db                      *pgxpool.Pool
 	customerPaysGatewayFees bool
+	subscriptionsRequired   func() bool
 }
 
-func NewOrderController(db *pgxpool.Pool, customerPaysGatewayFees bool) *OrderController {
-	return &OrderController{db: db, customerPaysGatewayFees: customerPaysGatewayFees}
+func NewOrderController(db *pgxpool.Pool, customerPaysGatewayFees bool, subscriptionsRequired func() bool) *OrderController {
+	return &OrderController{db: db, customerPaysGatewayFees: customerPaysGatewayFees, subscriptionsRequired: subscriptionsRequired}
 }
 
 func (o *OrderController) BootstrapProfile(c *fiber.Ctx) error {
@@ -112,9 +113,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			FROM products p
 			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
 			  AND provider_id IS NOT NULL AND fulfillment_mode IN ('merchant_local','merchant_cross_border')
-			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now()))
+			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 			  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
-		`, item.ProductID, item.SKU, item.Quantity).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
+		`, item.ProductID, item.SKU, item.Quantity, !o.subscriptionsRequired()).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
 		}
 		if fulfillmentMode == "" {
@@ -311,9 +312,11 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 			COALESCE((SELECT string_agg(oi.title, ', ' ORDER BY oi.created_at) FROM order_items oi WHERE oi.order_id = o.id), ''),
 			COALESCE(f.route, ''), COALESCE(f.owner, ''), COALESCE(f.status, ''),
 			COALESCE(f.carrier, ''), COALESCE(f.tracking_number, ''), COALESCE(f.tracking_url, ''),
-			COALESCE(f.current_location, ''), f.estimated_delivery_at, COALESCE(f.version, 0)
+			COALESCE(f.current_location, ''), f.estimated_delivery_at, COALESCE(f.version, 0),
+			COALESCE(ml.settlement_status,'pending')
 		FROM orders o
 		LEFT JOIN order_fulfillments f ON f.order_id = o.id
+		LEFT JOIN merchant_ledger ml ON ml.order_id=o.id AND ml.event_key='order-paid:'||o.id::text
 		WHERE o.user_id = $1
 		  AND o.order_status != 'Pending'
 		ORDER BY o.created_at DESC
@@ -327,6 +330,7 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, currency, status, stage, packageLabel, itemsSummary string
 		var route, owner, fulfillmentStatus, carrier, trackingNumber, trackingURL, currentLocation string
+		var sellerSettlementStatus string
 		var totalAmount, shippingFee, customsFee, vatFee, platformFee float64
 		var createdAt time.Time
 		var estimatedDelivery *time.Time
@@ -335,7 +339,7 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 		if err := rows.Scan(&id, &currency, &totalAmount, &shippingFee, &customsFee, &vatFee, &platformFee,
 			&status, &stage, &packageLabel, &createdAt, &itemCount, &itemsSummary,
 			&route, &owner, &fulfillmentStatus, &carrier, &trackingNumber, &trackingURL,
-			&currentLocation, &estimatedDelivery, &fulfillmentVersion); err != nil {
+			&currentLocation, &estimatedDelivery, &fulfillmentVersion, &sellerSettlementStatus); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "orders unavailable")
 		}
 		order := fiber.Map{
@@ -347,6 +351,7 @@ func (o *OrderController) ListOrders(c *fiber.Ctx) error {
 			"item_count": itemCount, "items_summary": itemsSummary,
 		}
 		if route != "" {
+			order["seller_funds"] = fiber.Map{"status": sellerSettlementStatus}
 			order["fulfillment"] = fiber.Map{
 				"route": route, "owner": owner, "status": fulfillmentStatus,
 				"carrier": carrier, "tracking_number": trackingNumber, "tracking_url": trackingURL,
@@ -445,6 +450,7 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 	}
 
 	var fulfillment any
+	var sellerFunds any
 	fulfillmentEvents := make([]fiber.Map, 0)
 	var fulfillmentID, route, owner, fulfillmentStatus string
 	var carrier, trackingNumber, trackingURL, currentLocation string
@@ -466,6 +472,12 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "fulfilment tracking unavailable")
 	}
 	if err == nil {
+		var settlementStatus string
+		if err := o.db.QueryRow(c.Context(), `SELECT COALESCE((SELECT settlement_status FROM merchant_ledger
+			WHERE order_id=$1::uuid AND event_key='order-paid:'||$1),'pending')`, orderID).Scan(&settlementStatus); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "seller settlement status unavailable")
+		}
+		sellerFunds = fiber.Map{"status": settlementStatus}
 		var origin, delivery map[string]any
 		_ = json.Unmarshal(originSnapshot, &origin)
 		_ = json.Unmarshal(deliverySnapshot, &delivery)
@@ -520,6 +532,7 @@ func (o *OrderController) Tracking(c *fiber.Ctx) error {
 		"batch_events":       batchEvents,
 		"fulfillment":        fulfillment,
 		"fulfillment_events": fulfillmentEvents,
+		"seller_funds":       sellerFunds,
 	})
 }
 

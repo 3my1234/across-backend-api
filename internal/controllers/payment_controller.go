@@ -80,13 +80,14 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "saved payment token unavailable")
 	}
 
-	var orderAmount float64
-	var orderCurrency, orderStatus, countryCode string
+	var orderAmount, platformFee float64
+	var orderCurrency, orderStatus, countryCode, sellerSubaccountID string
 	err = p.db.QueryRow(c.Context(), `
-		SELECT o.total_amount,o.currency_code,o.order_status::text,c.country_code
+		SELECT o.total_amount,o.platform_fee,o.currency_code,o.order_status::text,c.country_code,payout.flutterwave_subaccount_id
 		FROM orders o JOIN countries_config c ON c.id=o.country_id
+		JOIN provider_payout_accounts payout ON payout.provider_id=o.provider_id AND payout.status='active'
 		WHERE o.id=$1 AND o.user_id=$2 AND $3=ANY(c.active_payment_gateways)
-	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &orderCurrency, &orderStatus, &countryCode)
+	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &platformFee, &orderCurrency, &orderStatus, &countryCode, &sellerSubaccountID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
 	}
@@ -95,7 +96,7 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	}
 
 	txRef := newPaymentReference(req.OrderID)
-	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, "saved_token"); err != nil {
+	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, "saved_token", sellerSubaccountID); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
 	}
 	_ = markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, "")
@@ -110,11 +111,13 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 		})
 	}
 	payload := map[string]any{
-		"token":    token,
-		"currency": orderCurrency,
-		"amount":   orderAmount,
-		"email":    email,
-		"tx_ref":   txRef,
+		"token":       token,
+		"currency":    orderCurrency,
+		"amount":      orderAmount,
+		"email":       email,
+		"tx_ref":      txRef,
+		"country":     countryCode,
+		"subaccounts": []paymentSubaccount{{ID: sellerSubaccountID, TransactionChargeType: "flat", TransactionCharge: platformFee}},
 	}
 	body, _ := json.Marshal(payload)
 	httpReq, err := http.NewRequestWithContext(c.Context(), http.MethodPost, "https://api.flutterwave.com/v3/tokenized-charges", bytes.NewReader(body))
@@ -210,7 +213,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	if redirectURL == "" {
 		redirectURL = "across://payments/flutterwave"
 	}
-	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, selectedMethods[0]); err != nil {
+	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, selectedMethods[0], sellerSubaccountID); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
 	}
 	if p.mockPaymentsEnabled() {
@@ -632,11 +635,18 @@ func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef,
 	}
 	var userID string
 	var total float64
-	if err := p.db.QueryRow(ctx, `SELECT user_id, total_amount FROM orders WHERE id = $1`, orderID).Scan(&userID, &total); err != nil {
+	var fulfillmentMode, settlementStatus string
+	if err := p.db.QueryRow(ctx, `SELECT o.user_id,o.total_amount,o.fulfillment_mode,COALESCE(ml.settlement_status,'pending')
+		FROM orders o LEFT JOIN merchant_ledger ml ON ml.order_id=o.id AND ml.event_key='order-paid:'||o.id::text
+		WHERE o.id=$1`, orderID).Scan(&userID, &total, &fulfillmentMode, &settlementStatus); err != nil {
 		return errors.New("payment settled but post-payment processing failed")
 	}
+	body := fmt.Sprintf("Your payment of NGN %.2f has been received. Your order is being processed.", total)
+	if fulfillmentMode == "merchant_cross_border" && settlementStatus != "settled" {
+		body = fmt.Sprintf("Your payment of NGN %.2f is confirmed. Seller settlement is pending before import processing can start. You do not need to pay again.", total)
+	}
 	_ = CreateNotificationOnce(ctx, p.db, userID, orderID, nil, "payment_received",
-		"Payment confirmed", fmt.Sprintf("Your payment of NGN %.2f has been received. Your order is being processed.", total),
+		"Payment confirmed", body,
 		map[string]any{"amount": total, "currency": "NGN"}, "payment-received:"+orderID)
 	if _, _, err := p.rewards.AwardPurchase(ctx, userID, orderID, total); err != nil {
 		log.Printf("purchase reward failed order_id=%s: %v", orderID, err)
@@ -769,6 +779,12 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	}
 	sellerAmount := roundMoney(orderAmount - platformFee)
 	if _, err := tx.Exec(ctx, `INSERT INTO merchant_ledger(provider_id,order_id,event_key,currency_code,gross_amount,platform_fee,net_amount,expected_net_amount,status,available_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$7,'available',now()) ON CONFLICT(event_key) DO NOTHING`, *providerID, orderID, "order-paid:"+orderID, currencyCode, orderAmount, platformFee, sellerAmount); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO seller_settlement_jobs(subaccount_id,from_date)
+		SELECT seller_subaccount_id,(created_at AT TIME ZONE 'UTC')::date FROM payments
+		WHERE provider=$1 AND provider_reference=$2 AND seller_subaccount_id<>''
+		ON CONFLICT(subaccount_id) DO NOTHING`, p.provider.Name(), txRef); err != nil {
 		return err
 	}
 

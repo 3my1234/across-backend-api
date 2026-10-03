@@ -4,7 +4,34 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestProviderSubscriptionLaunchWindow(t *testing.T) {
+	start := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	before := start.Add(-time.Second)
+	if (Config{}).ProviderSubscriptionsRequired(start) {
+		t.Fatal("subscriptions should be free by default")
+	}
+	cfg := Config{ProviderSubscriptionsEnforced: true, ProviderSubscriptionsStartAt: &start}
+	if cfg.ProviderSubscriptionsRequired(before) || !cfg.ProviderSubscriptionsRequired(start) {
+		t.Fatal("subscription enforcement did not switch at the configured instant")
+	}
+	cfg.ProviderSubscriptionsStartAt = nil
+	if !cfg.ProviderSubscriptionsRequired(before) {
+		t.Fatal("enforcement without a start date should be immediate")
+	}
+}
+
+func TestInvalidSubscriptionStartFailsConfiguration(t *testing.T) {
+	t.Setenv("PROVIDER_SUBSCRIPTIONS_START_AT", "next week")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid subscription start must not activate paid checkout immediately")
+		}
+	}()
+	_ = Load()
+}
 
 func TestProductionURLDefaults(t *testing.T) {
 	t.Setenv("ALLOWED_ORIGINS", "")

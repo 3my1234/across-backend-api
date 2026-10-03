@@ -360,9 +360,11 @@ func (m *ProviderMarketplaceController) CreateMerchantManifest(c *fiber.Ctx) err
 			SELECT $1::uuid,o.id FROM orders o JOIN order_fulfillments f ON f.order_id=o.id
 			WHERE o.id=$2::uuid AND f.provider_id=$3::uuid AND f.route='merchant_cross_border'
 			AND f.owner='merchant' AND o.paid_at IS NOT NULL AND f.status IN ('pending','accepted','processing')
+			AND EXISTS(SELECT 1 FROM merchant_ledger ml WHERE ml.order_id=o.id
+			  AND ml.event_key='order-paid:'||o.id::text AND ml.settlement_status='settled')
 			AND NOT EXISTS(SELECT 1 FROM merchant_manifest_orders existing WHERE existing.order_id=o.id)`, manifestID, orderID, providerID)
 		if err != nil || tag.RowsAffected() != 1 {
-			return fiber.NewError(fiber.StatusConflict, "one or more orders are unavailable, unpaid, already manifested, or not owned by this provider")
+			return fiber.NewError(fiber.StatusConflict, "one or more orders are unavailable, unpaid, awaiting seller settlement, already manifested, or not owned by this provider")
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
@@ -494,7 +496,8 @@ func (m *ProviderMarketplaceController) TransitionMerchantManifest(c *fiber.Ctx)
 		return fiber.NewError(fiber.StatusConflict, "manifest changed or transition is not allowed")
 	}
 	if req.Status == "dispatched" {
-		rows, queryErr := tx.Query(c.Context(), `SELECT f.id::text,f.order_id::text,o.user_id::text,f.status,f.version
+		rows, queryErr := tx.Query(c.Context(), `SELECT f.id::text,f.order_id::text,o.user_id::text,f.status,f.version,
+			COALESCE((SELECT settlement_status FROM merchant_ledger WHERE order_id=o.id AND event_key='order-paid:'||o.id::text),'pending')
 			FROM merchant_manifest_orders mo
 			JOIN order_fulfillments f ON f.order_id=mo.order_id
 			JOIN orders o ON o.id=f.order_id
@@ -504,19 +507,19 @@ func (m *ProviderMarketplaceController) TransitionMerchantManifest(c *fiber.Ctx)
 			return fiber.ErrInternalServerError
 		}
 		type manifestFulfillment struct {
-			id, orderID, buyerID, status string
-			version                      int64
+			id, orderID, buyerID, status, settlementStatus string
+			version                                        int64
 		}
 		members := []manifestFulfillment{}
 		for rows.Next() {
 			var member manifestFulfillment
-			if queryErr = rows.Scan(&member.id, &member.orderID, &member.buyerID, &member.status, &member.version); queryErr != nil {
+			if queryErr = rows.Scan(&member.id, &member.orderID, &member.buyerID, &member.status, &member.version, &member.settlementStatus); queryErr != nil {
 				rows.Close()
 				return fiber.ErrInternalServerError
 			}
-			if member.status != "processing" {
+			if member.status != "processing" || member.settlementStatus != "settled" {
 				rows.Close()
-				return fiber.NewError(fiber.StatusConflict, "every manifest order must be in processing status before dispatch")
+				return fiber.NewError(fiber.StatusConflict, "every manifest order must be processing with seller settlement released before dispatch")
 			}
 			members = append(members, member)
 		}

@@ -34,8 +34,8 @@ func (m *ProviderMarketplaceController) StartProviderConversation(c *fiber.Ctx) 
 		FROM provider_listings l
 		JOIN provider_organizations p ON p.id=l.provider_id
 		WHERE l.id=$1::uuid AND l.status='approved' AND p.verification_status='approved' AND p.is_active=true
-		  AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())`,
-		c.Params("listing_id")).Scan(&providerID, &listingTitle)
+		  AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()))`,
+		c.Params("listing_id"), !m.subscriptionsRequired()).Scan(&providerID, &listingTitle)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusPaymentRequired, "messaging is available only for verified providers with an active subscription")
 	}
@@ -91,9 +91,9 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='provider' AND created_at>COALESCE(c.buyer_last_read_at,'epoch'::timestamptz)),
-		EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))
 		FROM provider_conversations c JOIN provider_listings l ON l.id=c.listing_id JOIN provider_organizations p ON p.id=c.provider_id
-		WHERE c.user_id=$1::uuid ORDER BY c.last_message_at DESC,c.id DESC LIMIT 100`, userID)
+		WHERE c.user_id=$1::uuid ORDER BY c.last_message_at DESC,c.id DESC LIMIT 100`, userID, !m.subscriptionsRequired())
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -115,9 +115,9 @@ func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) 
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='buyer' AND created_at>COALESCE(c.provider_last_read_at,'epoch'::timestamptz)),
-		EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))
 		FROM provider_conversations c JOIN provider_listings l ON l.id=c.listing_id JOIN users u ON u.id=c.user_id
-		WHERE c.provider_id=$1::uuid ORDER BY c.last_message_at DESC,c.id DESC LIMIT 100`, providerID)
+		WHERE c.provider_id=$1::uuid ORDER BY c.last_message_at DESC,c.id DESC LIMIT 100`, providerID, !m.subscriptionsRequired())
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -195,14 +195,14 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,c.listing_id::text,l.title,c.user_id::text
 			FROM provider_conversations c JOIN provider_listings l ON l.id=c.listing_id
 			WHERE c.id=$1::uuid AND c.provider_id=$2::uuid AND c.status='open'
-			  AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())`,
-			c.Params("conversation_id"), memberProviderID).Scan(&providerID, &listingID, &listingTitle, &buyerID)
+			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
+			c.Params("conversation_id"), memberProviderID, !m.subscriptionsRequired()).Scan(&providerID, &listingID, &listingTitle, &buyerID)
 	} else {
 		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,c.listing_id::text,l.title,c.user_id::text
 			FROM provider_conversations c JOIN provider_listings l ON l.id=c.listing_id
 			WHERE c.id=$1::uuid AND c.user_id=$2::uuid AND c.status='open'
-			  AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())`,
-			c.Params("conversation_id"), userID).Scan(&providerID, &listingID, &listingTitle, &buyerID)
+			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
+			c.Params("conversation_id"), userID, !m.subscriptionsRequired()).Scan(&providerID, &listingID, &listingTitle, &buyerID)
 	}
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusPaymentRequired, "this conversation is unavailable while the provider subscription is inactive")

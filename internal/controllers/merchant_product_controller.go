@@ -164,7 +164,7 @@ func (m *ProviderMarketplaceController) CreateMerchantProduct(c *fiber.Ctx) erro
 	if !canSellProducts {
 		return fiber.NewError(fiber.StatusForbidden, "this provider profile is registered for services, not products")
 	}
-	listingLimit, err := activeProviderPlan(c.Context(), m.db, providerID)
+	listingLimit, err := m.providerListingLimit(c.Context(), providerID)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusPaymentRequired, "an active provider subscription is required")
 	} else if err != nil {
@@ -229,7 +229,7 @@ func (m *ProviderMarketplaceController) SubmitMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrForbidden
 	}
 	var eligible bool
-	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()) AND EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active') FROM provider_organizations p WHERE p.id=$1::uuid`, providerID).Scan(&eligible)
+	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())) AND EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active') FROM provider_organizations p WHERE p.id=$1::uuid`, providerID, !m.subscriptionsRequired()).Scan(&eligible)
 	if err != nil || !eligible {
 		return fiber.NewError(fiber.StatusPaymentRequired, "verified provider profile, active subscription, and Flutterwave settlement account are required")
 	}
@@ -369,20 +369,20 @@ func (m *ProviderMarketplaceController) ListMyMerchantOrders(c *fiber.Ctx) error
 			o.order_status::text,o.current_tracking_stage::text,o.fulfillment_contact_snapshot,o.created_at,
 			f.id::text,f.route,f.owner,f.status,f.carrier,f.tracking_number,f.tracking_url,
 			f.current_location,f.estimated_delivery_at,f.version,
-			COALESCE(ml.expected_net_amount,0),COALESCE(ml.settlement_amount,0),
+			COALESCE(ml.expected_net_amount,0),ml.settlement_amount,
 			COALESCE(ml.gateway_deductions,0),COALESCE(ml.settlement_status,'pending'),
-			COALESCE(ml.settlement_destination,''),
+			COALESCE(ml.settlement_destination,''),COALESCE(ml.settlement_note,''),ml.settlement_checked_at,
 			COALESCE(jsonb_agg(jsonb_build_object('id',oi.id,'sku',oi.sku,'title',oi.title,'quantity',oi.quantity,'unit_price',oi.unit_price,'product_snapshot',oi.product_snapshot) ORDER BY oi.created_at) FILTER(WHERE oi.id IS NOT NULL),'[]'::jsonb)
 		FROM orders o
 		JOIN order_fulfillments f ON f.order_id=o.id
 		LEFT JOIN order_items oi ON oi.order_id=o.id
 		LEFT JOIN LATERAL (
-			SELECT expected_net_amount,settlement_amount,gateway_deductions,settlement_status,settlement_destination
-			FROM merchant_ledger WHERE order_id=o.id ORDER BY created_at DESC LIMIT 1
+			SELECT expected_net_amount,settlement_amount,gateway_deductions,settlement_status,settlement_destination,settlement_note,settlement_checked_at
+			FROM merchant_ledger WHERE order_id=o.id AND event_key='order-paid:'||o.id::text
 		) ml ON true
 		WHERE o.provider_id=$1::uuid AND o.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 		  AND o.paid_at IS NOT NULL AND ($2::timestamptz IS NULL OR (o.created_at,o.id)<($2,$3::uuid))
-		GROUP BY o.id,f.id,ml.expected_net_amount,ml.settlement_amount,ml.gateway_deductions,ml.settlement_status,ml.settlement_destination
+		GROUP BY o.id,f.id,ml.expected_net_amount,ml.settlement_amount,ml.gateway_deductions,ml.settlement_status,ml.settlement_destination,ml.settlement_note,ml.settlement_checked_at
 		ORDER BY o.created_at DESC,o.id DESC LIMIT $4
 	`, providerID, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
@@ -392,20 +392,26 @@ func (m *ProviderMarketplaceController) ListMyMerchantOrders(c *fiber.Ctx) error
 	items := make([]fiber.Map, 0, page.Limit+1)
 	for rows.Next() {
 		var id, label, currency, status, stage, fulfillmentID, route, owner, fulfillmentStatus, carrier, trackingNumber, trackingURL, currentLocation string
-		var total, expectedSellerAmount, settledSellerAmount, gatewayDeductions float64
-		var settlementStatus, settlementDestination string
+		var total, expectedSellerAmount, gatewayDeductions float64
+		var payoutAmount *float64
+		var settlementStatus, settlementDestination, settlementNote string
+		var settlementCheckedAt *time.Time
 		var contact, orderItems []byte
 		var estimatedDelivery *time.Time
 		var version int64
 		var created time.Time
-		if rows.Scan(&id, &label, &currency, &total, &status, &stage, &contact, &created, &fulfillmentID, &route, &owner, &fulfillmentStatus, &carrier, &trackingNumber, &trackingURL, &currentLocation, &estimatedDelivery, &version, &expectedSellerAmount, &settledSellerAmount, &gatewayDeductions, &settlementStatus, &settlementDestination, &orderItems) != nil {
+		if rows.Scan(&id, &label, &currency, &total, &status, &stage, &contact, &created, &fulfillmentID, &route, &owner, &fulfillmentStatus, &carrier, &trackingNumber, &trackingURL, &currentLocation, &estimatedDelivery, &version, &expectedSellerAmount, &payoutAmount, &gatewayDeductions, &settlementStatus, &settlementDestination, &settlementNote, &settlementCheckedAt, &orderItems) != nil {
 			return fiber.ErrInternalServerError
 		}
 		var contactMap map[string]any
 		var orderItemsValue []map[string]any
 		_ = json.Unmarshal(contact, &contactMap)
 		_ = json.Unmarshal(orderItems, &orderItemsValue)
-		items = append(items, fiber.Map{"id": id, "package_label": label, "currency_code": currency, "total_amount": total, "status": status, "tracking_stage": stage, "seller_funds": fiber.Map{"status": settlementStatus, "expected_amount": expectedSellerAmount, "settled_amount": settledSellerAmount, "gateway_deductions": gatewayDeductions, "destination": settlementDestination}, "fulfillment_contact": contactMap, "items": orderItemsValue, "fulfillment": fiber.Map{"id": fulfillmentID, "route": route, "owner": owner, "status": fulfillmentStatus, "carrier": carrier, "tracking_number": trackingNumber, "tracking_url": trackingURL, "current_location": currentLocation, "estimated_delivery_at": estimatedDelivery, "version": version}, "created_at": created})
+		var settledAmount *float64
+		if settlementStatus == "settled" {
+			settledAmount = payoutAmount
+		}
+		items = append(items, fiber.Map{"id": id, "package_label": label, "currency_code": currency, "total_amount": total, "status": status, "tracking_stage": stage, "seller_funds": fiber.Map{"status": settlementStatus, "expected_amount": expectedSellerAmount, "payout_amount": payoutAmount, "settled_amount": settledAmount, "gateway_deductions": gatewayDeductions, "destination": settlementDestination, "note": settlementNote, "checked_at": settlementCheckedAt}, "fulfillment_contact": contactMap, "items": orderItemsValue, "fulfillment": fiber.Map{"id": fulfillmentID, "route": route, "owner": owner, "status": fulfillmentStatus, "carrier": carrier, "tracking_number": trackingNumber, "tracking_url": trackingURL, "current_location": currentLocation, "estimated_delivery_at": estimatedDelivery, "version": version}, "created_at": created})
 	}
 	next := ""
 	if len(items) > page.Limit {

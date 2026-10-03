@@ -1,5 +1,16 @@
 # Across Backend Deployment
 
+For seller payout reconciliation, migration 052, and historical transaction
+verification, follow [Seller settlements](docs/SELLER_SETTLEMENTS.md).
+
+Provider subscriptions default to free launch access. Keep
+`PROVIDER_SUBSCRIPTIONS_ENFORCED=false` in both the API and worker configuration
+until paid plans should begin. Set it to `true` with
+`PROVIDER_SUBSCRIPTIONS_START_AT=YYYY-MM-DDTHH:MM:SSZ` to schedule enforcement;
+omit the date to enforce immediately. The API returns `subscription.required`
+and `subscription.launch_access_active` to the provider portal. Verification,
+listing moderation, and product payout-account requirements still apply.
+
 This backend is ready for Coolify as a Docker application.
 
 ## Coolify API Service

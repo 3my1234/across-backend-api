@@ -44,11 +44,21 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
 	`).Scan(&pushPending, &pushOldestSeconds); err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "push queue health unavailable")
 	}
+	var settlementDue, settlementLeased, settlementFailed int64
+	var settlementOverdueSeconds float64
+	if err := o.db.QueryRow(c.Context(), `SELECT
+		COUNT(*) FILTER(WHERE next_check_at<=now() AND (locked_until IS NULL OR locked_until<now())),
+		COUNT(*) FILTER(WHERE locked_until>now()),COUNT(*) FILTER(WHERE failure_count>0),
+		COALESCE(MAX(GREATEST(EXTRACT(EPOCH FROM now()-next_check_at),0)),0)
+		FROM seller_settlement_jobs`).Scan(&settlementDue, &settlementLeased, &settlementFailed, &settlementOverdueSeconds); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "seller settlement queue health unavailable")
+	}
 	pool := o.db.Stat()
 	return c.JSON(fiber.Map{
-		"email":         fiber.Map{"pending": emailPending, "oldest_seconds": emailOldestSeconds},
-		"push":          fiber.Map{"pending": pushPending, "oldest_seconds": pushOldestSeconds},
-		"database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "idle": pool.IdleConns(), "max": pool.MaxConns()},
+		"email":              fiber.Map{"pending": emailPending, "oldest_seconds": emailOldestSeconds},
+		"push":               fiber.Map{"pending": pushPending, "oldest_seconds": pushOldestSeconds},
+		"seller_settlements": fiber.Map{"due": settlementDue, "leased": settlementLeased, "failed": settlementFailed, "overdue_seconds": settlementOverdueSeconds},
+		"database_pool":      fiber.Map{"acquired": pool.AcquiredConns(), "idle": pool.IdleConns(), "max": pool.MaxConns()},
 	})
 }
 

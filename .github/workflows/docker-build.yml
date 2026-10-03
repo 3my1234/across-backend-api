@@ -1,0 +1,16 @@
+name: Linux Docker build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --progress=plain --tag across-backend:ci .
