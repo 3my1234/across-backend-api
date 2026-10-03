@@ -1317,6 +1317,13 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if err != nil {
 		return fiber.ErrForbidden
 	}
+	var alreadySubscribed bool
+	if err := m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now())`, providerID).Scan(&alreadySubscribed); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if alreadySubscribed {
+		return fiber.NewError(fiber.StatusConflict, "this provider already has an active subscription")
+	}
 	var req struct {
 		PlanID      string `json:"plan_id"`
 		RedirectURL string `json:"redirect_url"`
@@ -1333,6 +1340,9 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	}
 	if fwPlanID == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
+	}
+	if err := m.validateMonthlyPaymentPlan(c.Context(), *fwPlanID, amount); err != nil {
+		return err
 	}
 	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
@@ -1405,6 +1415,17 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		"tx_ref": txRef, "provider": m.paymentProvider.Name(),
 		"checkout_link": checkout.CheckoutURL, "redirect_url": redirect,
 	})
+}
+
+func (m *ProviderMarketplaceController) validateMonthlyPaymentPlan(ctx context.Context, id int64, amountNGN float64) error {
+	plan, err := m.paymentProvider.GetPaymentPlan(ctx, id)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "Flutterwave payment plan could not be verified; checkout is unavailable")
+	}
+	if !strings.EqualFold(plan.Status, "active") || !strings.EqualFold(plan.Currency, "NGN") || !strings.EqualFold(plan.Interval, "monthly") || math.IsNaN(plan.Amount) || math.IsInf(plan.Amount, 0) || math.Abs(plan.Amount-amountNGN) > 0.005 {
+		return fiber.NewError(fiber.StatusConflict, fmt.Sprintf("Flutterwave plan %d is %s %.2f/%s (%s), but the admin plan is NGN %.2f/month; align the plans before checkout", id, plan.Currency, plan.Amount, plan.Interval, plan.Status, amountNGN))
+	}
+	return nil
 }
 
 func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, transactionID string, paidAmount float64, currency string) error {
@@ -1585,8 +1606,13 @@ func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.ErrBadRequest
 	}
-	if strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" || req.AmountNGN <= 0 {
+	if strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" || req.AmountNGN <= 0 || math.IsNaN(req.AmountNGN) || math.IsInf(req.AmountNGN, 0) {
 		return fiber.NewError(fiber.StatusBadRequest, "code, name, and a positive amount_ngn are required")
+	}
+	if req.FlutterwavePlanID != nil && (req.IsActive == nil || *req.IsActive) {
+		if err := m.validateMonthlyPaymentPlan(c.Context(), *req.FlutterwavePlanID, req.AmountNGN); err != nil {
+			return err
+		}
 	}
 	if req.ListingLimit < 1 {
 		req.ListingLimit = 20

@@ -65,6 +65,14 @@ type paymentCheckoutResult struct {
 	Raw         map[string]any
 }
 
+type paymentPlanDetails struct {
+	ID       int64   `json:"id"`
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+	Interval string  `json:"interval"`
+	Status   string  `json:"status"`
+}
+
 type verifiedProviderPayment struct {
 	TransactionID string
 	Reference     string
@@ -79,6 +87,7 @@ type verifiedProviderPayment struct {
 type paymentProvider interface {
 	Name() string
 	InitializeCheckout(context.Context, paymentCheckoutInput) (paymentCheckoutResult, error)
+	GetPaymentPlan(context.Context, int64) (paymentPlanDetails, error)
 	VerifyPayment(context.Context, string, string) (verifiedProviderPayment, error)
 	ListBanks(context.Context, string) ([]flutterwaveBank, error)
 	CreateCollectionSubaccount(context.Context, collectionSubaccountInput) (collectionSubaccountResult, error)
@@ -102,6 +111,28 @@ func newFlutterwaveProvider(secretKey string, client *http.Client) paymentProvid
 }
 
 func (p *flutterwaveProvider) Name() string { return flutterwaveProviderName }
+
+func (p *flutterwaveProvider) GetPaymentPlan(ctx context.Context, id int64) (paymentPlanDetails, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.flutterwave.com/v3/payment-plans/"+strconv.FormatInt(id, 10), nil)
+	if err != nil {
+		return paymentPlanDetails{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.secretKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return paymentPlanDetails{}, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "subscription plan could not be verified"}
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Status string             `json:"status"`
+		Data   paymentPlanDetails `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || resp.StatusCode != http.StatusOK || !strings.EqualFold(result.Status, "success") || result.Data.ID != id {
+		return paymentPlanDetails{}, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "subscription plan could not be verified"}
+	}
+	return result.Data, nil
+}
 
 func (p *flutterwaveProvider) InitializeCheckout(ctx context.Context, input paymentCheckoutInput) (paymentCheckoutResult, error) {
 	payload := map[string]any{

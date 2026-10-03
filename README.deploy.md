@@ -17,6 +17,13 @@ recurring plan even when this app stops offering new checkout. Cancel or suspend
 those gateway subscriptions separately, then verify their status. The free
 access setting does not cancel gateway billing.
 
+The admin plan price and linked Flutterwave payment-plan amount must match.
+Flutterwave can use the app's amount for the first payment and the gateway
+plan's amount for later recurring charges. Checkout and active admin plan saves
+now verify the Flutterwave amount, currency, interval, and status and reject a
+mismatch. Correct the gateway plan link or the advertised price before enabling
+paid subscriptions; existing subscribers require separate gateway review.
+
 This backend is ready for Coolify as a Docker application.
 
 ## Coolify API Service
