@@ -11,6 +11,12 @@ omit the date to enforce immediately. The API returns `subscription.required`
 and `subscription.launch_access_active` to the provider portal. Verification,
 listing moderation, and product payout-account requirements still apply.
 
+Before declaring a free launch, inspect existing Flutterwave payment-plan
+subscriptions. Flutterwave can continue charging subscribers on an existing
+recurring plan even when this app stops offering new checkout. Cancel or suspend
+those gateway subscriptions separately, then verify their status. The free
+access setting does not cancel gateway billing.
+
 This backend is ready for Coolify as a Docker application.
 
 ## Coolify API Service
