@@ -18,16 +18,18 @@ type ProfileController struct {
 }
 
 type profileResponse struct {
-	FullName    string `json:"full_name"`
-	Email       string `json:"email"`
-	Phone       string `json:"phone"`
-	AvatarURL   string `json:"avatar_url"`
-	Region      string `json:"region"`
-	Address     string `json:"address"`
-	City        string `json:"city"`
-	State       string `json:"state"`
-	PostalCode  string `json:"postal_code"`
-	DateOfBirth string `json:"date_of_birth"`
+	CountryCode  string `json:"country_code"`
+	CurrencyCode string `json:"currency_code"`
+	FullName     string `json:"full_name"`
+	Email        string `json:"email"`
+	Phone        string `json:"phone"`
+	AvatarURL    string `json:"avatar_url"`
+	Region       string `json:"region"`
+	Address      string `json:"address"`
+	City         string `json:"city"`
+	State        string `json:"state"`
+	PostalCode   string `json:"postal_code"`
+	DateOfBirth  string `json:"date_of_birth"`
 }
 
 func NewProfileController(db *pgxpool.Pool) *ProfileController {
@@ -46,6 +48,7 @@ func (p *ProfileController) GetProfile(c *fiber.Ctx) error {
 func (p *ProfileController) UpdateProfile(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req struct {
+		CountryCode string `json:"country_code"`
 		FullName    string `json:"full_name"`
 		Phone       string `json:"phone"`
 		Region      string `json:"region"`
@@ -69,6 +72,25 @@ func (p *ProfileController) UpdateProfile(c *fiber.Ctx) error {
 	req.PostalCode = strings.TrimSpace(req.PostalCode)
 	req.DateOfBirth = strings.TrimSpace(req.DateOfBirth)
 	req.AvatarURL = strings.TrimSpace(req.AvatarURL)
+	req.CountryCode = strings.ToUpper(strings.TrimSpace(req.CountryCode))
+	var countryID *string
+	if req.CountryCode != "" {
+		if !deliveryCountryCode.MatchString(req.CountryCode) {
+			return fiber.NewError(fiber.StatusBadRequest, "valid delivery country is required")
+		}
+		var currentCountry string
+		if err := p.db.QueryRow(c.Context(), `SELECT cc.country_code FROM users u JOIN countries_config cc ON cc.id=u.country_id WHERE u.id=$1`, userID).Scan(&currentCountry); err != nil {
+			return fiber.ErrNotFound
+		}
+		if currentCountry != req.CountryCode && (req.Address == "" || req.City == "" || req.State == "") {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "street address, city and state are required when changing delivery country")
+		}
+		var id string
+		if err := p.db.QueryRow(c.Context(), `SELECT id FROM countries_config WHERE country_code=$1 AND is_active=true AND 'flutterwave'=ANY(active_payment_gateways)`, req.CountryCode).Scan(&id); err != nil {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "delivery country is not enabled for checkout")
+		}
+		countryID = &id
+	}
 	if len(req.FullName) > 150 || len(req.Phone) > 32 || len(req.Region) > 100 || len(req.Address) > 300 || len(req.City) > 100 || len(req.State) > 100 || len(req.PostalCode) > 24 {
 		return fiber.NewError(fiber.StatusBadRequest, "one or more profile fields are too long")
 	}
@@ -90,6 +112,7 @@ func (p *ProfileController) UpdateProfile(c *fiber.Ctx) error {
 
 	tag, err := p.db.Exec(c.Context(), `
 		UPDATE users SET
+			country_id = COALESCE($11::uuid, country_id),
 			full_name = COALESCE(NULLIF($2, ''), full_name),
 			phone = COALESCE(NULLIF($3, ''), phone),
 			region = COALESCE(NULLIF($4, ''), region),
@@ -101,7 +124,7 @@ func (p *ProfileController) UpdateProfile(c *fiber.Ctx) error {
 			date_of_birth = COALESCE($10::date, date_of_birth),
 			updated_at = now()
 		WHERE id = $1
-	`, userID, req.FullName, req.Phone, req.Region, req.AvatarURL, req.Address, req.City, req.State, req.PostalCode, dob)
+	`, userID, req.FullName, req.Phone, req.Region, req.AvatarURL, req.Address, req.City, req.State, req.PostalCode, dob, countryID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -126,12 +149,12 @@ func (p *ProfileController) readProfile(c *fiber.Ctx, userID string) (profileRes
 	var profile profileResponse
 	var dateOfBirth sql.NullTime
 	err := p.db.QueryRow(c.Context(), `
-		SELECT full_name, COALESCE(email, ''), COALESCE(phone, ''), COALESCE(avatar_url, ''),
+		SELECT cc.country_code, cc.currency_code, full_name, COALESCE(email, ''), COALESCE(phone, ''), COALESCE(avatar_url, ''),
 			COALESCE(region, ''), COALESCE(address, ''), COALESCE(city, ''), COALESCE(state, ''),
 			COALESCE(postal_code, ''), date_of_birth
-		FROM users
-		WHERE id = $1
-	`, userID).Scan(&profile.FullName, &profile.Email, &profile.Phone, &profile.AvatarURL, &profile.Region, &profile.Address, &profile.City, &profile.State, &profile.PostalCode, &dateOfBirth)
+		FROM users u JOIN countries_config cc ON cc.id=u.country_id
+		WHERE u.id = $1
+	`, userID).Scan(&profile.CountryCode, &profile.CurrencyCode, &profile.FullName, &profile.Email, &profile.Phone, &profile.AvatarURL, &profile.Region, &profile.Address, &profile.City, &profile.State, &profile.PostalCode, &dateOfBirth)
 	if dateOfBirth.Valid {
 		profile.DateOfBirth = dateOfBirth.Time.Format("2006-01-02")
 	}

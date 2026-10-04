@@ -1141,11 +1141,16 @@ func normalizeEmail(value string) (string, bool) {
 
 func ensureCountry(c *fiber.Ctx, db *pgxpool.Pool) (string, error) {
 	var countryID string
+	countryCode := strings.ToUpper(strings.TrimSpace(c.Get("X-Client-Country-Code")))
+	if !deliveryCountryCode.MatchString(countryCode) {
+		countryCode = "NG"
+	}
 	err := db.QueryRow(c.Context(), `
-		INSERT INTO countries_config(country_code, currency_code, base_escrow_days, active_payment_gateways)
-		VALUES ('NG', 'NGN', 14, ARRAY['flutterwave'])
-		ON CONFLICT (country_code) DO UPDATE SET updated_at = now()
-		RETURNING id
-	`).Scan(&countryID)
+		SELECT id FROM countries_config WHERE country_code=$1 AND is_active=true
+		  AND 'flutterwave'=ANY(active_payment_gateways)
+	`, countryCode).Scan(&countryID)
+	if err == pgx.ErrNoRows {
+		return "", fiber.NewError(fiber.StatusBadRequest, "buyer country is not yet enabled for checkout")
+	}
 	return countryID, err
 }
