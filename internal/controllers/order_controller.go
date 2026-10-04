@@ -129,7 +129,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "checkout country must match your account's delivery country")
 	}
 
-	var itemsTotal float64
+	var itemsTotal, deliveryTotal float64
 	selectedPrices := make([]float64, len(req.Items))
 	fulfillmentMode := ""
 	var orderProviderID *string
@@ -138,19 +138,19 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		if item.Quantity <= 0 {
 			return fiber.NewError(fiber.StatusBadRequest, "quantity must be positive")
 		}
-		var unitPrice float64
+		var unitPrice, unitDeliveryFee float64
 		var itemMode string
 		var itemProviderID *string
 		var itemDeliveryMaxDays int
 		if err := tx.QueryRow(c.Context(), `
 			SELECT CASE WHEN p.is_flash_sale AND area.currency_code=p.local_currency_code
-				AND area.delivered_price=p.local_selling_price AND p.flash_sale_price > 0
-				AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price
+				AND area.delivered_price-area.delivery_fee=p.local_selling_price AND p.flash_sale_price > 0
+				AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price+area.delivery_fee
 				ELSE area.delivered_price END,
-				p.fulfillment_mode, p.provider_id::text, COALESCE(p.delivery_max_days, 0)
+				area.delivery_fee, CASE WHEN p.inventory_country_code=$5 AND p.stock_state<>'import_on_demand' THEN 'merchant_local' ELSE 'merchant_cross_border' END, p.provider_id::text, COALESCE(p.delivery_max_days, 0)
 			FROM products p
 			JOIN LATERAL (
-				SELECT a.delivered_price, a.currency_code FROM product_delivery_areas a
+				SELECT a.delivered_price, a.delivery_fee, a.currency_code FROM product_delivery_areas a
 				WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6)
 				  AND (a.city_key='' OR a.city_key=$7)
 				ORDER BY (a.city_key<>'') DESC, (a.state_key<>'') DESC LIMIT 1
@@ -160,8 +160,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 			  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 			  AND area.currency_code=$8
-			  AND (p.fulfillment_mode<>'merchant_local' OR p.inventory_country_code=$5)
-		`, item.ProductID, item.SKU, item.Quantity, !o.subscriptionsRequired(), strings.ToUpper(strings.TrimSpace(req.CountryCode)), deliveryLocationKey(state), deliveryLocationKey(city), currency).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
+		`, item.ProductID, item.SKU, item.Quantity, !o.subscriptionsRequired(), strings.ToUpper(strings.TrimSpace(req.CountryCode)), deliveryLocationKey(state), deliveryLocationKey(city), currency).Scan(&unitPrice, &unitDeliveryFee, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "product unavailable for your delivery address or currency")
 		}
 		if fulfillmentMode == "" {
@@ -172,8 +171,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		if itemDeliveryMaxDays > deliveryMaxDays {
 			deliveryMaxDays = itemDeliveryMaxDays
 		}
-		itemsTotal += unitPrice * float64(item.Quantity)
-		selectedPrices[itemIndex] = unitPrice
+		itemsTotal += (unitPrice - unitDeliveryFee) * float64(item.Quantity)
+		deliveryTotal += unitDeliveryFee * float64(item.Quantity)
+		selectedPrices[itemIndex] = unitPrice - unitDeliveryFee
 	}
 
 	if orderProviderID == nil || (fulfillmentMode != "merchant_local" && fulfillmentMode != "merchant_cross_border") {
@@ -182,8 +182,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	// Sellers publish the complete product price for both local and imported
 	// stock. Atlantic Express adds one clearly disclosed marketplace service
 	// fee; Flutterwave handles its own processing and statutory deductions.
-	platformFee := roundMoney(itemsTotal * marketplaceServiceFeeRate)
-	grandTotal := roundMoney(itemsTotal + platformFee)
+	itemsTotal, deliveryTotal = roundMoney(itemsTotal), roundMoney(deliveryTotal)
+	platformFee := roundMoney((itemsTotal + deliveryTotal) * marketplaceServiceFeeRate)
+	grandTotal := roundMoney(itemsTotal + deliveryTotal + platformFee)
 	if deliveryMaxDays <= 0 {
 		if fulfillmentMode == "merchant_local" {
 			deliveryMaxDays = 3
@@ -203,9 +204,9 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	var orderID string
 	if err := tx.QueryRow(c.Context(), `
 		INSERT INTO orders(user_id, country_id, currency_code, total_amount, shipping_fee, customs_fee, vat_fee, stamp_duty_fee, platform_fee, delivery_promised_at, fulfillment_contact_snapshot,provider_id,fulfillment_mode)
-		VALUES ($1, $2, $3, $4, 0, 0, 0, 0, $5, $6, $7::jsonb,$8,$9)
+		VALUES ($1, $2, $3, $4, $10, 0, 0, 0, $5, $6, $7::jsonb,$8,$9)
 		RETURNING id
-	`, userID, countryID, currency, grandTotal, platformFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode).Scan(&orderID); err != nil {
+	`, userID, countryID, currency, grandTotal, platformFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode, deliveryTotal).Scan(&orderID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(c.Context(), `
@@ -214,7 +215,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 				origin_snapshot, delivery_snapshot, current_location,
 				estimated_delivery_at
 			)
-			SELECT $1::uuid, p.provider_id, p.fulfillment_mode, 'merchant', 'pending',
+			SELECT $1::uuid, p.provider_id, $5, 'merchant', 'pending',
 				jsonb_build_object(
 					'country_code', p.inventory_country_code,
 					'city', p.inventory_city,
@@ -233,7 +234,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 				now() + make_interval(days => p.delivery_max_days)
 			FROM products p
 			WHERE p.id=$2::uuid AND p.provider_id=$4::uuid
-		`, orderID, req.Items[0].ProductID, contactSnapshot, orderProviderID)
+		`, orderID, req.Items[0].ProductID, contactSnapshot, orderProviderID, fulfillmentMode)
 	if err != nil || tag.RowsAffected() != 1 {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create seller fulfilment")
 	}
@@ -258,6 +259,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		); err != nil {
 			return err
 		}
+		itemMode = fulfillmentMode
 		factoryDetails := map[string]any{}
 		_ = json.Unmarshal(factoryRaw, &factoryDetails)
 		productSnapshot, err := json.Marshal(map[string]any{
@@ -310,7 +312,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		"order_id":                  orderID,
 		"country_code":              strings.ToUpper(strings.TrimSpace(req.CountryCode)),
 		"items_total":               itemsTotal,
-		"shipping_fee":              0,
+		"shipping_fee":              deliveryTotal,
 		"customs_fee":               0,
 		"vat_fee":                   0,
 		"stamp_duty_fee":            0,

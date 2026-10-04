@@ -19,11 +19,47 @@ func TestNormalizeProductDeliveryAreas(t *testing.T) {
 	if areas[0].CountryCode != "US" || areas[0].State != "new york" || areas[0].CurrencyCode != "USD" {
 		t.Fatalf("unexpected normalized area: %+v", areas[0])
 	}
-	if _, err := normalizeProductDeliveryAreas(areas, "NG", "merchant_local", "NGN", 40); err == nil {
-		t.Fatal("foreign delivery for local stock must fail")
+	if _, err := normalizeProductDeliveryAreas(areas, "NG", "merchant_local", "NGN", 40); err != nil {
+		t.Fatalf("stocked product must be able to serve an overseas delivery area: %v", err)
 	}
 	if _, err := normalizeProductDeliveryAreas([]productDeliveryArea{{CountryCode: "US", City: "New York", DeliveredPrice: 42, CurrencyCode: "USD"}}, "US", "merchant_local", "USD", 40); err == nil {
 		t.Fatal("city without state must fail")
+	}
+	priced, err := normalizeProductDeliveryAreas([]productDeliveryArea{{CountryCode: "US", ItemPrice: 30, DeliveryFee: 5, CurrencyCode: "USD"}}, "US", "merchant_local", "USD", 30)
+	if err != nil || priced[0].DeliveredPrice != 35 {
+		t.Fatalf("expected USD 30 item plus USD 5 delivery, got %+v: %v", priced, err)
+	}
+	if _, err := normalizeProductDeliveryAreas([]productDeliveryArea{{CountryCode: "US", ItemPrice: 30, DeliveryFee: -5, CurrencyCode: "USD"}}, "US", "merchant_local", "USD", 30); err == nil {
+		t.Fatal("negative delivery fee must fail")
+	}
+}
+
+func TestProductRouteForDestination(t *testing.T) {
+	for _, tc := range []struct{ stock, state, buyer, want string }{
+		{"US", "locally_available", "US", "merchant_local"},
+		{"US", "locally_available", "NG", "merchant_cross_border"},
+		{"CN", "import_on_demand", "CN", "merchant_cross_border"},
+	} {
+		if got := productRouteForDestination(tc.stock, tc.state, tc.buyer); got != tc.want {
+			t.Errorf("stock=%s state=%s buyer=%s: got %s, want %s", tc.stock, tc.state, tc.buyer, got, tc.want)
+		}
+	}
+}
+
+func TestCatalogDeliveryFeeMatchesSpecificDestination(t *testing.T) {
+	factory := map[string]any{"delivery_areas": []any{
+		map[string]any{"country_code": "US", "state": "", "city": "", "delivery_fee": float64(10)},
+		map[string]any{"country_code": "US", "state": "california", "city": "", "delivery_fee": float64(7)},
+		map[string]any{"country_code": "US", "state": "california", "city": "los angeles", "delivery_fee": float64(5)},
+	}}
+	if got := catalogDeliveryFee(factory, "US", "california", "los angeles"); got != 5 {
+		t.Fatalf("city delivery fee = %v, want 5", got)
+	}
+	if got := catalogDeliveryFee(factory, "US", "california", "san diego"); got != 7 {
+		t.Fatalf("state delivery fee = %v, want 7", got)
+	}
+	if got := catalogDeliveryFee(factory, "US", "texas", "austin"); got != 10 {
+		t.Fatalf("country delivery fee = %v, want 10", got)
 	}
 }
 
@@ -50,12 +86,26 @@ func TestDeliveryAreaMigrationBackfillAndSpecificity(t *testing.T) {
 	if _, err := db.Exec(ctx, string(migration)); err != nil {
 		t.Fatal(err)
 	}
+	feeMigration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "055_product_delivery_fees.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, string(feeMigration)); err != nil {
+		t.Fatal(err)
+	}
 	var count int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM product_delivery_areas`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 2 {
 		t.Fatalf("expected only NG local and imported offers to be backfilled, got %d", count)
+	}
+	var oldTotal, oldFee float64
+	if err := db.QueryRow(ctx, `SELECT delivered_price,delivery_fee FROM product_delivery_areas WHERE product_id=$1`, localNG).Scan(&oldTotal, &oldFee); err != nil {
+		t.Fatal(err)
+	}
+	if oldTotal != 120 || oldFee != 0 {
+		t.Fatalf("migration changed existing seller total: %v + %v", oldTotal, oldFee)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO countries_config(country_code,currency_code,base_escrow_days,active_payment_gateways) VALUES('US','USD',14,ARRAY['flutterwave'])`); err != nil {
 		t.Fatal(err)
