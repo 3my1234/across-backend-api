@@ -309,8 +309,12 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{
-		"order_id":                  orderID,
-		"country_code":              strings.ToUpper(strings.TrimSpace(req.CountryCode)),
+		"order_id":     orderID,
+		"country_code": strings.ToUpper(strings.TrimSpace(req.CountryCode)),
+		"delivery_address": fiber.Map{
+			"address": address, "city": city, "state": state,
+			"postal_code": postalCode, "country_code": strings.ToUpper(strings.TrimSpace(req.CountryCode)),
+		},
 		"items_total":               itemsTotal,
 		"shipping_fee":              deliveryTotal,
 		"customs_fee":               0,

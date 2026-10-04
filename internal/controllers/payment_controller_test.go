@@ -22,6 +22,28 @@ func (f paymentRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, erro
 	return f(req)
 }
 
+func TestMockPaymentsRequireExplicitLocalOptIn(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  config.Config
+		want bool
+	}{
+		{"missing key without opt-in", config.Config{AppEnv: "development"}, false},
+		{"test key without opt-in", config.Config{AppEnv: "development", FlutterwaveSecretKey: "FLWSECK_TEST_example"}, false},
+		{"local opt-in", config.Config{AppEnv: "development", EnableMockPayments: true}, true},
+		{"production cannot opt in", config.Config{AppEnv: "production", EnableMockPayments: true}, false},
+		{"live key cannot be mocked", config.Config{AppEnv: "development", EnableMockPayments: true, FlutterwaveSecretKey: "FLWSECK-live"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			controller := &PaymentController{cfg: tc.cfg}
+			if got := controller.mockPaymentsEnabled(); got != tc.want {
+				t.Fatalf("mockPaymentsEnabled()=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewPaymentReferenceIsUniqueAndParseable(t *testing.T) {
 	orderID := uuid.NewString()
 	first := newPaymentReference(orderID)

@@ -72,6 +72,7 @@ REDIS_OPTIONAL=false
 JWT_SECRET=replace-with-long-random-secret
 FLUTTERWAVE_SECRET_KEY=replace-with-flutterwave-secret-key
 FLUTTERWAVE_WEBHOOK_SECRET=replace-with-webhook-secret
+ENABLE_MOCK_PAYMENTS=false
 PRIVY_APP_ID=replace-with-privy-app-id
 PRIVY_APP_SECRET=replace-with-privy-app-secret
 # Optional fallback; normally fetched automatically
