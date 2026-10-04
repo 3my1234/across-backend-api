@@ -195,6 +195,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		 AND policy.provider=$3
 		 AND policy.is_active=true
 		WHERE o.id=$1 AND o.user_id=$2
+		  AND c.is_active=true AND c.currency_code=o.currency_code
 		  AND $3=ANY(c.active_payment_gateways)
 	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &platformFee, &orderCurrency, &orderStatus, &countryCode, &paymentMethods, &sellerSubaccountID)
 	if err != nil {

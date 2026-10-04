@@ -121,6 +121,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		SELECT id, currency_code
 		FROM countries_config
 		WHERE country_code = $1 AND is_active = true
+		  AND 'flutterwave'=ANY(active_payment_gateways)
 	`, strings.ToUpper(strings.TrimSpace(req.CountryCode))).Scan(&countryID, &currency); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "unsupported country")
 	}
