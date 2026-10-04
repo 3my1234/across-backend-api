@@ -17,6 +17,8 @@ type productDeliveryArea struct {
 	State          string  `json:"state"`
 	City           string  `json:"city"`
 	DeliveredPrice float64 `json:"delivered_price"`
+	ItemPrice      float64 `json:"item_price,omitempty"`
+	DeliveryFee    float64 `json:"delivery_fee"`
 	CurrencyCode   string  `json:"currency_code"`
 }
 
@@ -44,6 +46,9 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 		areas[i].State = deliveryLocationKey(areas[i].State)
 		areas[i].City = deliveryLocationKey(areas[i].City)
 		areas[i].CurrencyCode = strings.ToUpper(strings.TrimSpace(areas[i].CurrencyCode))
+		if areas[i].ItemPrice > 0 {
+			areas[i].DeliveredPrice = roundMoney(areas[i].ItemPrice + areas[i].DeliveryFee)
+		}
 		if areas[i].DeliveredPrice == 0 && areas[i].CurrencyCode == "" && areas[i].CountryCode == "NG" && baseCurrency == "NGN" {
 			areas[i].DeliveredPrice, areas[i].CurrencyCode = basePrice, baseCurrency
 		}
@@ -53,12 +58,10 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 		if len([]rune(areas[i].State)) > 100 || len([]rune(areas[i].City)) > 100 {
 			return nil, fmt.Errorf("delivery state and city must be 100 characters or fewer")
 		}
-		if !deliveryCurrencyCode.MatchString(areas[i].CurrencyCode) || areas[i].DeliveredPrice <= 0 || math.IsNaN(areas[i].DeliveredPrice) || math.IsInf(areas[i].DeliveredPrice, 0) {
+		if !deliveryCurrencyCode.MatchString(areas[i].CurrencyCode) || areas[i].DeliveredPrice <= 0 || math.IsNaN(areas[i].DeliveredPrice) || math.IsInf(areas[i].DeliveredPrice, 0) || areas[i].DeliveryFee < 0 || math.IsNaN(areas[i].DeliveryFee) || math.IsInf(areas[i].DeliveryFee, 0) || areas[i].DeliveryFee >= areas[i].DeliveredPrice {
 			return nil, fmt.Errorf("each delivery area needs a positive delivered price and three-letter currency")
 		}
-		if mode == "merchant_local" && areas[i].CountryCode != stockCountry {
-			return nil, fmt.Errorf("local stock can only be offered within its stock country; use international fulfilment for other countries")
-		}
+		areas[i].ItemPrice = roundMoney(areas[i].DeliveredPrice - areas[i].DeliveryFee)
 		key := areas[i].CountryCode + "|" + areas[i].State + "|" + areas[i].City
 		if seen[key] {
 			return nil, fmt.Errorf("remove duplicate delivery areas")
@@ -68,12 +71,52 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 	return areas, nil
 }
 
+// A single stocked listing can be local for one buyer and cross-border for another.
+func productRouteForDestination(stockCountry, stockState, buyerCountry string) string {
+	if strings.EqualFold(stockCountry, buyerCountry) && !strings.EqualFold(stockState, "import_on_demand") {
+		return "merchant_local"
+	}
+	return "merchant_cross_border"
+}
+
+func catalogProductRoute(factory map[string]any, buyerCountry string) string {
+	stockCountry, _ := factory["inventory_country_code"].(string)
+	stockState, _ := factory["stock_state"].(string)
+	return productRouteForDestination(stockCountry, stockState, buyerCountry)
+}
+
+func catalogDeliveryFee(factory map[string]any, country, state, city string) float64 {
+	areas, _ := factory["delivery_areas"].([]any)
+	bestSpecificity, fee := -1, 0.0
+	for _, raw := range areas {
+		area, _ := raw.(map[string]any)
+		areaCountry, _ := area["country_code"].(string)
+		areaState, _ := area["state"].(string)
+		areaCity, _ := area["city"].(string)
+		if areaCountry != country || (areaState != "" && areaState != state) || (areaCity != "" && areaCity != city) {
+			continue
+		}
+		specificity := 0
+		if areaState != "" {
+			specificity++
+		}
+		if areaCity != "" {
+			specificity++
+		}
+		if specificity > bestSpecificity {
+			bestSpecificity = specificity
+			fee, _ = area["delivery_fee"].(float64)
+		}
+	}
+	return fee
+}
+
 func replaceProductDeliveryAreas(ctx context.Context, tx pgx.Tx, productID string, areas []productDeliveryArea) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM product_delivery_areas WHERE product_id=$1::uuid`, productID); err != nil {
 		return err
 	}
 	for _, area := range areas {
-		if _, err := tx.Exec(ctx, `INSERT INTO product_delivery_areas(product_id,country_code,state_key,city_key,delivered_price,currency_code) VALUES($1::uuid,$2,$3,$4,$5,$6)`, productID, area.CountryCode, area.State, area.City, area.DeliveredPrice, area.CurrencyCode); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO product_delivery_areas(product_id,country_code,state_key,city_key,delivered_price,delivery_fee,currency_code) VALUES($1::uuid,$2,$3,$4,$5,$6,$7)`, productID, area.CountryCode, area.State, area.City, area.DeliveredPrice, area.DeliveryFee, area.CurrencyCode); err != nil {
 			return err
 		}
 	}

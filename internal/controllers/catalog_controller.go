@@ -49,17 +49,17 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			offer.currency_code,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE offer.delivered_price END,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price THEN p.local_selling_price ELSE 0 END,
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price+offer.delivery_fee ELSE offer.delivered_price END,
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price THEN p.local_selling_price+offer.delivery_fee ELSE 0 END,
 			p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price), COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
+			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price), COALESCE(p.flash_sale_price+offer.delivery_fee, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode,
 			CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 6371 * 2 * asin(sqrt(power(sin(radians((p.inventory_latitude::float8-$2::float8)/2)),2)+cos(radians($2::float8))*cos(radians(p.inventory_latitude::float8))*power(sin(radians((p.inventory_longitude::float8-$3::float8)/2)),2))) END AS distance_km
 		FROM products p
-		JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
+		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved'
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
@@ -99,13 +99,14 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			"image_urls":       cc.normalizeImageURLs(images),
 			"currency":         currency,
 			"price":            price,
+			"delivery_fee":     catalogDeliveryFee(factory, destinationCountry, destinationState, destinationCity),
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
 			"review_count":     reviewCount,
 			"sold_count":       soldCount,
 			"average_rating":   averageRating,
 			"provider_id":      stringValue(providerID),
-			"fulfillment_mode": fulfillmentMode,
+			"fulfillment_mode": catalogProductRoute(factory, destinationCountry),
 			"factory_details":  factory,
 			"distance_km":      distanceKM,
 			"origin_hub": fiber.Map{
@@ -145,20 +146,20 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 	}
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
-			offer.currency_code, p.flash_sale_price,
-			p.local_selling_price, p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
+			offer.currency_code, p.flash_sale_price+offer.delivery_fee,
+			p.local_selling_price+offer.delivery_fee, p.inventory_count,
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.created_at, COUNT(*) OVER() AS total_count, p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
-		JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$6 AND (a.state_key='' OR a.state_key=$7) AND (a.city_key='' OR a.city_key=$8) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
+		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$6 AND (a.state_key='' OR a.state_key=$7) AND (a.city_key='' OR a.city_key=$8) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved' AND p.is_flash_sale = true AND p.inventory_count > 0
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($5::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
-		  AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price
+		  AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price
 		  AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
 		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
 			OR p.description ILIKE '%' || $1 || '%')
@@ -189,9 +190,9 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		products = append(products, fiber.Map{
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
-			"price": price, "compare_at_price": compareAt, "inventory_count": inventory,
+			"price": price, "delivery_fee": catalogDeliveryFee(factory, destinationCountry, destinationState, destinationCity), "compare_at_price": compareAt, "inventory_count": inventory,
 			"review_count": reviewCount, "sold_count": soldCount, "average_rating": averageRating,
-			"provider_id": stringValue(providerID), "fulfillment_mode": fulfillmentMode,
+			"provider_id": stringValue(providerID), "fulfillment_mode": catalogProductRoute(factory, destinationCountry),
 			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
 		})
@@ -226,16 +227,16 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 	err := cc.db.QueryRow(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			offer.currency_code,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE offer.delivered_price END,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price THEN p.local_selling_price ELSE 0 END,
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price+offer.delivery_fee ELSE offer.delivered_price END,
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price THEN p.local_selling_price+offer.delivery_fee ELSE 0 END,
 			p.inventory_count,
-			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
+			p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price), COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
+			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price), COALESCE(p.flash_sale_price+offer.delivery_fee, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM products p
-		JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$3 AND (a.state_key='' OR a.state_key=$4) AND (a.city_key='' OR a.city_key=$5) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
+		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$3 AND (a.state_key='' OR a.state_key=$4) AND (a.city_key='' OR a.city_key=$5) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved'
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
@@ -257,13 +258,14 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 			"image_urls":       cc.normalizeImageURLs(images),
 			"currency":         currency,
 			"price":            price,
+			"delivery_fee":     catalogDeliveryFee(factory, destinationCountry, destinationState, destinationCity),
 			"compare_at_price": compareAtPrice,
 			"inventory_count":  inventory,
 			"review_count":     reviewCount,
 			"sold_count":       soldCount,
 			"average_rating":   averageRating,
 			"provider_id":      stringValue(providerID),
-			"fulfillment_mode": fulfillmentMode,
+			"fulfillment_mode": catalogProductRoute(factory, destinationCountry),
 			"factory_details":  factory,
 			"origin_hub": fiber.Map{
 				"id":   hubID,
@@ -349,16 +351,16 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 		)
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			offer.currency_code,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price ELSE offer.delivered_price END,
-			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price THEN p.local_selling_price ELSE 0 END,
-			p.inventory_count, p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price+offer.delivery_fee ELSE offer.delivered_price END,
+			CASE WHEN p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price THEN p.local_selling_price+offer.delivery_fee ELSE 0 END,
+			p.inventory_count, p.factory_details || jsonb_build_object('inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)),
 			COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
-			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price=p.local_selling_price), COALESCE(p.flash_sale_price, 0), p.review_count, p.sold_count,
+			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price), COALESCE(p.flash_sale_price+offer.delivery_fee, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
 		FROM candidates candidate
 		JOIN products p ON p.id = candidate.id
-		JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
+		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		ORDER BY candidate.recommendation_rank, p.created_at DESC, p.id DESC
 		LIMIT $3
@@ -388,9 +390,9 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 		products = append(products, fiber.Map{
 			"id": id, "sku": sku, "title": title, "description": description,
 			"category_path": categories, "image_urls": cc.normalizeImageURLs(images), "currency": currency,
-			"price": price, "compare_at_price": compareAtPrice, "inventory_count": inventory,
+			"price": price, "delivery_fee": catalogDeliveryFee(factory, destinationCountry, destinationState, destinationCity), "compare_at_price": compareAtPrice, "inventory_count": inventory,
 			"review_count": reviewCount, "sold_count": soldCount, "average_rating": averageRating,
-			"provider_id": stringValue(providerID), "fulfillment_mode": fulfillmentMode,
+			"provider_id": stringValue(providerID), "fulfillment_mode": catalogProductRoute(factory, destinationCountry),
 			"is_flash_sale": isFlashSale, "flash_sale_price": flashSalePrice, "factory_details": factory,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
 		})
