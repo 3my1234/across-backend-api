@@ -3,13 +3,16 @@
 For seller payout reconciliation, migration 052, and historical transaction
 verification, follow [Seller settlements](docs/SELLER_SETTLEMENTS.md).
 
-Provider subscriptions default to free launch access. Keep
-`PROVIDER_SUBSCRIPTIONS_ENFORCED=false` in both the API and worker configuration
-until paid plans should begin. Set it to `true` with
-`PROVIDER_SUBSCRIPTIONS_START_AT=YYYY-MM-DDTHH:MM:SSZ` to schedule enforcement;
-omit the date to enforce immediately. The API returns `subscription.required`
-and `subscription.launch_access_active` to the provider portal. Verification,
-listing moderation, and product payout-account requirements still apply.
+Provider subscriptions default to free launch access. Migration 053 adds the
+super-admin **Provider access** switch in the Providers tab. It can set Free
+or Paid and optionally schedule the start of paid access; the shared database
+setting takes effect across API replicas within three seconds without a
+redeploy. `PROVIDER_SUBSCRIPTIONS_ENFORCED` and
+`PROVIDER_SUBSCRIPTIONS_START_AT` are fallback defaults until the first admin
+save. Apply migration 053 before using the control. The API returns
+`subscription.required` and `subscription.launch_access_active` to the provider
+portal. Verification, listing moderation, and product payout-account
+requirements still apply.
 
 Before declaring a free launch, inspect existing Flutterwave payment-plan
 subscriptions. Flutterwave can continue charging subscribers on an existing
@@ -21,8 +24,13 @@ The admin plan price and linked Flutterwave payment-plan amount must match.
 Flutterwave can use the app's amount for the first payment and the gateway
 plan's amount for later recurring charges. Checkout and active admin plan saves
 now verify the Flutterwave amount, currency, interval, and status and reject a
-mismatch. Correct the gateway plan link or the advertised price before enabling
-paid subscriptions; existing subscribers require separate gateway review.
+mismatch. The Providers tab's price control reuses the linked Flutterwave plan
+when its amount matches, otherwise creates and links a new monthly plan for
+future subscribers. Changing the advertised price does not reprice existing
+gateway subscriptions. Migration 053 snapshots each checkout's agreed amount
+so later plan edits cannot invalidate a delayed payment confirmation. The
+**Existing Flutterwave renewals** table is a separate, explicit cancellation
+control; using Free access does not cancel those renewals.
 
 This backend is ready for Coolify as a Docker application.
 

@@ -38,6 +38,12 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	policy := config.NewProviderSubscriptionPolicy(store.PG, cfg)
+	if err := policy.Refresh(ctx); err != nil {
+		log.Printf("provider subscription access is using environment fallback until migration 053 is available: %v", err)
+	}
+	cfg.ProviderSubscriptionPolicy = policy
+	go policy.Run(ctx)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "Across API",

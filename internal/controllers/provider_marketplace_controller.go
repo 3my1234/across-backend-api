@@ -1309,6 +1309,11 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 }
 
 func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error {
+	if m.cfg.ProviderSubscriptionPolicy != nil {
+		if err := m.cfg.ProviderSubscriptionPolicy.Refresh(c.Context()); err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "subscription settings are temporarily unavailable")
+		}
+	}
 	if !m.subscriptionsRequired() {
 		return fiber.NewError(fiber.StatusConflict, "provider subscriptions are not being charged during the free launch period")
 	}
@@ -1380,10 +1385,10 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	}
 	var subscriptionID string
 	err = m.db.QueryRow(c.Context(), `
-		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email)
-		VALUES($1::uuid,$2::uuid,'pending',$3,$4)
+		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn)
+		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5)
 		RETURNING id::text
-	`, providerID, planID, txRef, email).Scan(&subscriptionID)
+	`, providerID, planID, txRef, email, amount).Scan(&subscriptionID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1442,7 +1447,7 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	var subscriptionID, providerID, ownerUserID, countryCode string
 	var expected float64
 	err = tx.QueryRow(ctx, `
-		SELECT s.id::text,s.provider_id::text,p.amount_ngn,organization.owner_user_id::text,organization.country_code
+		SELECT s.id::text,s.provider_id::text,s.expected_amount_ngn,organization.owner_user_id::text,organization.country_code
 		FROM provider_subscriptions s
 		JOIN provider_subscription_plans p ON p.id=s.plan_id
 		JOIN provider_organizations organization ON organization.id=s.provider_id
@@ -1592,6 +1597,87 @@ func (m *ProviderMarketplaceController) AdminModerateListing(c *fiber.Ctx) error
 	return c.JSON(fiber.Map{"id": c.Params("listing_id"), "title": title, "status": persistedStatus, "updated_at": updatedAt})
 }
 
+func (m *ProviderMarketplaceController) AdminProviderSubscriptionAccess(c *fiber.Ctx) error {
+	policy := m.cfg.ProviderSubscriptionPolicy
+	if policy == nil || policy.Refresh(c.Context()) != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "provider subscription settings are unavailable until migration 053 is applied")
+	}
+	return c.JSON(policy.Current(time.Now().UTC()))
+}
+
+func (m *ProviderMarketplaceController) validateActiveProviderPlans(ctx context.Context) error {
+	rows, err := m.db.Query(ctx, `SELECT amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE is_active=TRUE`)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	type plan struct {
+		amount    float64
+		gatewayID *int64
+	}
+	plans := []plan{}
+	for rows.Next() {
+		var item plan
+		if err := rows.Scan(&item.amount, &item.gatewayID); err != nil {
+			rows.Close()
+			return fiber.ErrInternalServerError
+		}
+		plans = append(plans, item)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if len(plans) == 0 {
+		return fiber.NewError(fiber.StatusConflict, "create an active monthly subscription plan before enabling paid access")
+	}
+	for _, item := range plans {
+		if item.gatewayID == nil {
+			return fiber.NewError(fiber.StatusConflict, "every active subscription plan needs a matching Flutterwave plan")
+		}
+		if err := m.validateMonthlyPaymentPlan(ctx, *item.gatewayID, item.amount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ProviderMarketplaceController) AdminSetProviderSubscriptionAccess(c *fiber.Ctx) error {
+	policy := m.cfg.ProviderSubscriptionPolicy
+	if policy == nil || policy.Refresh(c.Context()) != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "provider subscription settings are unavailable until migration 053 is applied")
+	}
+	var req struct {
+		Enforced *bool   `json:"enforced"`
+		StartAt  *string `json:"start_at"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.Enforced == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "enforced must be true or false")
+	}
+	var startAt *time.Time
+	if req.StartAt != nil && strings.TrimSpace(*req.StartAt) != "" {
+		if !*req.Enforced {
+			return fiber.NewError(fiber.StatusBadRequest, "a paid start time is only valid when paid access is enabled")
+		}
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.StartAt))
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "start_at must be an RFC3339 date and time")
+		}
+		utc := parsed.UTC()
+		startAt = &utc
+	}
+	if *req.Enforced {
+		if err := m.validateActiveProviderPlans(c.Context()); err != nil {
+			return err
+		}
+	}
+	adminID, _ := c.Locals("admin_id").(string)
+	if err := policy.Set(c.Context(), *req.Enforced, startAt, adminID); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(policy.Current(time.Now().UTC()))
+}
+
 func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
 	var req struct {
 		Code              string         `json:"code"`
@@ -1623,11 +1709,179 @@ func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
 		active = *req.IsActive
 	}
 	var id string
-	err := m.db.QueryRow(c.Context(), `INSERT INTO provider_subscription_plans(code,name,description,amount_ngn,listing_limit,flutterwave_plan_id,features,is_active) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,amount_ngn=EXCLUDED.amount_ngn,listing_limit=EXCLUDED.listing_limit,flutterwave_plan_id=EXCLUDED.flutterwave_plan_id,features=EXCLUDED.features,is_active=EXCLUDED.is_active,updated_at=now() RETURNING id::text`, marketplaceSlug(req.Code), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.AmountNGN, req.ListingLimit, req.FlutterwavePlanID, features, active).Scan(&id)
+	err := m.db.QueryRow(c.Context(), `INSERT INTO provider_subscription_plans(code,name,description,amount_ngn,listing_limit,flutterwave_plan_id,features,is_active) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,listing_limit=EXCLUDED.listing_limit,features=EXCLUDED.features,is_active=EXCLUDED.is_active,updated_at=now() WHERE provider_subscription_plans.amount_ngn=EXCLUDED.amount_ngn AND provider_subscription_plans.flutterwave_plan_id IS NOT DISTINCT FROM EXCLUDED.flutterwave_plan_id RETURNING id::text`, marketplaceSlug(req.Code), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.AmountNGN, req.ListingLimit, req.FlutterwavePlanID, features, active).Scan(&id)
+	if err == pgx.ErrNoRows {
+		return fiber.NewError(fiber.StatusConflict, "use the plan price control to change an existing plan's price or Flutterwave link")
+	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
 	return c.JSON(fiber.Map{"id": id})
+}
+
+func (m *ProviderMarketplaceController) AdminChangePlanPrice(c *fiber.Ctx) error {
+	var req struct {
+		AmountNGN *int64 `json:"amount_ngn"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.AmountNGN == nil || *req.AmountNGN < 1 || *req.AmountNGN > 100000000 {
+		return fiber.NewError(fiber.StatusBadRequest, "amount_ngn must be a positive whole-naira amount")
+	}
+	var name string
+	var oldAmount float64
+	var oldGatewayID *int64
+	err := m.db.QueryRow(c.Context(), `SELECT name,amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE id=$1::uuid AND is_active=TRUE`, c.Params("plan_id")).Scan(&name, &oldAmount, &oldGatewayID)
+	if err == pgx.ErrNoRows {
+		return fiber.ErrNotFound
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	newGatewayID := int64(0)
+	if oldGatewayID != nil {
+		gatewayPlan, err := m.paymentProvider.GetPaymentPlan(c.Context(), *oldGatewayID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, "the linked Flutterwave plan could not be verified")
+		}
+		if strings.EqualFold(gatewayPlan.Status, "active") && strings.EqualFold(gatewayPlan.Currency, "NGN") && strings.EqualFold(gatewayPlan.Interval, "monthly") && math.Abs(gatewayPlan.Amount-float64(*req.AmountNGN)) <= 0.005 {
+			newGatewayID = *oldGatewayID
+		}
+	}
+	if newGatewayID == 0 {
+		created, err := m.paymentProvider.CreateMonthlyPaymentPlan(c.Context(), name, *req.AmountNGN)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, "Flutterwave could not create the new monthly plan")
+		}
+		newGatewayID = created.ID
+		if err := m.validateMonthlyPaymentPlan(c.Context(), newGatewayID, float64(*req.AmountNGN)); err != nil {
+			return err
+		}
+	}
+	adminID, _ := c.Locals("admin_id").(string)
+	tx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer tx.Rollback(c.Context())
+	tag, err := tx.Exec(c.Context(), `UPDATE provider_subscription_plans SET amount_ngn=$2,flutterwave_plan_id=$3,updated_at=now()
+		WHERE id=$1::uuid AND is_active=TRUE AND amount_ngn=$4 AND flutterwave_plan_id IS NOT DISTINCT FROM $5`, c.Params("plan_id"), *req.AmountNGN, newGatewayID, oldAmount, oldGatewayID)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.NewError(fiber.StatusConflict, "plan changed during price update; refresh and retry")
+	}
+	if _, err := tx.Exec(c.Context(), `INSERT INTO provider_subscription_plan_price_events(plan_id,admin_id,old_amount_ngn,new_amount_ngn,old_flutterwave_plan_id,new_flutterwave_plan_id)
+		VALUES($1::uuid,$2::uuid,$3,$4,$5,$6)`, c.Params("plan_id"), adminID, oldAmount, *req.AmountNGN, oldGatewayID, newGatewayID); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"id": c.Params("plan_id"), "amount_ngn": *req.AmountNGN, "flutterwave_plan_id": newGatewayID, "existing_subscriptions_unchanged": true})
+}
+
+func (m *ProviderMarketplaceController) activeProviderGatewaySubscriptions(ctx context.Context) ([]gatewaySubscription, error) {
+	rows, err := m.db.Query(ctx, `SELECT DISTINCT plan_id FROM (
+		SELECT flutterwave_plan_id AS plan_id FROM provider_subscription_plans WHERE flutterwave_plan_id IS NOT NULL
+		UNION ALL SELECT old_flutterwave_plan_id FROM provider_subscription_plan_price_events WHERE old_flutterwave_plan_id IS NOT NULL
+	) linked ORDER BY plan_id`)
+	if err != nil {
+		return nil, err
+	}
+	planIDs := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		planIDs = append(planIDs, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	items := []gatewaySubscription{}
+	for _, id := range planIDs {
+		found, err := m.paymentProvider.ListActiveSubscriptions(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, found...)
+	}
+	return items, nil
+}
+
+func (m *ProviderMarketplaceController) AdminListGatewaySubscriptions(c *fiber.Ctx) error {
+	items, err := m.activeProviderGatewaySubscriptions(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "active Flutterwave subscriptions could not be checked")
+	}
+	results := make([]fiber.Map, 0, len(items))
+	for _, item := range items {
+		results = append(results, fiber.Map{"id": item.ID, "plan_id": item.PlanID, "amount_ngn": item.Amount, "customer_email": item.Customer.Email, "status": item.Status})
+	}
+	return c.JSON(fiber.Map{"items": results})
+}
+
+func (m *ProviderMarketplaceController) AdminCancelGatewaySubscription(c *fiber.Ctx) error {
+	id, err := strconv.ParseInt(c.Params("subscription_id"), 10, 64)
+	if err != nil || id <= 0 {
+		return fiber.ErrBadRequest
+	}
+	items, err := m.activeProviderGatewaySubscriptions(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "active Flutterwave subscriptions could not be checked")
+	}
+	var target *gatewaySubscription
+	for _, item := range items {
+		if item.ID == id {
+			copy := item
+			target = &copy
+			break
+		}
+	}
+	if target == nil {
+		return fiber.NewError(fiber.StatusConflict, "this subscription is no longer active on a linked provider plan")
+	}
+	adminID, _ := c.Locals("admin_id").(string)
+	var inserted int64
+	err = m.db.QueryRow(c.Context(), `INSERT INTO provider_gateway_subscription_cancellations(subscription_id,plan_id,admin_id,status)
+		VALUES($1,$2,$3::uuid,'pending') ON CONFLICT(subscription_id) DO NOTHING RETURNING subscription_id`, id, target.PlanID, adminID).Scan(&inserted)
+	if err == pgx.ErrNoRows {
+		err = m.db.QueryRow(c.Context(), `UPDATE provider_gateway_subscription_cancellations SET status='pending',admin_id=$3::uuid,updated_at=now()
+			WHERE subscription_id=$1 AND plan_id=$2 AND status='uncertain' AND updated_at<now()-interval '1 minute'
+			RETURNING subscription_id`, id, target.PlanID, adminID).Scan(&inserted)
+		if err == pgx.ErrNoRows {
+			return fiber.NewError(fiber.StatusConflict, "a cancellation is already in progress; refresh Flutterwave status before retrying")
+		}
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	status := "uncertain"
+	defer func() {
+		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, updateErr := m.db.Exec(updateCtx, `UPDATE provider_gateway_subscription_cancellations SET status=$2,updated_at=now() WHERE subscription_id=$1`, id, status); updateErr != nil {
+			log.Printf("could not record Flutterwave cancellation status subscription_id=%d status=%s: %v", id, status, updateErr)
+		}
+	}()
+	if err := m.paymentProvider.CancelSubscription(c.Context(), id); err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "Flutterwave did not confirm cancellation; check its dashboard")
+	}
+	remaining, err := m.paymentProvider.ListActiveSubscriptions(c.Context(), target.PlanID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "cancellation was sent but gateway status could not be verified")
+	}
+	for _, item := range remaining {
+		if item.ID == id {
+			return fiber.NewError(fiber.StatusBadGateway, "Flutterwave still reports this subscription active")
+		}
+	}
+	status = "confirmed"
+	return c.JSON(fiber.Map{"id": id, "status": "cancelled", "plan_id": target.PlanID})
 }
 
 func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
@@ -1651,6 +1905,21 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fiber.ErrInternalServerError
+	}
+	rows.Close()
+	for _, item := range items {
+		item["gateway_price_matches"] = false
+		if !item["is_active"].(bool) || item["flutterwave_plan_id"] == nil {
+			continue
+		}
+		gateway, err := m.paymentProvider.GetPaymentPlan(c.Context(), *item["flutterwave_plan_id"].(*int64))
+		if err != nil {
+			item["gateway_plan_status"] = "unavailable"
+			continue
+		}
+		item["gateway_plan_amount_ngn"] = gateway.Amount
+		item["gateway_plan_status"] = gateway.Status
+		item["gateway_price_matches"] = strings.EqualFold(gateway.Status, "active") && strings.EqualFold(gateway.Currency, "NGN") && strings.EqualFold(gateway.Interval, "monthly") && math.Abs(gateway.Amount-item["amount_ngn"].(float64)) <= 0.005
 	}
 	return c.JSON(fiber.Map{"items": items})
 }

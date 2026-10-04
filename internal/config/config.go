@@ -70,6 +70,7 @@ type Config struct {
 	ProviderPortalURL             string
 	ProviderSubscriptionsEnforced bool
 	ProviderSubscriptionsStartAt  *time.Time
+	ProviderSubscriptionPolicy    *ProviderSubscriptionPolicy
 }
 
 func Load() Config {
@@ -160,6 +161,9 @@ func Load() Config {
 // enforced at the supplied time. A future start date keeps launch access free
 // until that instant without requiring a redeploy.
 func (c Config) ProviderSubscriptionsRequired(at time.Time) bool {
+	if c.ProviderSubscriptionPolicy != nil {
+		return c.ProviderSubscriptionPolicy.Required(at)
+	}
 	if !c.ProviderSubscriptionsEnforced {
 		return false
 	}

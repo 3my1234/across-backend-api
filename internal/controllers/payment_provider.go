@@ -73,6 +73,16 @@ type paymentPlanDetails struct {
 	Status   string  `json:"status"`
 }
 
+type gatewaySubscription struct {
+	ID       int64   `json:"id"`
+	PlanID   int64   `json:"plan"`
+	Amount   float64 `json:"amount"`
+	Status   string  `json:"status"`
+	Customer struct {
+		Email string `json:"customer_email"`
+	} `json:"customer"`
+}
+
 type verifiedProviderPayment struct {
 	TransactionID string
 	Reference     string
@@ -88,6 +98,9 @@ type paymentProvider interface {
 	Name() string
 	InitializeCheckout(context.Context, paymentCheckoutInput) (paymentCheckoutResult, error)
 	GetPaymentPlan(context.Context, int64) (paymentPlanDetails, error)
+	CreateMonthlyPaymentPlan(context.Context, string, int64) (paymentPlanDetails, error)
+	ListActiveSubscriptions(context.Context, int64) ([]gatewaySubscription, error)
+	CancelSubscription(context.Context, int64) error
 	VerifyPayment(context.Context, string, string) (verifiedProviderPayment, error)
 	ListBanks(context.Context, string) ([]flutterwaveBank, error)
 	CreateCollectionSubaccount(context.Context, collectionSubaccountInput) (collectionSubaccountResult, error)
@@ -132,6 +145,94 @@ func (p *flutterwaveProvider) GetPaymentPlan(ctx context.Context, id int64) (pay
 		return paymentPlanDetails{}, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "subscription plan could not be verified"}
 	}
 	return result.Data, nil
+}
+
+func (p *flutterwaveProvider) CreateMonthlyPaymentPlan(ctx context.Context, name string, amountNGN int64) (paymentPlanDetails, error) {
+	body, err := json.Marshal(map[string]any{"name": name, "amount": amountNGN, "currency": "NGN", "interval": "monthly"})
+	if err != nil {
+		return paymentPlanDetails{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.flutterwave.com/v3/payment-plans", bytes.NewReader(body))
+	if err != nil {
+		return paymentPlanDetails{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.secretKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return paymentPlanDetails{}, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave payment plan could not be created"}
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Status string             `json:"status"`
+		Data   paymentPlanDetails `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices || !strings.EqualFold(result.Status, "success") || result.Data.ID <= 0 {
+		return paymentPlanDetails{}, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave payment plan could not be created"}
+	}
+	return result.Data, nil
+}
+
+func (p *flutterwaveProvider) ListActiveSubscriptions(ctx context.Context, planID int64) ([]gatewaySubscription, error) {
+	items := []gatewaySubscription{}
+	for page := 1; page <= 20; page++ {
+		endpoint := fmt.Sprintf("https://api.flutterwave.com/v3/subscriptions?plan=%d&status=active&page=%d", planID, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+p.secretKey)
+		req.Header.Set("Accept", "application/json")
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscriptions could not be checked"}
+		}
+		var result struct {
+			Status string                `json:"status"`
+			Data   []gatewaySubscription `json:"data"`
+			Meta   struct {
+				PageInfo struct {
+					TotalPages int `json:"total_pages"`
+				} `json:"page_info"`
+			} `json:"meta"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil || resp.StatusCode != http.StatusOK || !strings.EqualFold(result.Status, "success") {
+			return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscriptions could not be checked"}
+		}
+		for _, item := range result.Data {
+			if item.PlanID != planID || !strings.EqualFold(item.Status, "active") || item.ID <= 0 {
+				return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave returned inconsistent subscription data"}
+			}
+			items = append(items, item)
+		}
+		if result.Meta.PageInfo.TotalPages == 0 || page >= result.Meta.PageInfo.TotalPages {
+			return items, nil
+		}
+	}
+	return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscription list is too large to inspect safely"}
+}
+
+func (p *flutterwaveProvider) CancelSubscription(ctx context.Context, id int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "https://api.flutterwave.com/v3/subscriptions/"+strconv.FormatInt(id, 10)+"/cancel", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.secretKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscription cancellation could not be confirmed"}
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices || !strings.EqualFold(result.Status, "success") {
+		return &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscription cancellation failed"}
+	}
+	return nil
 }
 
 func (p *flutterwaveProvider) InitializeCheckout(ctx context.Context, input paymentCheckoutInput) (paymentCheckoutResult, error) {
