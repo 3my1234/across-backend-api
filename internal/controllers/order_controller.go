@@ -21,6 +21,27 @@ func NewOrderController(db *pgxpool.Pool, customerPaysGatewayFees bool, subscrip
 	return &OrderController{db: db, customerPaysGatewayFees: customerPaysGatewayFees, subscriptionsRequired: subscriptionsRequired}
 }
 
+func (o *OrderController) ListBuyerMarkets(c *fiber.Ctx) error {
+	rows, err := o.db.Query(c.Context(), `SELECT country_code,currency_code FROM countries_config WHERE is_active=true AND 'flutterwave'=ANY(active_payment_gateways) ORDER BY country_code`)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer rows.Close()
+	markets := make([]fiber.Map, 0)
+	for rows.Next() {
+		var country, currency string
+		if err := rows.Scan(&country, &currency); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		markets = append(markets, fiber.Map{"country_code": country, "currency_code": currency})
+	}
+	if rows.Err() != nil {
+		return fiber.ErrInternalServerError
+	}
+	c.Set(fiber.HeaderCacheControl, "public, max-age=60")
+	return c.JSON(fiber.Map{"markets": markets})
+}
+
 func (o *OrderController) BootstrapProfile(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var profile struct {
@@ -62,16 +83,26 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cart")
 	}
 
-	var email, fullName, phone, address, city, state, postalCode string
+	var email, fullName, phone, address, city, state, postalCode, userCountryID string
 	if err := o.db.QueryRow(c.Context(), `
 		SELECT COALESCE(email, ''), COALESCE(full_name, ''), COALESCE(phone, ''),
-			COALESCE(address, ''), COALESCE(city, ''), COALESCE(state, ''), COALESCE(postal_code, '')
+			COALESCE(address, ''), COALESCE(city, ''), COALESCE(state, ''), COALESCE(postal_code, ''), country_id::text
 		FROM users
 		WHERE id = $1 AND is_active = true
-	`, userID).Scan(&email, &fullName, &phone, &address, &city, &state, &postalCode); err != nil {
+	`, userID).Scan(&email, &fullName, &phone, &address, &city, &state, &postalCode, &userCountryID); err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
 	}
-	if missing := missingPurchasingProfileFields(email, fullName, phone); len(missing) > 0 {
+	missing := missingPurchasingProfileFields(email, fullName, phone)
+	if strings.TrimSpace(address) == "" {
+		missing = append(missing, "street address")
+	}
+	if strings.TrimSpace(city) == "" {
+		missing = append(missing, "city")
+	}
+	if strings.TrimSpace(state) == "" {
+		missing = append(missing, "state")
+	}
+	if len(missing) > 0 {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
 			"code":           "PROFILE_INCOMPLETE",
 			"message":        "Complete your profile before purchasing: " + strings.Join(missing, ", "),
@@ -90,15 +121,19 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		SELECT id, currency_code
 		FROM countries_config
 		WHERE country_code = $1 AND is_active = true
-	`, req.CountryCode).Scan(&countryID, &currency); err != nil {
+	`, strings.ToUpper(strings.TrimSpace(req.CountryCode))).Scan(&countryID, &currency); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "unsupported country")
+	}
+	if countryID != userCountryID {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "checkout country must match your account's delivery country")
 	}
 
 	var itemsTotal float64
+	selectedPrices := make([]float64, len(req.Items))
 	fulfillmentMode := ""
 	var orderProviderID *string
 	deliveryMaxDays := 0
-	for _, item := range req.Items {
+	for itemIndex, item := range req.Items {
 		if item.Quantity <= 0 {
 			return fiber.NewError(fiber.StatusBadRequest, "quantity must be positive")
 		}
@@ -107,16 +142,26 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		var itemProviderID *string
 		var itemDeliveryMaxDays int
 		if err := tx.QueryRow(c.Context(), `
-			SELECT CASE WHEN is_flash_sale AND flash_sale_price > 0 AND flash_sale_price < local_selling_price
-				THEN flash_sale_price ELSE local_selling_price END,
-				fulfillment_mode, provider_id::text, COALESCE(delivery_max_days, 0)
+			SELECT CASE WHEN p.is_flash_sale AND area.currency_code=p.local_currency_code
+				AND area.delivered_price=p.local_selling_price AND p.flash_sale_price > 0
+				AND p.flash_sale_price < p.local_selling_price THEN p.flash_sale_price
+				ELSE area.delivered_price END,
+				p.fulfillment_mode, p.provider_id::text, COALESCE(p.delivery_max_days, 0)
 			FROM products p
-			WHERE id = $1 AND sku = $2 AND is_active = true AND moderation_status='approved' AND inventory_count >= $3
-			  AND provider_id IS NOT NULL AND fulfillment_mode IN ('merchant_local','merchant_cross_border')
+			JOIN LATERAL (
+				SELECT a.delivered_price, a.currency_code FROM product_delivery_areas a
+				WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6)
+				  AND (a.city_key='' OR a.city_key=$7)
+				ORDER BY (a.city_key<>'') DESC, (a.state_key<>'') DESC LIMIT 1
+			) area ON TRUE
+			WHERE p.id = $1 AND p.sku = $2 AND p.is_active = true AND p.moderation_status='approved' AND p.inventory_count >= $3
+			  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 			  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
-		`, item.ProductID, item.SKU, item.Quantity, !o.subscriptionsRequired()).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "product unavailable")
+			  AND area.currency_code=$8
+			  AND (p.fulfillment_mode<>'merchant_local' OR p.inventory_country_code=$5)
+		`, item.ProductID, item.SKU, item.Quantity, !o.subscriptionsRequired(), strings.ToUpper(strings.TrimSpace(req.CountryCode)), deliveryLocationKey(state), deliveryLocationKey(city), currency).Scan(&unitPrice, &itemMode, &itemProviderID, &itemDeliveryMaxDays); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "product unavailable for your delivery address or currency")
 		}
 		if fulfillmentMode == "" {
 			fulfillmentMode, orderProviderID = itemMode, itemProviderID
@@ -127,6 +172,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			deliveryMaxDays = itemDeliveryMaxDays
 		}
 		itemsTotal += unitPrice * float64(item.Quantity)
+		selectedPrices[itemIndex] = unitPrice
 	}
 
 	if orderProviderID == nil || (fulfillmentMode != "merchant_local" && fulfillmentMode != "merchant_cross_border") {
@@ -147,7 +193,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	deliveryPromise := time.Now().UTC().Add(time.Duration(deliveryMaxDays) * 24 * time.Hour)
 	contactSnapshot, err := json.Marshal(fiber.Map{
 		"full_name": fullName, "email": email, "phone": phone,
-		"address": address, "city": city, "state": state, "postal_code": postalCode,
+		"address": address, "city": city, "state": state, "postal_code": postalCode, "country_code": strings.ToUpper(strings.TrimSpace(req.CountryCode)),
 	})
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not prepare fulfillment contact")
@@ -191,16 +237,14 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create seller fulfilment")
 	}
 
-	for _, item := range req.Items {
+	for itemIndex, item := range req.Items {
 		var title, description, hubCode, hubName, hubCity, hubAddress, itemMode string
 		var itemProviderID *string
-		var unitPrice, supplierCostRMB float64
+		var supplierCostRMB float64
 		var imageURLs []string
 		var factoryRaw []byte
 		if err := tx.QueryRow(c.Context(), `
 			SELECT p.title, p.description,
-				CASE WHEN p.is_flash_sale AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
-					THEN p.flash_sale_price ELSE p.local_selling_price END,
 				p.cost_price_rmb,
 				p.image_urls, p.factory_details,p.fulfillment_mode,p.provider_id::text,
 				COALESCE(lh.code, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''), COALESCE(lh.address, '')
@@ -208,7 +252,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 			LEFT JOIN logistics_hubs lh ON lh.id = COALESCE(NULLIF($2, '')::uuid, p.origin_hub_id)
 			WHERE p.id = $1
 		`, item.ProductID, item.OriginHubID).Scan(
-			&title, &description, &unitPrice, &supplierCostRMB, &imageURLs, &factoryRaw, &itemMode, &itemProviderID,
+			&title, &description, &supplierCostRMB, &imageURLs, &factoryRaw, &itemMode, &itemProviderID,
 			&hubCode, &hubName, &hubCity, &hubAddress,
 		); err != nil {
 			return err
@@ -245,7 +289,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		_, err = tx.Exec(c.Context(), `
 		INSERT INTO order_items(order_id, product_id, origin_hub_id, sku, title, variant, quantity, unit_price, product_snapshot,provider_id,fulfillment_mode)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,$10,$11)
-		`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, unitPrice, productSnapshot, itemProviderID, itemMode)
+		`, orderID, item.ProductID, originHubID, item.SKU, title, variantJSON, item.Quantity, selectedPrices[itemIndex], productSnapshot, itemProviderID, itemMode)
 		if err != nil {
 			return err
 		}

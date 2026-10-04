@@ -10,6 +10,7 @@ func validMerchantProductPayload() merchantProductPayload {
 		Description:          "Locally stocked palm oil",
 		ImageURLs:            []string{"https://media.atlxpres.com/products/palm-oil.jpg"},
 		Price:                50000,
+		CurrencyCode:         "NGN",
 		InventoryCount:       100,
 		FulfillmentMode:      "merchant_local",
 		InventoryCountryCode: "NG",

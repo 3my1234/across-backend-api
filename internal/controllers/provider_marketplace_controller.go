@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"across/backend/internal/config"
@@ -34,6 +35,9 @@ type ProviderMarketplaceController struct {
 	cfg             config.Config
 	paymentProvider paymentProvider
 	s3              *storage.S3
+	gatewayMu       sync.Mutex
+	gatewayItems    []gatewaySubscription
+	gatewayExpiry   time.Time
 }
 
 func NewProviderMarketplaceController(db *pgxpool.Pool, cfg config.Config) *ProviderMarketplaceController {
@@ -1777,10 +1781,18 @@ func (m *ProviderMarketplaceController) AdminChangePlanPrice(c *fiber.Ctx) error
 	if err := tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
+	m.gatewayMu.Lock()
+	m.gatewayExpiry = time.Time{}
+	m.gatewayMu.Unlock()
 	return c.JSON(fiber.Map{"id": c.Params("plan_id"), "amount_ngn": *req.AmountNGN, "flutterwave_plan_id": newGatewayID, "existing_subscriptions_unchanged": true})
 }
 
-func (m *ProviderMarketplaceController) activeProviderGatewaySubscriptions(ctx context.Context) ([]gatewaySubscription, error) {
+func (m *ProviderMarketplaceController) activeProviderGatewaySubscriptions(ctx context.Context, fresh bool) ([]gatewaySubscription, error) {
+	m.gatewayMu.Lock()
+	defer m.gatewayMu.Unlock()
+	if !fresh && time.Now().Before(m.gatewayExpiry) {
+		return append([]gatewaySubscription(nil), m.gatewayItems...), nil
+	}
 	rows, err := m.db.Query(ctx, `SELECT DISTINCT plan_id FROM (
 		SELECT flutterwave_plan_id AS plan_id FROM provider_subscription_plans WHERE flutterwave_plan_id IS NOT NULL
 		UNION ALL SELECT old_flutterwave_plan_id FROM provider_subscription_plan_price_events WHERE old_flutterwave_plan_id IS NOT NULL
@@ -1810,11 +1822,13 @@ func (m *ProviderMarketplaceController) activeProviderGatewaySubscriptions(ctx c
 		}
 		items = append(items, found...)
 	}
+	m.gatewayItems = append([]gatewaySubscription(nil), items...)
+	m.gatewayExpiry = time.Now().Add(30 * time.Second)
 	return items, nil
 }
 
 func (m *ProviderMarketplaceController) AdminListGatewaySubscriptions(c *fiber.Ctx) error {
-	items, err := m.activeProviderGatewaySubscriptions(c.Context())
+	items, err := m.activeProviderGatewaySubscriptions(c.Context(), c.Query("refresh") == "true")
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadGateway, "active Flutterwave subscriptions could not be checked")
 	}
@@ -1830,7 +1844,7 @@ func (m *ProviderMarketplaceController) AdminCancelGatewaySubscription(c *fiber.
 	if err != nil || id <= 0 {
 		return fiber.ErrBadRequest
 	}
-	items, err := m.activeProviderGatewaySubscriptions(c.Context())
+	items, err := m.activeProviderGatewaySubscriptions(c.Context(), true)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadGateway, "active Flutterwave subscriptions could not be checked")
 	}
@@ -1881,6 +1895,9 @@ func (m *ProviderMarketplaceController) AdminCancelGatewaySubscription(c *fiber.
 		}
 	}
 	status = "confirmed"
+	m.gatewayMu.Lock()
+	m.gatewayExpiry = time.Time{}
+	m.gatewayMu.Unlock()
 	return c.JSON(fiber.Map{"id": id, "status": "cancelled", "plan_id": target.PlanID})
 }
 
@@ -1907,6 +1924,9 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 		return fiber.ErrInternalServerError
 	}
 	rows.Close()
+	if c.Query("verify") != "true" {
+		return c.JSON(fiber.Map{"items": items, "gateway_verification": "not_requested"})
+	}
 	for _, item := range items {
 		item["gateway_price_matches"] = false
 		if !item["is_active"].(bool) || item["flutterwave_plan_id"] == nil {
