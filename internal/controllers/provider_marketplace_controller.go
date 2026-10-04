@@ -169,8 +169,12 @@ func payoutCurrencyForCountry(country string) string {
 		return "GBP"
 	case "US":
 		return "USD"
+	// Euro-area bank countries as of 2026. Other European countries must not
+	// silently inherit USD; they require an explicit payout-currency decision.
+	case "AT", "BE", "BG", "HR", "CY", "EE", "FI", "FR", "DE", "GR", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PT", "SK", "SI", "ES":
+		return "EUR"
 	default:
-		return "USD"
+		return ""
 	}
 }
 
@@ -476,6 +480,10 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 	if len(country) != 2 || bank == "" || len(account) < 4 || len(account) > 34 {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "country, bank, and a valid account number are required")
 	}
+	payoutCurrency := payoutCurrencyForCountry(country)
+	if payoutCurrency == "" {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "seller settlement is not yet supported for this bank country")
+	}
 	var existingStatus string
 	if err := m.db.QueryRow(c.Context(), `SELECT status FROM provider_payout_accounts WHERE provider_id=$1::uuid`, providerID).Scan(&existingStatus); err == nil {
 		return fiber.NewError(fiber.StatusConflict, "a settlement account is already connected; contact Atlantic Express support to replace it safely")
@@ -507,7 +515,7 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 			provider_id,country_code,currency_code,account_bank,account_number_last4,
 			account_name,bank_name,flutterwave_subaccount_id,flutterwave_subaccount_numeric_id,status
 		) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,'active')
-	`, providerID, country, payoutCurrencyForCountry(country), bank, last4,
+	`, providerID, country, payoutCurrency, bank, last4,
 		strings.TrimSpace(result.AccountName), strings.TrimSpace(result.BankName),
 		result.SubaccountID, result.NumericID)
 	if err != nil {

@@ -4,6 +4,41 @@ A successful buyer charge confirms payment, not seller bank credit. Imported
 orders remain blocked until Flutterwave reports the seller settlement released.
 Local-stock fulfilment retains its existing workflow.
 
+## Split allocation and bank availability
+
+The checkout submits the order currency, amount, the seller's Flutterwave
+collection subaccount ID, and Atlantic Express's fee. Flutterwave allocates
+each successful charge to the split parties, but the seller's bank receives
+money only after Flutterwave processes that subaccount's settlement. One seller
+with many orders may have those transactions batched in a single settlement;
+the app must never equate 100 successful charges with 100 immediate bank
+credits. The provider UI and server-side imported-order guard rely on the
+separate reconciliation state.
+
+Flutterwave publishes a general next-business-day local and five-business-day
+international settlement schedule, subject to weekends, holidays, minimum
+thresholds, and flagged funds. Its published direct-bank thresholds include
+USD 1,000 and EUR 1,000. These are general rules, not a guarantee for a
+particular marketplace subaccount or cross-currency route. Flutterwave says
+split payments require automatic rather than manual settlement, so confirm
+the account's settlement destination and cycle with Flutterwave before making
+seller cash-availability promises.
+
+References:
+
+- https://developer.flutterwave.com/docs/split-payments
+- https://flutterwave.com/us/support/payments/split-payments-with-sub-accounts
+- https://www.flutterwave.com/gh/support/payments/settlement-schedule
+- https://flutterwave.com/tz/support/payments/minimum-settlement-threshold
+
+For a US seller receiving payments from buyers in multiple countries, ask
+Flutterwave in writing whether each currency and payment method can split to
+that US bank subaccount, what conversion occurs, who bears gateway/FX fees,
+the settlement destination and bank-arrival cycle, and whether the threshold
+is per seller and currency. Request the same answer for EUR/SEPA accounts.
+Use one completed live pilot with real settlement evidence before enabling a
+country for public buyers.
+
 ## Release order
 
 1. Deploy the backend image after running migrations through
