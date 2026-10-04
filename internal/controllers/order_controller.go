@@ -307,6 +307,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{
 		"order_id":                  orderID,
+		"country_code":              strings.ToUpper(strings.TrimSpace(req.CountryCode)),
 		"items_total":               itemsTotal,
 		"shipping_fee":              0,
 		"customs_fee":               0,

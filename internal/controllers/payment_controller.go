@@ -633,21 +633,21 @@ func (p *PaymentController) settleAndNotify(ctx context.Context, orderID, txRef,
 	if err := p.settleOrderPayment(ctx, orderID, txRef, transactionID, paidAmount, currency); err != nil {
 		return err
 	}
-	var userID string
+	var userID, orderCurrency string
 	var total float64
 	var fulfillmentMode, settlementStatus string
-	if err := p.db.QueryRow(ctx, `SELECT o.user_id,o.total_amount,o.fulfillment_mode,COALESCE(ml.settlement_status,'pending')
+	if err := p.db.QueryRow(ctx, `SELECT o.user_id,o.total_amount,o.currency_code,o.fulfillment_mode,COALESCE(ml.settlement_status,'pending')
 		FROM orders o LEFT JOIN merchant_ledger ml ON ml.order_id=o.id AND ml.event_key='order-paid:'||o.id::text
-		WHERE o.id=$1`, orderID).Scan(&userID, &total, &fulfillmentMode, &settlementStatus); err != nil {
+		WHERE o.id=$1`, orderID).Scan(&userID, &total, &orderCurrency, &fulfillmentMode, &settlementStatus); err != nil {
 		return errors.New("payment settled but post-payment processing failed")
 	}
-	body := fmt.Sprintf("Your payment of NGN %.2f has been received. Your order is being processed.", total)
+	body := fmt.Sprintf("Your payment of %s %.2f has been received. Your order is being processed.", orderCurrency, total)
 	if fulfillmentMode == "merchant_cross_border" && settlementStatus != "settled" {
-		body = fmt.Sprintf("Your payment of NGN %.2f is confirmed. Seller settlement is pending before import processing can start. You do not need to pay again.", total)
+		body = fmt.Sprintf("Your payment of %s %.2f is confirmed. Seller settlement is pending before import processing can start. You do not need to pay again.", orderCurrency, total)
 	}
 	_ = CreateNotificationOnce(ctx, p.db, userID, orderID, nil, "payment_received",
 		"Payment confirmed", body,
-		map[string]any{"amount": total, "currency": "NGN"}, "payment-received:"+orderID)
+		map[string]any{"amount": total, "currency": orderCurrency}, "payment-received:"+orderID)
 	if _, _, err := p.rewards.AwardPurchase(ctx, userID, orderID, total); err != nil {
 		log.Printf("purchase reward failed order_id=%s: %v", orderID, err)
 	}
