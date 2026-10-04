@@ -28,6 +28,10 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 	if destinationErr != nil {
 		return destinationErr
 	}
+	stockScope := strings.TrimSpace(strings.ToLower(c.Query("stock_scope")))
+	if stockScope != "" && stockScope != "all" && stockScope != "local" && stockScope != "international" {
+		return fiber.NewError(fiber.StatusBadRequest, "stock_scope must be all, local, or international")
+	}
 	latitudeRaw := strings.TrimSpace(c.Query("latitude"))
 	longitudeRaw := strings.TrimSpace(c.Query("longitude"))
 	hasLocation := latitudeRaw != "" || longitudeRaw != ""
@@ -57,17 +61,18 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price), COALESCE(p.flash_sale_price+offer.delivery_fee, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode,
-			CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 6371 * 2 * asin(sqrt(power(sin(radians((p.inventory_latitude::float8-$2::float8)/2)),2)+cos(radians($2::float8))*cos(radians(p.inventory_latitude::float8))*power(sin(radians((p.inventory_longitude::float8-$3::float8)/2)),2))) END AS distance_km
+			CASE WHEN $1::boolean AND p.inventory_country_code=$5 AND p.stock_state<>'import_on_demand' AND p.inventory_latitude IS NOT NULL AND p.inventory_longitude IS NOT NULL THEN 6371 * 2 * asin(sqrt(power(sin(radians((p.inventory_latitude::float8-$2::float8)/2)),2)+cos(radians($2::float8))*cos(radians(p.inventory_latitude::float8))*power(sin(radians((p.inventory_longitude::float8-$3::float8)/2)),2))) END AS distance_km
 		FROM products p
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved'
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+		  AND ($8::text NOT IN ('local','international') OR ($8='local' AND p.inventory_country_code=$5) OR ($8='international' AND p.inventory_country_code<>$5))
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
-		ORDER BY CASE WHEN $1::boolean AND p.fulfillment_mode='merchant_local' AND p.inventory_latitude IS NOT NULL THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
+		ORDER BY CASE WHEN p.inventory_country_code=$5 THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
 		LIMIT 80
-	`, hasLocation, latitude, longitude, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity)
+	`, hasLocation, latitude, longitude, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity, stockScope)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "catalog unavailable")
 	}
