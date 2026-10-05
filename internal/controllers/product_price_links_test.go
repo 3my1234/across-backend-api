@@ -13,7 +13,7 @@ func TestPrimaryPriceLinksPreserveIndependentOffers(t *testing.T) {
 	linked, independent := true, false
 	areas, err := normalizeProductDeliveryAreas([]productDeliveryArea{
 		{CountryCode: "NG", ItemPrice: 20, DeliveryFee: 5, CurrencyCode: "NGN", UsesPrimaryPrice: &linked},
-		{CountryCode: "NG", State: "Lagos", ItemPrice: 35, DeliveryFee: 7, CurrencyCode: "NGN", UsesPrimaryPrice: &independent},
+		{CountryCode: "NG", State: "Lagos", ItemPrice: 35, DeliveryFee: 7, CurrencyCode: "NGN", UsesPrimaryPrice: &independent, IndependentPriceConfirmed: true},
 		{CountryCode: "US", ItemPrice: 30, DeliveryFee: 10, CurrencyCode: "USD", UsesPrimaryPrice: &independent},
 	}, "NG", "merchant_local", "NGN", 100)
 	if err != nil {
@@ -38,6 +38,7 @@ func TestLegacyPortalPrimaryEditRetainsLink(t *testing.T) {
 	}
 	incoming[0].UsesPrimaryPrice = nil
 	incoming[0].ItemPrice = 35
+	incoming[0].IndependentPriceConfirmed = true
 	preserveLegacyPrimaryPriceLinks(incoming, previous)
 	areas, err = normalizeProductDeliveryAreas(incoming, "NG", "merchant_local", "NGN", 100)
 	if err != nil || areas[0].DeliveredPrice != 40 || *areas[0].UsesPrimaryPrice {

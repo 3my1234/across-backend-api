@@ -11,7 +11,7 @@ import (
 
 func TestNormalizeProductDeliveryAreas(t *testing.T) {
 	areas, err := normalizeProductDeliveryAreas([]productDeliveryArea{
-		{CountryCode: "us", State: "New  York", City: "New York", DeliveredPrice: 42.50, CurrencyCode: "usd"},
+		{CountryCode: "us", State: "New  York", City: "New York", DeliveredPrice: 42.50, CurrencyCode: "usd", IndependentPriceConfirmed: true},
 	}, "US", "merchant_local", "USD", 40)
 	if err != nil {
 		t.Fatal(err)
