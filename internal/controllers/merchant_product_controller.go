@@ -239,14 +239,7 @@ func (m *ProviderMarketplaceController) UpdateMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrBadRequest
 	}
 	normalizeMerchantProduct(&req)
-	req.DeliveryAreas, err = normalizeProductDeliveryAreas(req.DeliveryAreas, req.InventoryCountryCode, req.FulfillmentMode, req.CurrencyCode, req.Price)
-	if err != nil {
-		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
-	}
 	if err = validateMerchantProduct(req); err != nil {
-		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
-	}
-	if err = validateEnabledDeliveryMarkets(c.Context(), m.db, req.DeliveryAreas); err != nil {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 	}
 	tx, err := m.db.Begin(c.Context())
@@ -254,6 +247,30 @@ func (m *ProviderMarketplaceController) UpdateMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrInternalServerError
 	}
 	defer tx.Rollback(c.Context())
+	var previousAreasJSON []byte
+	err = tx.QueryRow(c.Context(), `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object(
+	  'country_code',a.country_code,'state',a.state_key,'city',a.city_key,
+	  'item_price',a.delivered_price-a.delivery_fee,'currency_code',a.currency_code,
+	  'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false))) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)
+	  FROM products p WHERE p.id=$1::uuid AND p.provider_id=$2::uuid AND p.moderation_status<>'archived' FOR UPDATE`, c.Params("product_id"), providerID).Scan(&previousAreasJSON)
+	if err == pgx.ErrNoRows {
+		return fiber.ErrNotFound
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	var previousAreas []productDeliveryArea
+	if json.Unmarshal(previousAreasJSON, &previousAreas) != nil {
+		return fiber.ErrInternalServerError
+	}
+	preserveLegacyPrimaryPriceLinks(req.DeliveryAreas, previousAreas)
+	req.DeliveryAreas, err = normalizeProductDeliveryAreas(req.DeliveryAreas, req.InventoryCountryCode, req.FulfillmentMode, req.CurrencyCode, req.Price)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
+	if err = validateEnabledDeliveryMarkets(c.Context(), tx, req.DeliveryAreas); err != nil {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
 	tag, err := tx.Exec(c.Context(), `UPDATE products SET title=$3,description=$4,category_path=$5,image_urls=$6,local_selling_price=$7,compare_at_price=$8,inventory_count=$9,is_flash_sale=$10,flash_sale_price=CASE WHEN $10 THEN $11::numeric ELSE NULL END,fulfillment_mode=$12,inventory_country_code=$13,inventory_city=$14,inventory_location=$15,stock_state=$16,handling_time_hours=$17,delivery_min_days=$18,delivery_max_days=$19,delivery_methods=$20,return_policy=$21,atlantic_last_mile=$22,inventory_latitude=$23,inventory_longitude=$24,local_currency_code=$25,moderation_status=CASE WHEN moderation_status IN ('pending','approved') THEN 'pending' ELSE moderation_status END,moderation_notes='',is_active=false,catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status<>'archived'`, c.Params("product_id"), providerID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, req.IsFlashSale, req.FlashSalePrice, req.FulfillmentMode, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode)
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -336,7 +353,7 @@ func (m *ProviderMarketplaceController) listMerchantProducts(c *fiber.Ctx, admin
 		cursorID = page.CursorID
 	}
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code,'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false)) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}

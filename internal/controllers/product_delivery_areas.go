@@ -9,21 +9,47 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type productDeliveryArea struct {
-	CountryCode    string  `json:"country_code"`
-	State          string  `json:"state"`
-	City           string  `json:"city"`
-	DeliveredPrice float64 `json:"delivered_price"`
-	ItemPrice      float64 `json:"item_price,omitempty"`
-	DeliveryFee    float64 `json:"delivery_fee"`
-	CurrencyCode   string  `json:"currency_code"`
+	CountryCode      string  `json:"country_code"`
+	State            string  `json:"state"`
+	City             string  `json:"city"`
+	DeliveredPrice   float64 `json:"delivered_price"`
+	ItemPrice        float64 `json:"item_price,omitempty"`
+	DeliveryFee      float64 `json:"delivery_fee"`
+	CurrencyCode     string  `json:"currency_code"`
+	UsesPrimaryPrice *bool   `json:"uses_primary_price,omitempty"`
 }
 
 var deliveryCountryCode = regexp.MustCompile(`^[A-Z]{2}$`)
 var deliveryCurrencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+
+// Older portals submit the old numeric offer when only the primary price is
+// edited. Keep an existing link unless they actually changed the offer price.
+func preserveLegacyPrimaryPriceLinks(incoming, previous []productDeliveryArea) {
+	for i := range incoming {
+		if incoming[i].UsesPrimaryPrice != nil {
+			continue
+		}
+		for _, old := range previous {
+			if old.UsesPrimaryPrice == nil || !*old.UsesPrimaryPrice ||
+				!strings.EqualFold(incoming[i].CountryCode, old.CountryCode) ||
+				deliveryLocationKey(incoming[i].State) != old.State || deliveryLocationKey(incoming[i].City) != old.City ||
+				!strings.EqualFold(incoming[i].CurrencyCode, old.CurrencyCode) {
+				continue
+			}
+			itemPrice := incoming[i].ItemPrice
+			if itemPrice == 0 {
+				itemPrice = incoming[i].DeliveredPrice - incoming[i].DeliveryFee
+			}
+			if roundMoney(itemPrice) == old.ItemPrice {
+				linked := true
+				incoming[i].UsesPrimaryPrice = &linked
+			}
+		}
+	}
+}
 
 func deliveryLocationKey(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
@@ -46,6 +72,17 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 		areas[i].State = deliveryLocationKey(areas[i].State)
 		areas[i].City = deliveryLocationKey(areas[i].City)
 		areas[i].CurrencyCode = strings.ToUpper(strings.TrimSpace(areas[i].CurrencyCode))
+		usesPrimary := areas[i].UsesPrimaryPrice != nil && *areas[i].UsesPrimaryPrice
+		if usesPrimary {
+			if areas[i].CurrencyCode == "" {
+				areas[i].CurrencyCode = baseCurrency
+			}
+			if areas[i].CurrencyCode != baseCurrency {
+				return nil, fmt.Errorf("primary-price delivery areas must use %s", baseCurrency)
+			}
+			areas[i].ItemPrice = basePrice
+			areas[i].DeliveredPrice = roundMoney(basePrice + areas[i].DeliveryFee)
+		}
 		if areas[i].ItemPrice > 0 {
 			areas[i].DeliveredPrice = roundMoney(areas[i].ItemPrice + areas[i].DeliveryFee)
 		}
@@ -62,6 +99,10 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 			return nil, fmt.Errorf("each delivery area needs a positive delivered price and three-letter currency")
 		}
 		areas[i].ItemPrice = roundMoney(areas[i].DeliveredPrice - areas[i].DeliveryFee)
+		if areas[i].UsesPrimaryPrice == nil {
+			linked := areas[i].CurrencyCode == baseCurrency && areas[i].ItemPrice == roundMoney(basePrice)
+			areas[i].UsesPrimaryPrice = &linked
+		}
 		key := areas[i].CountryCode + "|" + areas[i].State + "|" + areas[i].City
 		if seen[key] {
 			return nil, fmt.Errorf("remove duplicate delivery areas")
@@ -112,18 +153,34 @@ func catalogDeliveryFee(factory map[string]any, country, state, city string) flo
 }
 
 func replaceProductDeliveryAreas(ctx context.Context, tx pgx.Tx, productID string, areas []productDeliveryArea) error {
+	// Keep the API usable during a rolling deployment before migration 056 is
+	// applied. Normalized totals remain correct; durable links start afterward.
+	var supportsLinks bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='product_delivery_areas' AND column_name='uses_primary_price')`).Scan(&supportsLinks); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM product_delivery_areas WHERE product_id=$1::uuid`, productID); err != nil {
 		return err
 	}
 	for _, area := range areas {
-		if _, err := tx.Exec(ctx, `INSERT INTO product_delivery_areas(product_id,country_code,state_key,city_key,delivered_price,delivery_fee,currency_code) VALUES($1::uuid,$2,$3,$4,$5,$6,$7)`, productID, area.CountryCode, area.State, area.City, area.DeliveredPrice, area.DeliveryFee, area.CurrencyCode); err != nil {
+		query := `INSERT INTO product_delivery_areas(product_id,country_code,state_key,city_key,delivered_price,delivery_fee,currency_code) VALUES($1::uuid,$2,$3,$4,$5,$6,$7)`
+		args := []any{productID, area.CountryCode, area.State, area.City, area.DeliveredPrice, area.DeliveryFee, area.CurrencyCode}
+		if supportsLinks {
+			query = `INSERT INTO product_delivery_areas(product_id,country_code,state_key,city_key,delivered_price,delivery_fee,currency_code,uses_primary_price) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8)`
+			args = append(args, area.UsesPrimaryPrice != nil && *area.UsesPrimaryPrice)
+		}
+		if _, err := tx.Exec(ctx, query, args...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateEnabledDeliveryMarkets(ctx context.Context, db *pgxpool.Pool, areas []productDeliveryArea) error {
+type deliveryMarketQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func validateEnabledDeliveryMarkets(ctx context.Context, db deliveryMarketQueryer, areas []productDeliveryArea) error {
 	codes := make([]string, 0, len(areas))
 	for _, area := range areas {
 		codes = append(codes, area.CountryCode)
