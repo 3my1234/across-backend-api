@@ -12,14 +12,15 @@ import (
 )
 
 type productDeliveryArea struct {
-	CountryCode      string  `json:"country_code"`
-	State            string  `json:"state"`
-	City             string  `json:"city"`
-	DeliveredPrice   float64 `json:"delivered_price"`
-	ItemPrice        float64 `json:"item_price,omitempty"`
-	DeliveryFee      float64 `json:"delivery_fee"`
-	CurrencyCode     string  `json:"currency_code"`
-	UsesPrimaryPrice *bool   `json:"uses_primary_price,omitempty"`
+	CountryCode               string  `json:"country_code"`
+	State                     string  `json:"state"`
+	City                      string  `json:"city"`
+	DeliveredPrice            float64 `json:"delivered_price"`
+	ItemPrice                 float64 `json:"item_price,omitempty"`
+	DeliveryFee               float64 `json:"delivery_fee"`
+	CurrencyCode              string  `json:"currency_code"`
+	UsesPrimaryPrice          *bool   `json:"uses_primary_price,omitempty"`
+	IndependentPriceConfirmed bool    `json:"independent_price_confirmed,omitempty"`
 }
 
 var deliveryCountryCode = regexp.MustCompile(`^[A-Z]{2}$`)
@@ -99,6 +100,9 @@ func normalizeProductDeliveryAreas(areas []productDeliveryArea, stockCountry, mo
 			return nil, fmt.Errorf("each delivery area needs a positive delivered price and three-letter currency")
 		}
 		areas[i].ItemPrice = roundMoney(areas[i].DeliveredPrice - areas[i].DeliveryFee)
+		if !usesPrimary && areas[i].CurrencyCode == baseCurrency && areas[i].ItemPrice != roundMoney(basePrice) && !areas[i].IndependentPriceConfirmed {
+			return nil, fmt.Errorf("delivery item price for %s is %.2f %s but the main price is %.2f; use the main price or explicitly confirm an independent destination price", areas[i].CountryCode, areas[i].ItemPrice, baseCurrency, basePrice)
+		}
 		if areas[i].UsesPrimaryPrice == nil {
 			linked := areas[i].CurrencyCode == baseCurrency && areas[i].ItemPrice == roundMoney(basePrice)
 			areas[i].UsesPrimaryPrice = &linked
