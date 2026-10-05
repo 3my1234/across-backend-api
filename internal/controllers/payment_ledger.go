@@ -41,14 +41,49 @@ func recordOrderPaymentAttempt(ctx context.Context, db *pgxpool.Pool, provider, 
 	if strings.TrimSpace(sellerSubaccount) == "" {
 		return errors.New("seller split recipient is required")
 	}
-	_, err := db.Exec(ctx, `
-		INSERT INTO payments(
-			provider,purpose,order_id,user_id,country_code,amount,currency_code,
-			provider_reference,idempotency_key,payment_method,seller_subaccount_id
-		)
-		VALUES($1,'order',$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10)
-	`, provider, orderID, userID, strings.ToUpper(countryCode), amount, strings.ToUpper(currency), reference, "checkout:"+provider+":"+reference, method, sellerSubaccount)
-	return err
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockXPUser(ctx, tx, userID); err != nil {
+		return err
+	}
+	if err = validateXPReservation(ctx, tx, orderID); err != nil {
+		return err
+	}
+	var pending bool
+	if err = tx.QueryRow(ctx, `SELECT order_status::text='Pending' FROM orders WHERE id=$1 AND user_id=$2`, orderID, userID).Scan(&pending); err != nil {
+		return err
+	}
+	if !pending {
+		return fiber.NewError(409, "Order is not payable")
+	}
+	var discounted, started bool
+	if err = tx.QueryRow(ctx, `SELECT COALESCE((to_jsonb(o)->>'xp_discount')::int,0)>0,
+ EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id) FROM orders o WHERE id=$1`, orderID).Scan(&discounted, &started); err != nil {
+		return err
+	}
+	if discounted && started {
+		return fiber.NewError(409, "An XP checkout already exists. Resume it or check payment status; points remain reserved until the payment is resolved.")
+	}
+	_, err = tx.Exec(ctx, `
+  INSERT INTO payments(provider,purpose,order_id,user_id,country_code,amount,currency_code,
+   provider_reference,idempotency_key,payment_method,seller_subaccount_id)
+  VALUES($1,'order',$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10)
+ `, provider, orderID, userID, strings.ToUpper(countryCode), amount, strings.ToUpper(currency), reference, "checkout:"+provider+":"+reference, method, sellerSubaccount)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func paymentAttemptError(err error) error {
+	var public *fiber.Error
+	if errors.As(err, &public) {
+		return public
+	}
+	return fiber.NewError(500, "Could not record payment attempt")
 }
 
 func recordSubscriptionPaymentAttempt(ctx context.Context, db *pgxpool.Pool, provider, subscriptionID, userID, countryCode string, amount float64, currency, reference, method string) error {

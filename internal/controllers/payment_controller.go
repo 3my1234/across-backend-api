@@ -104,7 +104,7 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 
 	txRef := newPaymentReference(req.OrderID)
 	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, "saved_token", sellerSubaccountID); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
+		return paymentAttemptError(err)
 	}
 	_ = markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, "")
 	if p.mockPaymentsEnabled() {
@@ -216,6 +216,24 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 	if orderStatus != "Pending" {
 		return fiber.NewError(fiber.StatusConflict, "order is not payable")
 	}
+	var discounted bool
+	if err := p.db.QueryRow(c.Context(), `SELECT COALESCE((to_jsonb(o)->>'xp_discount')::int,0)>0 FROM orders o WHERE id=$1`, req.OrderID).Scan(&discounted); err != nil {
+		return fiber.NewError(500, "Checkout unavailable")
+	}
+	if discounted {
+		var reference, link string
+		err := p.db.QueryRow(c.Context(), `SELECT provider_reference,COALESCE(checkout_url,'') FROM payments
+		 WHERE order_id=$1 AND provider=$2 ORDER BY created_at DESC LIMIT 1`, req.OrderID, p.provider.Name()).Scan(&reference, &link)
+		if err == nil && link != "" {
+			return c.Status(202).JSON(fiber.Map{"tx_ref": reference, "checkout_link": link, "gateway": p.provider.Name(), "reused": true})
+		}
+		if err == nil {
+			return fiber.NewError(409, "Payment initialization is unresolved. Check payment status or contact support; your XP is reserved.")
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fiber.NewError(500, "Checkout unavailable")
+		}
+	}
 
 	txRef := newPaymentReference(req.OrderID)
 	selectedMethods, err := selectPaymentMethods(paymentMethods, req.PaymentMethod)
@@ -227,7 +245,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		redirectURL = "across://payments/flutterwave"
 	}
 	if err := recordOrderPaymentAttempt(c.Context(), p.db, p.provider.Name(), req.OrderID, userID, countryCode, orderAmount, orderCurrency, txRef, selectedMethods[0], sellerSubaccountID); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "could not record payment attempt")
+		return paymentAttemptError(err)
 	}
 	if p.mockPaymentsEnabled() {
 		_ = markPaymentCheckoutReady(c.Context(), p.db, p.provider.Name(), txRef, "https://www.flutterwave.com")
@@ -726,6 +744,13 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 	}
 	defer tx.Rollback(ctx)
 
+	var xpUser string
+	if err := tx.QueryRow(ctx, `SELECT user_id::text FROM orders WHERE id=$1`, orderID).Scan(&xpUser); err != nil {
+		return err
+	}
+	if err := lockXPUser(ctx, tx, xpUser); err != nil {
+		return err
+	}
 	var countryID, currencyCode, orderStatus, existingTxRef, fulfillmentMode string
 	var providerID *string
 	var orderAmount, platformFee float64
@@ -790,6 +815,9 @@ func (p *PaymentController) settleOrderPayment(ctx context.Context, orderID, txR
 		) sold
 		WHERE p.id = sold.product_id
 	`, orderID); err != nil {
+		return err
+	}
+	if err := consumeXP(ctx, tx, orderID); err != nil {
 		return err
 	}
 	sellerAmount := roundMoney(orderAmount - platformFee)

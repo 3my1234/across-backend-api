@@ -38,6 +38,7 @@ func TestServiceReviewsOwnershipDiscoveryAndConcurrentTotals(t *testing.T) {
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
  CREATE TABLE countries_config(country_code text,currency_code text,is_active boolean,active_payment_gateways text[]);
  CREATE TABLE xp_transactions(user_id uuid,amount int,reason text,reference_id text UNIQUE);
+ CREATE TABLE notifications(user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text UNIQUE);
  CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,listing_type text DEFAULT 'artisan',title text DEFAULT 'Plumber',slug text DEFAULT '',description text DEFAULT '',category text DEFAULT '',address_line text DEFAULT '',city text DEFAULT 'Abuja',state text DEFAULT 'FCT',country_code text DEFAULT 'NG',price numeric DEFAULT 100,currency_code text DEFAULT 'NGN',pricing_unit text DEFAULT 'job',capacity int DEFAULT 1,media_urls text[] DEFAULT '{}',attributes jsonb DEFAULT '{}',status text DEFAULT 'approved',moderation_notes text,published_at timestamptz,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),latitude numeric DEFAULT 9,longitude numeric DEFAULT 7,service_radius_km numeric,is_mobile_service boolean DEFAULT false,is_available_now boolean DEFAULT true);
  INSERT INTO countries_config VALUES('NG','NGN',true,ARRAY['flutterwave']);`)
 	if err != nil {

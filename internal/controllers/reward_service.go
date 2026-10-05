@@ -40,7 +40,7 @@ func purchaseXP(total float64) int {
 func (r *RewardService) AwardWelcome(ctx context.Context, userID string) (bool, error) {
 	return r.award(ctx, userID, "", welcomeXP, "welcome", "account-welcome", "welcome-xp:"+userID,
 		"Welcome to Atlantic Express - 650 XP earned",
-		"You received 650 XP, worth N650 in discounts. This welcome bonus is awarded once per account.")
+		"You received 650 XP. This welcome bonus is awarded once per account."+xpUsage)
 }
 
 func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now time.Time) (bool, error) {
@@ -75,7 +75,7 @@ func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now 
     `, userID, "daily-"+claimDate); err != nil {
 		return false, err
 	}
-	if err = insertNotification(ctx, tx, userID, "", nil, "xp_earned", "Daily login reward", "You earned 1 XP for logging in today.", map[string]any{"xp": 1, "reason": "daily_login"}, "daily-login:"+userID+":"+claimDate); err != nil {
+	if err = insertNotification(ctx, tx, userID, "", nil, "xp_earned", "Daily login reward", "You earned 1 XP for logging in today."+xpUsage, map[string]any{"xp": 1, "reason": "daily_login"}, "daily-login:"+userID+":"+claimDate); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
@@ -84,7 +84,7 @@ func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now 
 func (r *RewardService) AwardPurchase(ctx context.Context, userID, orderID string, total float64) (bool, int, error) {
 	amount := purchaseXP(total)
 	awarded, err := r.award(ctx, userID, orderID, amount, "purchase", "purchase-"+orderID, "purchase-xp:"+orderID,
-		"Purchase reward earned", fmt.Sprintf("You earned %d XP from your completed purchase.", amount))
+		"Purchase reward earned", fmt.Sprintf("You earned %d XP from your completed purchase.", amount)+xpUsage)
 	return awarded, amount, err
 }
 

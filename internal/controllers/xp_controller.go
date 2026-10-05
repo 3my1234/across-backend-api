@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -25,16 +26,40 @@ func (x *XPController) ClaimDailyLogin(c *fiber.Ctx) error {
 	if !claimed {
 		return c.JSON(fiber.Map{"claimed": false, "message": "Today's login reward was already claimed", "xp": 0})
 	}
-	return c.JSON(fiber.Map{"claimed": true, "message": "You earned 1 XP for today's login", "xp": 1})
+	return c.JSON(fiber.Map{"claimed": true, "message": "You earned 1 XP for today's login" + xpUsage, "xp": 1})
 }
 
 func (x *XPController) GetBalance(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
-	var totalXP int
-	if err := x.db.QueryRow(c.Context(), `SELECT COALESCE(SUM(amount), 0)::int FROM xp_transactions WHERE user_id = $1`, userID).Scan(&totalXP); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "XP balance unavailable")
+	tx, err := x.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(500, "XP balance unavailable")
 	}
-	return c.JSON(fiber.Map{"xp": totalXP, "naira_value": totalXP})
+	defer tx.Rollback(c.Context())
+	if err = lockXPUser(c.Context(), tx, userID); err != nil {
+		return err
+	}
+	var ready bool
+	if err = tx.QueryRow(c.Context(), `SELECT to_regclass('xp_redemptions') IS NOT NULL`).Scan(&ready); err != nil {
+		return err
+	}
+	var available, reserved int
+	if ready {
+		if err = releaseUnusedXP(c.Context(), tx, userID, false); err != nil {
+			return err
+		}
+		available, reserved, err = availableXP(c.Context(), tx, userID)
+	} else {
+		err = tx.QueryRow(c.Context(), `SELECT COALESCE(SUM(amount),0)::int FROM xp_transactions WHERE user_id=$1`, userID).Scan(&available)
+	}
+	if err != nil {
+		return fiber.NewError(500, "XP balance unavailable")
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return err
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.JSON(fiber.Map{"xp": available, "reserved_xp": reserved, "total_xp": available + reserved, "naira_value": available, "redemption_enabled": ready, "usage": strings.TrimSpace(xpUsage)})
 }
 
 func (x *XPController) GetHistory(c *fiber.Ctx) error {
@@ -81,7 +106,7 @@ func (x *XPController) AwardPurchaseXP(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"awarded": awarded, "xp": amount, "message": func() string {
 		if awarded {
-			return "Purchase XP awarded"
+			return "Purchase XP awarded" + xpUsage
 		}
 		return "Purchase XP was already awarded"
 	}()})

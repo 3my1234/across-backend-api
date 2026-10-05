@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"github.com/google/uuid"
 	"strings"
 	"time"
 
@@ -73,13 +74,34 @@ func (s *SupportController) CreateTicket(c *fiber.Ctx) error {
 func (s *SupportController) ListMyTickets(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 
+	limit := c.QueryInt("limit", 20)
+	if limit < 1 || limit > 100 {
+		return fiber.NewError(400, "limit must be between 1 and 100")
+	}
+	var before time.Time
+	beforeID := ""
+	if cursor := c.Query("cursor"); cursor != "" {
+		parts := strings.Split(cursor, "|")
+		if len(parts) != 2 {
+			return fiber.NewError(400, "invalid ticket cursor")
+		}
+		var err error
+		before, err = time.Parse(time.RFC3339Nano, parts[0])
+		if err != nil {
+			return fiber.NewError(400, "invalid ticket cursor")
+		}
+		if _, err = uuid.Parse(parts[1]); err != nil {
+			return fiber.NewError(400, "invalid ticket cursor")
+		}
+		beforeID = parts[1]
+	}
 	rows, err := s.db.Query(c.Context(), `
 		SELECT id, subject, message, status, created_at, updated_at
 		FROM support_tickets
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT 20
-	`, userID)
+		WHERE user_id = $1 AND ($2::text='' OR (created_at,id)<($3::timestamptz,NULLIF($2,'')::uuid))
+		ORDER BY created_at DESC,id DESC
+		LIMIT $4
+	`, userID, beforeID, before, limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
 	}
@@ -90,7 +112,7 @@ func (s *SupportController) ListMyTickets(c *fiber.Ctx) error {
 		var id, subject, message, status string
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(&id, &subject, &message, &status, &createdAt, &updatedAt); err != nil {
-			continue
+			return fiber.NewError(500, "ticket history unavailable")
 		}
 		tickets = append(tickets, fiber.Map{
 			"id":         id,
@@ -101,7 +123,17 @@ func (s *SupportController) ListMyTickets(c *fiber.Ctx) error {
 			"updated_at": updatedAt,
 		})
 	}
-	return c.JSON(fiber.Map{"tickets": tickets})
+	if rows.Err() != nil {
+		return fiber.NewError(500, "ticket history unavailable")
+	}
+	next := ""
+	if len(tickets) > limit {
+		tickets = tickets[:limit]
+		last := tickets[len(tickets)-1]
+		next = last["created_at"].(time.Time).Format(time.RFC3339Nano) + "|" + last["id"].(string)
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.JSON(fiber.Map{"tickets": tickets, "next_cursor": next, "has_more": next != ""})
 }
 
 // GetTicketMessages - Get messages for a ticket
@@ -118,32 +150,7 @@ func (s *SupportController) GetTicketMessages(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "ticket not found")
 	}
 
-	rows, err := s.db.Query(c.Context(), `
-		SELECT sender_type, sender_id, message, created_at
-		FROM support_messages
-		WHERE ticket_id = $1
-		ORDER BY created_at ASC
-	`, ticketID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
-	}
-	defer rows.Close()
-
-	messages := make([]fiber.Map, 0)
-	for rows.Next() {
-		var senderType, senderID, message string
-		var createdAt time.Time
-		if err := rows.Scan(&senderType, &senderID, &message, &createdAt); err != nil {
-			continue
-		}
-		messages = append(messages, fiber.Map{
-			"sender_type": senderType,
-			"sender_id":   senderID,
-			"message":     message,
-			"created_at":  createdAt,
-		})
-	}
-	return c.JSON(fiber.Map{"messages": messages})
+	return s.messagePage(c, ticketID)
 }
 
 // UserReply adds a buyer reply to an existing open support conversation.
@@ -187,35 +194,7 @@ func (s *SupportController) UserReply(c *fiber.Ctx) error {
 // AdminGetTicketMessages returns a complete ticket conversation to authorized support admins.
 func (s *SupportController) AdminGetTicketMessages(c *fiber.Ctx) error {
 	ticketID := c.Params("ticket_id")
-	rows, err := s.db.Query(c.Context(), `
-		SELECT sender_type, sender_id, message, created_at
-		FROM support_messages
-		WHERE ticket_id = $1
-		ORDER BY created_at ASC
-	`, ticketID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
-	}
-	defer rows.Close()
-
-	messages := make([]fiber.Map, 0)
-	for rows.Next() {
-		var senderType, senderID, message string
-		var createdAt time.Time
-		if err := rows.Scan(&senderType, &senderID, &message, &createdAt); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "failed to read messages")
-		}
-		messages = append(messages, fiber.Map{
-			"sender_type": senderType,
-			"sender_id":   senderID,
-			"message":     message,
-			"created_at":  createdAt,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to read messages")
-	}
-	return c.JSON(fiber.Map{"messages": messages})
+	return s.messagePage(c, ticketID)
 }
 
 // AdminListTickets - Admin lists all open tickets
@@ -249,6 +228,7 @@ func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 			"updated_at": updatedAt,
 		})
 	}
+	c.Set("Cache-Control", "private, no-store")
 	return c.JSON(fiber.Map{"tickets": tickets})
 }
 
@@ -329,4 +309,63 @@ func (s *SupportController) AdminCloseTicket(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "Ticket closed"})
+}
+
+// Bounded keyset pages load recent conversation first. IDs break timestamp ties.
+func (s *SupportController) messagePage(c *fiber.Ctx, ticketID string) error {
+	var ticketStatus string
+	if err := s.db.QueryRow(c.Context(), `SELECT status FROM support_tickets WHERE id=$1`, ticketID).Scan(&ticketStatus); err != nil {
+		return fiber.NewError(404, "ticket not found")
+	}
+	limit := c.QueryInt("limit", 50)
+	if limit < 1 || limit > 100 {
+		return fiber.NewError(400, "limit must be between 1 and 100")
+	}
+	var before time.Time
+	var beforeID string
+	if cursor := c.Query("cursor"); cursor != "" {
+		parts := strings.Split(cursor, "|")
+		if len(parts) != 2 {
+			return fiber.NewError(400, "invalid message cursor")
+		}
+		var err error
+		before, err = time.Parse(time.RFC3339Nano, parts[0])
+		if err != nil {
+			return fiber.NewError(400, "invalid message cursor")
+		}
+		if _, err = uuid.Parse(parts[1]); err != nil {
+			return fiber.NewError(400, "invalid message cursor")
+		}
+		beforeID = parts[1]
+	}
+	rows, err := s.db.Query(c.Context(), `SELECT id::text,sender_type,sender_id,message,created_at FROM support_messages
+ WHERE ticket_id=$1 AND ($2::text='' OR (created_at,id)<($3::timestamptz,NULLIF($2,'')::uuid))
+ ORDER BY created_at DESC,id DESC LIMIT $4`, ticketID, beforeID, before, limit+1)
+	if err != nil {
+		return fiber.NewError(500, "conversation unavailable")
+	}
+	defer rows.Close()
+	messages := make([]fiber.Map, 0, limit+1)
+	for rows.Next() {
+		var id, kind, sender, body string
+		var created time.Time
+		if err = rows.Scan(&id, &kind, &sender, &body, &created); err != nil {
+			return fiber.NewError(500, "conversation unavailable")
+		}
+		messages = append(messages, fiber.Map{"id": id, "sender_type": kind, "sender_id": sender, "message": body, "created_at": created})
+	}
+	if rows.Err() != nil {
+		return fiber.NewError(500, "conversation unavailable")
+	}
+	next := ""
+	if len(messages) > limit {
+		messages = messages[:limit]
+		last := messages[len(messages)-1]
+		next = last["created_at"].(time.Time).Format(time.RFC3339Nano) + "|" + last["id"].(string)
+	}
+	for left, right := 0, len(messages)-1; left < right; left, right = left+1, right-1 {
+		messages[left], messages[right] = messages[right], messages[left]
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.JSON(fiber.Map{"messages": messages, "next_cursor": next, "has_more": next != "", "ticket_status": ticketStatus})
 }

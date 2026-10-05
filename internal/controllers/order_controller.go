@@ -70,6 +70,7 @@ func (o *OrderController) BootstrapProfile(c *fiber.Ctx) error {
 func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req struct {
+		UseXP       bool   `json:"use_xp"`
 		CountryCode string `json:"country_code"`
 		Items       []struct {
 			ProductID   string         `json:"product_id"`
@@ -184,6 +185,32 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	// fee; Flutterwave handles its own processing and statutory deductions.
 	itemsTotal, deliveryTotal = roundMoney(itemsTotal), roundMoney(deliveryTotal)
 	platformFee := roundMoney((itemsTotal + deliveryTotal) * marketplaceServiceFeeRate)
+	originalFee := platformFee
+	var xpReady bool
+	if err := tx.QueryRow(c.Context(), `SELECT to_regclass('xp_redemptions') IS NOT NULL`).Scan(&xpReady); err != nil {
+		return err
+	}
+	if req.UseXP && !xpReady {
+		return fiber.NewError(503, "XP checkout requires migration 059")
+	}
+	available, redeemed := 0, 0
+	if xpReady {
+		if err := lockXPUser(c.Context(), tx, userID); err != nil {
+			return err
+		}
+		if err := releaseUnusedXP(c.Context(), tx, userID, true); err != nil {
+			return err
+		}
+		var balanceErr error
+		available, _, balanceErr = availableXP(c.Context(), tx, userID)
+		if balanceErr != nil {
+			return balanceErr
+		}
+		if req.UseXP {
+			redeemed = xpDiscount(available, platformFee, currency)
+		}
+	}
+	platformFee = roundMoney(platformFee - float64(redeemed))
 	grandTotal := roundMoney(itemsTotal + deliveryTotal + platformFee)
 	if deliveryMaxDays <= 0 {
 		if fulfillmentMode == "merchant_local" {
@@ -208,6 +235,14 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		RETURNING id
 	`, userID, countryID, currency, grandTotal, platformFee, deliveryPromise, contactSnapshot, orderProviderID, fulfillmentMode, deliveryTotal).Scan(&orderID); err != nil {
 		return err
+	}
+	if redeemed > 0 {
+		if _, err := tx.Exec(c.Context(), `UPDATE orders SET xp_discount=$2 WHERE id=$1`, orderID, redeemed); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(c.Context(), `INSERT INTO xp_redemptions(order_id,user_id,points) VALUES($1,$2,$3)`, orderID, userID, redeemed); err != nil {
+			return err
+		}
 	}
 	tag, err := tx.Exec(c.Context(), `
 			INSERT INTO order_fulfillments(
@@ -321,6 +356,12 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 		"vat_fee":                   0,
 		"stamp_duty_fee":            0,
 		"platform_fee":              platformFee,
+		"platform_fee_before_xp":    originalFee,
+		"xp_discount":               redeemed,
+		"xp_available":              available - redeemed,
+		"xp_eligible":               xpDiscount(available, originalFee, currency),
+		"xp_redemption_enabled":     xpReady && currency == "NGN",
+		"xp_usage":                  strings.TrimSpace(xpUsage),
 		"grand_total":               grandTotal,
 		"currency":                  currency,
 		"customer_pays_gateway_fee": o.customerPaysGatewayFees,
