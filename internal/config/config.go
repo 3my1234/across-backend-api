@@ -42,6 +42,7 @@ type Config struct {
 	PublicCacheTTLSeconds         int
 	JWTSecret                     string
 	FlutterwaveSecretKey          string
+	EnableMockPayments            bool
 	FlutterwaveWebhookSecret      string
 	FlutterwaveCustomerPaysFees   bool
 	PrivyAppID                    string
@@ -126,6 +127,7 @@ func Load() Config {
 		PublicCacheTTLSeconds:         envInt("PUBLIC_CACHE_TTL_SECONDS", 5),
 		JWTSecret:                     env("JWT_SECRET", "dev-only"),
 		FlutterwaveSecretKey:          env("FLUTTERWAVE_SECRET_KEY", ""),
+		EnableMockPayments:            envBool("ENABLE_MOCK_PAYMENTS", false),
 		FlutterwaveWebhookSecret:      env("FLUTTERWAVE_WEBHOOK_SECRET", ""),
 		FlutterwaveCustomerPaysFees:   envBool("FLUTTERWAVE_CUSTOMER_PAYS_FEES", false),
 		PrivyAppID:                    env("PRIVY_APP_ID", ""),

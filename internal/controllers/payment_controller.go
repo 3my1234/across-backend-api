@@ -85,8 +85,15 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	err = p.db.QueryRow(c.Context(), `
 		SELECT o.total_amount,o.platform_fee,o.currency_code,o.order_status::text,c.country_code,payout.flutterwave_subaccount_id
 		FROM orders o JOIN countries_config c ON c.id=o.country_id
-		JOIN provider_payout_accounts payout ON payout.provider_id=o.provider_id AND payout.status='active'
-		WHERE o.id=$1 AND o.user_id=$2 AND $3=ANY(c.active_payment_gateways)
+		JOIN users u ON u.id=o.user_id AND u.country_id=o.country_id
+		JOIN provider_payout_accounts payout ON payout.provider_id=o.provider_id
+		  AND payout.payment_provider='flutterwave' AND payout.status='active'
+		WHERE o.id=$1 AND o.user_id=$2 AND c.is_active=true
+		  AND c.currency_code=o.currency_code AND $3=ANY(c.active_payment_gateways)
+		  AND o.fulfillment_contact_snapshot->>'address'=COALESCE(u.address,'')
+		  AND o.fulfillment_contact_snapshot->>'city'=COALESCE(u.city,'')
+		  AND o.fulfillment_contact_snapshot->>'state'=COALESCE(u.state,'')
+		  AND o.fulfillment_contact_snapshot->>'postal_code'=COALESCE(u.postal_code,'')
 	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &platformFee, &orderCurrency, &orderStatus, &countryCode, &sellerSubaccountID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
@@ -185,6 +192,7 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 			COALESCE(policy.payment_methods,ARRAY['card']::text[]),payout.flutterwave_subaccount_id
 		FROM orders o
 		JOIN countries_config c ON c.id=o.country_id
+		JOIN users u ON u.id=o.user_id AND u.country_id=o.country_id
 		JOIN provider_payout_accounts payout
 		  ON payout.provider_id=o.provider_id
 		 AND payout.payment_provider='flutterwave'
@@ -197,6 +205,10 @@ func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
 		WHERE o.id=$1 AND o.user_id=$2
 		  AND c.is_active=true AND c.currency_code=o.currency_code
 		  AND $3=ANY(c.active_payment_gateways)
+		  AND o.fulfillment_contact_snapshot->>'address'=COALESCE(u.address,'')
+		  AND o.fulfillment_contact_snapshot->>'city'=COALESCE(u.city,'')
+		  AND o.fulfillment_contact_snapshot->>'state'=COALESCE(u.state,'')
+		  AND o.fulfillment_contact_snapshot->>'postal_code'=COALESCE(u.postal_code,'')
 	`, req.OrderID, userID, p.provider.Name()).Scan(&orderAmount, &platformFee, &orderCurrency, &orderStatus, &countryCode, &paymentMethods, &sellerSubaccountID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payable order not found")
@@ -278,12 +290,14 @@ func buildFlutterwaveCustomer(email, fullName, phone string) map[string]any {
 }
 
 func (p *PaymentController) mockPaymentsEnabled() bool {
-	// Mock payments only when we have NO live key configured
-	// Live keys start with "FLWSECK-" followed by the actual hash, not "FLWSECK_TEST_xxx"
-	hasLiveKey := p.cfg.FlutterwaveSecretKey != "" &&
-		!strings.HasPrefix(p.cfg.FlutterwaveSecretKey, "FLWSECK_TEST") &&
-		p.cfg.FlutterwaveSecretKey != "your-key"
-	return !hasLiveKey
+	// A missing or test key must never turn a real checkout into a mock charge.
+	// Local mock charges require an explicit opt-in and a non-production app.
+	appEnv := strings.ToLower(strings.TrimSpace(p.cfg.AppEnv))
+	if !p.cfg.EnableMockPayments || (appEnv != "development" && appEnv != "test") {
+		return false
+	}
+	key := strings.TrimSpace(p.cfg.FlutterwaveSecretKey)
+	return key == "" || key == "your-key" || strings.HasPrefix(key, "FLWSECK_TEST")
 }
 
 type flutterwaveWebhook struct {
