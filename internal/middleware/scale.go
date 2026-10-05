@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -70,12 +71,17 @@ func SharedPublicCache(client *redis.Client, ttl time.Duration) fiber.Handler {
 			c.Get(fiber.HeaderAuthorization) != "" || !publicCacheablePath(c.Path()) {
 			return c.Next()
 		}
-		bypass := strings.Contains(strings.ToLower(c.Get(fiber.HeaderCacheControl)), "no-cache") ||
-			c.Query("refresh") != "" || c.Query("_") != ""
-		keyInput := c.OriginalURL() + "|" + c.Get(fiber.HeaderAcceptEncoding) + "|" + c.Get("CF-IPCountry") + "|" + c.Get("X-Client-Country-Code")
+		revision, _ := c.Locals("catalog_revision").(string)
+		if publicCacheBypass(c) && revision == "" {
+			return c.Next()
+		}
+		// The primary-database revision already revalidated this response. Share
+		// its current body across refreshing buyers instead of running one full
+		// catalogue query per phone. Refresh nonces only bypass device/edge caches.
+		keyInput := canonicalPublicURL(c.OriginalURL()) + "|" + c.Get(fiber.HeaderAcceptEncoding) + "|" + c.Get("CF-IPCountry") + "|" + c.Get("X-Client-Country-Code") + "|" + revision
 		digest := sha256.Sum256([]byte(keyInput))
 		key := "cache:public:" + hex.EncodeToString(digest[:])
-		if !bypass {
+		{
 			if raw, err := client.Get(c.Context(), key).Bytes(); err == nil {
 				var entry cachedResponse
 				if json.Unmarshal(raw, &entry) == nil {
@@ -106,11 +112,28 @@ func SharedPublicCache(client *redis.Client, ttl time.Duration) fiber.Handler {
 			CacheControl: string(c.Response().Header.Peek(fiber.HeaderCacheControl)),
 		}
 		if raw, err := json.Marshal(entry); err == nil {
-			_ = client.Set(c.Context(), key, raw, ttl).Err()
+			cacheTTL := ttl
+			if cacheTTL > 5*time.Second {
+				cacheTTL = 5 * time.Second
+			}
+			_ = client.Set(c.Context(), key, raw, cacheTTL).Err()
 		}
 		c.Set("X-Cache", "MISS")
 		return nil
 	}
+}
+
+func canonicalPublicURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	query := parsed.Query()
+	for _, key := range []string{"fresh", "refresh", "_"} {
+		query.Del(key)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func publicCacheablePath(path string) bool {

@@ -52,6 +52,7 @@ func main() {
 	app.Use(requestid.New())
 	app.Use(recover.New())
 	app.Use(appmiddleware.DistributedRateLimit(store.Redis, "api", cfg.RateLimitPerMinute, time.Minute))
+	app.Use(appmiddleware.CatalogFreshness(store.PG))
 	app.Use(appmiddleware.SharedPublicCache(store.Redis, time.Duration(cfg.PublicCacheTTLSeconds)*time.Second))
 	app.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 	app.Use(logger.New(logger.Config{
@@ -59,7 +60,7 @@ func main() {
 	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.AllowedOrigins,
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code, Cache-Control",
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg)

@@ -24,7 +24,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	if readDB == nil {
 		readDB = db
 	}
-	catalog := controllers.NewCatalogController(readDB, cfg)
+	// Read operational prices from the database that commits seller edits.
+	// Revision-keyed Redis still shares catalogue responses across buyers.
+	catalog := controllers.NewCatalogController(db, cfg)
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
 	notifications := controllers.NewNotificationsController(db)
@@ -102,6 +104,14 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		})
 	})
 	v1.Get("/products", catalog.ListProducts)
+	v1.Get("/catalog/version", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "no-store")
+		var revision int64
+		if err := db.QueryRow(c.Context(), `SELECT revision FROM catalog_revision WHERE singleton=true`).Scan(&revision); err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "catalog version unavailable")
+		}
+		return c.JSON(fiber.Map{"change_token": middleware.CatalogChangeToken(revision, time.Now())})
+	})
 	v1.Get("/buyer-markets", orders.ListBuyerMarkets)
 	v1.Get("/products/flash-sale", catalog.ListFlashSales)
 	v1.Get("/public/brand/logo.png", func(c *fiber.Ctx) error {

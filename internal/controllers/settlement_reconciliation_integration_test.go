@@ -463,13 +463,15 @@ func TestSettlementPostgresSavedTokenPreservesSellerSplit(t *testing.T) {
 	ctx := context.Background()
 	orderID, userID, providerID, countryID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	_, err := db.Exec(ctx, `ALTER TABLE orders ADD COLUMN user_id uuid,ADD COLUMN country_id uuid,
-		ADD COLUMN total_amount numeric DEFAULT 20.2,ADD COLUMN platform_fee numeric DEFAULT 0.2,ADD COLUMN order_status text DEFAULT 'Pending';
-		ALTER TABLE provider_payout_accounts ADD COLUMN status text DEFAULT 'active';
+		ADD COLUMN total_amount numeric DEFAULT 20.2,ADD COLUMN platform_fee numeric DEFAULT 0.2,ADD COLUMN order_status text DEFAULT 'Pending',
+		ADD COLUMN fulfillment_contact_snapshot jsonb DEFAULT '{"address":"Test street","city":"Abuja","state":"FCT","postal_code":"900001"}';
+		ALTER TABLE provider_payout_accounts ADD COLUMN status text DEFAULT 'active',ADD COLUMN payment_provider text DEFAULT 'flutterwave';
 		ALTER TABLE payments ADD COLUMN user_id uuid,ADD COLUMN country_code text,ADD COLUMN amount numeric,
 		ADD COLUMN idempotency_key text,ADD COLUMN payment_method text,ADD COLUMN checkout_url text,
 		ADD COLUMN failure_code text,ADD COLUMN failure_message text;
-		CREATE TABLE users(id uuid,email text,flutterwave_token text,is_active boolean DEFAULT true);
-		CREATE TABLE countries_config(id uuid,country_code text,active_payment_gateways text[]);`)
+		CREATE TABLE users(id uuid,email text,flutterwave_token text,is_active boolean DEFAULT true,country_id uuid,
+		address text DEFAULT 'Test street',city text DEFAULT 'Abuja',state text DEFAULT 'FCT',postal_code text DEFAULT '900001');
+		CREATE TABLE countries_config(id uuid,country_code text,active_payment_gateways text[],currency_code text DEFAULT 'NGN',is_active boolean DEFAULT true);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +479,7 @@ func TestSettlementPostgresSavedTokenPreservesSellerSplit(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO users(id,email,flutterwave_token) VALUES($1::uuid,'buyer@example.test','test-card-token')`, []any{userID}},
+		{`INSERT INTO users(id,email,flutterwave_token,country_id) VALUES($1::uuid,'buyer@example.test','test-card-token',$2::uuid)`, []any{userID, countryID}},
 		{`INSERT INTO countries_config(id,country_code,active_payment_gateways) VALUES($1::uuid,'NG',ARRAY['flutterwave'])`, []any{countryID}},
 		{`INSERT INTO orders(id,user_id,provider_id,country_id,currency_code) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'NGN')`, []any{orderID, userID, providerID, countryID}},
 		{`INSERT INTO provider_payout_accounts(provider_id,flutterwave_subaccount_id) VALUES($1::uuid,'RS-test')`, []any{providerID}},
@@ -519,5 +521,24 @@ func TestSettlementPostgresSavedTokenPreservesSellerSplit(t *testing.T) {
 	var recipient string
 	if err = db.QueryRow(ctx, `SELECT seller_subaccount_id FROM payments`).Scan(&recipient); err != nil || recipient != "RS-test" {
 		t.Fatal("saved-token checkout snapshot missing")
+	}
+	for _, change := range []string{
+		`UPDATE users SET address='A different delivery address'`,
+		`UPDATE users SET address='Test street'; UPDATE countries_config SET is_active=false`,
+	} {
+		if _, err = db.Exec(ctx, change); err != nil {
+			t.Fatal(err)
+		}
+		called = false
+		req = httptest.NewRequest(http.MethodPost, "/charge", strings.NewReader(fmt.Sprintf(`{"order_id":"%s"}`, orderID)))
+		req.Header.Set("Content-Type", "application/json")
+		blocked, testErr := app.Test(req)
+		if testErr != nil {
+			t.Fatal(testErr)
+		}
+		blocked.Body.Close()
+		if blocked.StatusCode != 404 || called {
+			t.Fatalf("stale address/inactive market reached gateway: %d", blocked.StatusCode)
+		}
 	}
 }

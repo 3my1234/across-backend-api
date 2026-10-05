@@ -93,6 +93,13 @@ func TestDeliveryAreaMigrationBackfillAndSpecificity(t *testing.T) {
 	if _, err := db.Exec(ctx, string(feeMigration)); err != nil {
 		t.Fatal(err)
 	}
+	priceMigration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "056_product_primary_price_links.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, string(priceMigration)); err != nil {
+		t.Fatal(err)
+	}
 	var count int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM product_delivery_areas`).Scan(&count); err != nil {
 		t.Fatal(err)
