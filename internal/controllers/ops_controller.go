@@ -369,7 +369,7 @@ func (o *OpsController) ConfirmDelivered(c *fiber.Ctx) error {
 		batchIDCopy := req.BatchID
 		if err := insertNotification(c.Context(), tx, delivered.UserID, delivered.OrderID, &batchIDCopy,
 			"confirm_receipt", "Package delivered!",
-			fmt.Sprintf("Confirm that you received your package. After confirmation, leave a review to earn ₦%d off your next purchase.", reviewRewardXP),
+			fmt.Sprintf("Confirm that you received your package. After confirmation, leave a review to earn %d XP.", reviewRewardXP)+xpUsage,
 			map[string]any{"order_id": delivered.OrderID, "confirmation_required": true},
 			"confirm-receipt:"+delivered.OrderID); err != nil {
 			return err
@@ -458,7 +458,7 @@ func (o *OpsController) ClaimReviewReward(c *fiber.Ctx) error {
 	if !claimed {
 		return fiber.NewError(fiber.StatusNotFound, "submit a review before claiming this reward")
 	}
-	return c.JSON(fiber.Map{"claimed": true, "reward": fmt.Sprintf("₦%d off your next order", reviewRewardXP), "xp_credited": reviewRewardXP})
+	return c.JSON(fiber.Map{"claimed": true, "reward": fmt.Sprintf("%d XP for eligible service-fee discounts", reviewRewardXP), "xp_credited": reviewRewardXP})
 }
 
 func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID string) (bool, error) {
@@ -493,7 +493,7 @@ func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID s
 		return false, err
 	}
 	if err := insertNotification(ctx, tx, userID, orderID, nil,
-		"xp_earned", "Review reward claimed", fmt.Sprintf("₦%d has been added to your rewards balance.", reviewRewardXP),
+		"xp_earned", "Review reward claimed", fmt.Sprintf("%d XP has been added to your rewards balance.", reviewRewardXP)+xpUsage,
 		map[string]any{"xp": reviewRewardXP, "naira_value": reviewRewardXP, "reason": "review_reward"},
 		"review-reward-claimed:"+orderID); err != nil {
 		return false, err
@@ -542,8 +542,8 @@ func createReviewRewardTx(ctx context.Context, tx pgx.Tx, userID, orderID string
 		return err
 	}
 	return insertNotification(ctx, tx, userID, orderID, nil,
-		"review_request", fmt.Sprintf("Review and earn ₦%d!", reviewRewardXP),
-		fmt.Sprintf("Your order is complete. Leave a review to earn ₦%d off your next purchase.", reviewRewardXP),
+		"review_request", fmt.Sprintf("Review and earn %d XP!", reviewRewardXP),
+		fmt.Sprintf("Your order is complete. Leave a review to earn %d XP.", reviewRewardXP)+xpUsage,
 		map[string]any{"reward_amount": reviewRewardXP}, "review-request:"+orderID)
 }
 

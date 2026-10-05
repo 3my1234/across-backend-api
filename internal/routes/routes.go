@@ -192,6 +192,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/auth/session", authController.Session)
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
 	authed.Post("/checkout/quote", orders.QuoteCheckout)
+	authed.Post("/checkout/quotes/:order_id/release-xp", orders.ReleaseXPQuote)
 	authed.Get("/orders", orders.ListOrders)
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
 	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
