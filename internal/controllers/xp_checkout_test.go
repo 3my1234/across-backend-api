@@ -10,16 +10,28 @@ import (
 	"testing"
 
 	"across/backend/internal/config"
+	"errors"
+	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestXPCheckoutQuoteAndRepeatedVerifiedPayment(t *testing.T) {
+	for _, price := range []float64{65000, 110} {
+		t.Run(fmt.Sprintf("seller_%g", price), func(t *testing.T) { testXPCheckoutRecovery(t, price) })
+	}
+}
+
+func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
+	points := xpDiscount(650, roundMoney(sellerPrice*0.01), "NGN")
+	netFee := roundMoney(sellerPrice*0.01 - float64(points))
+	paidTotal := roundMoney(sellerPrice + netFee)
 	db := settlementTestDB(t)
 	ctx := context.Background()
 	// A minimal marketplace fixture exercises the real quote and payment controllers.
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,email text DEFAULT 'buyer@example.test',full_name text DEFAULT 'Buyer',phone text DEFAULT '+2348012345678',address text DEFAULT 'Street',city text DEFAULT 'Abuja',state text DEFAULT 'FCT',postal_code text DEFAULT '',country_id uuid,is_active boolean DEFAULT true);
- CREATE TABLE xp_transactions(user_id uuid,amount int,reason text,reference_id text,UNIQUE(user_id,reason,reference_id));CREATE TABLE notifications(type text,body text);
+ CREATE TABLE notifications(type text,body text);
  CREATE TABLE countries_config(id uuid,country_code text,currency_code text,is_active boolean DEFAULT true,active_payment_gateways text[] DEFAULT ARRAY['flutterwave']);
  CREATE TABLE provider_organizations(id uuid,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
@@ -31,9 +43,21 @@ func TestXPCheckoutQuoteAndRepeatedVerifiedPayment(t *testing.T) {
  CREATE TABLE order_fulfillments(order_id uuid,provider_id uuid,route text,owner text,status text,origin_snapshot jsonb,delivery_snapshot jsonb,current_location text,estimated_delivery_at timestamptz);
  CREATE TABLE order_items(order_id uuid,product_id uuid,origin_hub_id uuid,sku text,title text,variant jsonb,quantity int,unit_price numeric,product_snapshot jsonb,provider_id uuid,fulfillment_mode text);
  CREATE TABLE tracking_events(order_id uuid,stage text,notes text);
- ALTER TABLE payments ADD COLUMN user_id uuid,ADD COLUMN country_code text,ADD COLUMN amount numeric,ADD COLUMN idempotency_key text,ADD COLUMN payment_method text,ADD COLUMN checkout_url text,ADD COLUMN provider_status text,ADD COLUMN failure_code text,ADD COLUMN failure_message text;
+ ALTER TABLE payments ALTER COLUMN payment_status SET DEFAULT 'pending', ADD COLUMN user_id uuid,ADD COLUMN country_code text,ADD COLUMN amount numeric,ADD COLUMN idempotency_key text,ADD COLUMN payment_method text,ADD COLUMN checkout_url text,ADD COLUMN provider_status text,ADD COLUMN failure_code text,ADD COLUMN failure_message text;
  ALTER TABLE merchant_ledger ADD COLUMN gross_amount numeric,ADD COLUMN platform_fee numeric,ADD COLUMN available_at timestamptz;`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Use the actual original migration: a permissive fixture hid the production
+	// positive-only constraint and made the first redemption tests misleading.
+	legacy, err := os.ReadFile(filepath.Join("..", "..", "migrations", "009_xp_support.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `CREATE UNIQUE INDEX xp_transactions_event_unique ON xp_transactions(user_id,reason,reference_id) WHERE reference_id IS NOT NULL AND reference_id<>''`); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "059_xp_service_fee_redemption.sql"))
@@ -52,9 +76,9 @@ func TestXPCheckoutQuoteAndRepeatedVerifiedPayment(t *testing.T) {
 		{`INSERT INTO users(id,country_id) VALUES($1,$2)`, []any{user, country}},
 		{`INSERT INTO provider_organizations(id) VALUES($1)`, []any{provider}},
 		{`INSERT INTO provider_payout_accounts(provider_id,flutterwave_subaccount_id) VALUES($1,'RS-seller')`, []any{provider}},
-		{`INSERT INTO products(id,sku,provider_id) VALUES($1,'WATCH',$2)`, []any{product, provider}},
-		{`INSERT INTO product_delivery_areas(product_id,country_code,delivered_price) VALUES($1,'NG',65000)`, []any{product}},
-		{`INSERT INTO xp_transactions VALUES($1,650,'welcome','welcome')`, []any{user}},
+		{`INSERT INTO products(id,sku,provider_id,local_selling_price) VALUES($1,'WATCH',$2,$3)`, []any{product, provider, sellerPrice}},
+		{`INSERT INTO product_delivery_areas(product_id,country_code,delivered_price) VALUES($1,'NG',$2)`, []any{product, sellerPrice}},
+		{`INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1,650,'welcome','welcome')`, []any{user}},
 	} {
 		if _, err = db.Exec(ctx, step.sql, step.args...); err != nil {
 			t.Fatal(err)
@@ -84,43 +108,66 @@ func TestXPCheckoutQuoteAndRepeatedVerifiedPayment(t *testing.T) {
 		return result
 	}
 	first := quote(true)
-	if first["xp_discount"] != float64(650) || first["grand_total"] != float64(65000) || first["platform_fee"] != float64(0) {
+	if first["xp_discount"] != float64(points) || first["grand_total"] != paidTotal || first["platform_fee"] != netFee {
 		t.Fatal(first)
 	}
 	noXP := quote(false)
-	if noXP["grand_total"] != float64(65650) || noXP["xp_available"] != float64(650) {
+	if noXP["grand_total"] != roundMoney(sellerPrice*1.01) || noXP["xp_available"] != float64(650) {
 		t.Fatal(noXP)
 	}
-	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", first["order_id"].(string), user, "NG", 65000, "NGN", "expired", "card", "RS-seller"); err == nil {
+	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", first["order_id"].(string), user, "NG", paidTotal, "NGN", "expired", "card", "RS-seller"); err == nil {
 		t.Fatal("replaced quote accepted")
 	}
 	final := quote(true)
 	order := final["order_id"].(string)
 	ref := newPaymentReference(order)
-	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", order, user, "NG", 65000, "NGN", ref, "card", "RS-seller"); err != nil {
+	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", order, user, "NG", paidTotal, "NGN", ref, "card", "RS-seller"); err != nil {
 		t.Fatal(err)
 	}
-	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", order, user, "NG", 65000, "NGN", "second-charge", "card", "RS-seller"); err == nil {
+	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", order, user, "NG", paidTotal, "NGN", "second-charge", "card", "RS-seller"); err == nil {
 		t.Fatal("duplicate discounted payment attempt accepted")
 	}
 	payments := NewPaymentController(db, config.Config{})
-	if err = payments.settleOrderPayment(ctx, order, ref, "123", 64999, "NGN"); err == nil {
+	if err = payments.settleOrderPayment(ctx, order, ref, "123", paidTotal-1, "NGN"); err == nil {
 		t.Fatal("underpayment accepted")
 	}
-	if err = payments.settleOrderPayment(ctx, order, ref, "123", 65000, "USD"); err == nil {
+	if err = payments.settleOrderPayment(ctx, order, ref, "123", paidTotal, "USD"); err == nil {
 		t.Fatal("wrong currency accepted")
 	}
+	// Reproduce the incident before the repair: gateway success rolls back the
+	// order, payment and XP changes together when the original CHECK rejects debit.
+	err = payments.settleOrderPayment(ctx, order, ref, "123", paidTotal, "NGN")
+	var constraint *pgconn.PgError
+	if !errors.As(err, &constraint) || constraint.Code != "23514" || constraint.ConstraintName != "xp_transactions_amount_check" {
+		t.Fatalf("expected original constraint failure, got %v", err)
+	}
+	var orderStatus, reservation, paymentStatus string
+	if err = db.QueryRow(ctx, `SELECT o.order_status,r.status,p.payment_status FROM orders o JOIN xp_redemptions r ON r.order_id=o.id JOIN payments p ON p.order_id=o.id WHERE o.id=$1`, order).Scan(&orderStatus, &reservation, &paymentStatus); err != nil || orderStatus != "Pending" || reservation != "reserved" || paymentStatus == "succeeded" {
+		t.Fatalf("failed confirmation mutated state: %s/%s/%s %v", orderStatus, reservation, paymentStatus, err)
+	}
+	repair, err := os.ReadFile(filepath.Join("..", "..", "migrations", "061_xp_signed_ledger.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
-		if err = payments.settleOrderPayment(ctx, order, ref, "123", 65000, "NGN"); err != nil {
+		if _, err = db.Exec(ctx, string(repair)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO xp_transactions(user_id,amount,reason) VALUES($1,0,'invalid')`, user); err == nil {
+		t.Fatal("zero XP entry accepted")
+	}
+	for i := 0; i < 2; i++ {
+		if err = payments.settleOrderPayment(ctx, order, ref, "123", paidTotal, "NGN"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var seller, fee float64
-	if err = db.QueryRow(ctx, `SELECT expected_net_amount,platform_fee FROM merchant_ledger WHERE order_id=$1`, order).Scan(&seller, &fee); err != nil || seller != 65000 || fee != 0 {
+	if err = db.QueryRow(ctx, `SELECT expected_net_amount,platform_fee FROM merchant_ledger WHERE order_id=$1`, order).Scan(&seller, &fee); err != nil || seller != sellerPrice || fee != netFee {
 		t.Fatal(seller, fee, err)
 	}
 	var remaining, debits int
-	if err = db.QueryRow(ctx, `SELECT SUM(amount)::int,count(*) FILTER(WHERE amount<0) FROM xp_transactions WHERE user_id=$1`, user).Scan(&remaining, &debits); err != nil || remaining != 0 || debits != 1 {
+	if err = db.QueryRow(ctx, `SELECT SUM(amount)::int,count(*) FILTER(WHERE amount<0) FROM xp_transactions WHERE user_id=$1`, user).Scan(&remaining, &debits); err != nil || remaining != 650-points || debits != 1 {
 		t.Fatal(remaining, debits, err)
 	}
 }

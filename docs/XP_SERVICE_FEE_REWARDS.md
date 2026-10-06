@@ -10,6 +10,12 @@ whole point. XP is not cash, a transferable wallet or a seller-funded promotion.
 ## Deployment
 
 Deploy backend then run `cd /app && ./across-migrate` (059 and 060).
+Deployments must also apply **061_xp_signed_ledger.sql**. The original migration
+009 rejected negative XP entries; 059 omitted that constraint change. 061 repairs
+existing databases without changing balances, allowing nonzero signed entries.
+An affected successful gateway payment must be verified again, not charged again.
+The mobile Check payment status action or super-admin Transactions reconciliation
+both verify Flutterwave before committing the order and one XP debit.
 059 adds order discount snapshots, indexed reservations and corrects historical
 reward-notification explanations without changing earned points. Before 059,
 balance remains readable, redemption is disabled, and ordinary checkout still
@@ -94,3 +100,11 @@ Automated coverage includes the real quote/verified-payment flow, seller
 preservation, underpayment/currency rejection, repeated-payment idempotency,
 reservation races/expiry/ownership, support paging with equal timestamps,
 and frontend entry/foreground/background/stale-response/session isolation.
+
+The October 6 incident regression executes the actual 009 migration, reproduces
+the positive-only CHECK failure and asserts rollback, applies 061 twice, then
+recovers the same verified payment twice with exactly one debit. It covers both
+NGN 110 + 1.10 fee - 1 XP = NGN 110.10 and a fully waived NGN 650 fee.
+Mobile regressions ensure recording failures do not become misleading gateway
+pending messages, successful recovery clears the cart and saved pending order,
+and stale verification responses cannot confirm a different session.

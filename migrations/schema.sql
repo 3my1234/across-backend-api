@@ -318,7 +318,7 @@ CREATE INDEX idx_notifications_user_created ON notifications(user_id, created_at
 CREATE TABLE xp_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  amount INTEGER NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount <> 0),
   reason TEXT NOT NULL,
   reference_id TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()

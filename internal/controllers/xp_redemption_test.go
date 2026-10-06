@@ -72,7 +72,7 @@ func TestXPReservationsConcurrencyExpiryConsumptionAndOwnership(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY); ALTER TABLE orders ADD COLUMN user_id uuid,ADD COLUMN order_status text DEFAULT 'Pending';
- CREATE TABLE xp_transactions(user_id uuid,amount integer,reason text,reference_id text,UNIQUE(user_id,reason,reference_id));
+ CREATE TABLE xp_transactions(user_id uuid,amount integer NOT NULL CHECK(amount>0),reason text,reference_id text,UNIQUE(user_id,reason,reference_id));
  CREATE TABLE notifications(type text,body text); ALTER TABLE payments ADD COLUMN user_id uuid,ADD COLUMN country_code text,ADD COLUMN amount numeric,ADD COLUMN idempotency_key text,ADD COLUMN payment_method text;`)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +82,13 @@ func TestXPReservationsConcurrencyExpiryConsumptionAndOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(ctx, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	repair, err := os.ReadFile(filepath.Join("..", "..", "migrations", "061_xp_signed_ledger.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(repair)); err != nil {
 		t.Fatal(err)
 	}
 	user, other := uuid.NewString(), uuid.NewString()
