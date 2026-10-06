@@ -197,6 +197,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/orders/:order_id/tracking", orders.Tracking)
 	authed.Get("/orders/:order_id/payment-status", orders.PaymentStatus)
 	authed.Get("/payments/options", payments.PaymentOptions)
+	authed.Get("/payments/history", payments.BuyerPaymentHistory)
 	authed.Post("/orders/:order_id/confirm-receipt", ops.ConfirmReceipt)
 	authed.Post("/orders/:order_id/review-reward/claim", ops.ClaimReviewReward)
 	authed.Post("/payments/flutterwave/checkout", payments.FlutterwaveCheckout)
