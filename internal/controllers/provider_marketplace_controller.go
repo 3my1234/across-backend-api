@@ -616,8 +616,32 @@ func validateListing(req listingPayload) error {
 			return fmt.Errorf("listing images must use approved HTTPS storage")
 		}
 	}
-	if req.Price != nil && *req.Price < 0 {
-		return fmt.Errorf("price cannot be negative")
+	if req.Price != nil && (*req.Price < 0 || math.IsNaN(*req.Price) || math.IsInf(*req.Price, 0)) {
+		return fmt.Errorf("price must be a valid nonnegative amount")
+	}
+	if mode, present := req.Attributes["price_mode"]; present {
+		switch mode {
+		case "fixed":
+			if req.Price == nil {
+				return fmt.Errorf("enter the set price")
+			}
+		case "from":
+			if req.Price == nil || *req.Price <= 0 {
+				return fmt.Errorf("enter a starting price greater than zero")
+			}
+		case "quote":
+			if req.Price != nil {
+				return fmt.Errorf("leave the price empty when the job needs a quote")
+			}
+		default:
+			return fmt.Errorf("choose fixed, from, or quote pricing")
+		}
+	}
+	if notes, present := req.Attributes["price_notes"]; present {
+		text, valid := notes.(string)
+		if !valid || len([]rune(text)) > 500 {
+			return fmt.Errorf("price notes must be text of at most 500 characters")
+		}
 	}
 	if directBookingType(req.ListingType) && (req.Latitude == nil || req.Longitude == nil) {
 		return fmt.Errorf("capture the service location before saving this listing")
@@ -806,7 +830,7 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 		SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.description,l.category,
 			l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.media_urls,
 			l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,
-			l.review_count,l.review_rating_sum,
+			l.review_count,l.review_rating_sum,l.attributes,
 			6371 * 2 * asin(sqrt(power(sin(radians((l.latitude::float8-$1::float8)/2)),2)+cos(radians($1::float8))*cos(radians(l.latitude::float8))*power(sin(radians((l.longitude::float8-$2::float8)/2)),2))) AS distance_km
 		FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id
 		WHERE l.status='approved' AND p.verification_status='approved' AND p.is_active=true
@@ -831,7 +855,8 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 		var mobile, available bool
 		var reviewCount, reviewRatingSum int
 		var distance float64
-		if err := rows.Scan(&id, &pid, &business, &lt, &title, &description, &category, &address, &city, &state, &country, &price, &currency, &unit, &media, &lat, &lon, &serviceRadius, &mobile, &available, &reviewCount, &reviewRatingSum, &distance); err != nil {
+		var attrs []byte
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &description, &category, &address, &city, &state, &country, &price, &currency, &unit, &media, &lat, &lon, &serviceRadius, &mobile, &available, &reviewCount, &reviewRatingSum, &attrs, &distance); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
@@ -841,7 +866,9 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 		if reviewCount > 0 {
 			rating = math.Round((float64(reviewRatingSum)/float64(reviewCount))*10) / 10
 		}
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "description": description, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "media_urls": media, "latitude": lat, "longitude": lon, "service_radius_km": serviceRadius, "is_mobile_service": mobile, "is_available_now": available, "distance_km": math.Round(distance*10) / 10, "direct_booking": directBookingType(lt), "review_count": reviewCount, "average_rating": rating})
+		var attributes map[string]any
+		_ = json.Unmarshal(attrs, &attributes)
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "listing_type": lt, "title": title, "description": description, "category": category, "address_line": address, "city": city, "state": state, "country_code": country, "price": price, "currency_code": currency, "pricing_unit": unit, "media_urls": media, "attributes": attributes, "latitude": lat, "longitude": lon, "service_radius_km": serviceRadius, "is_mobile_service": mobile, "is_available_now": available, "distance_km": math.Round(distance*10) / 10, "direct_booking": directBookingType(lt), "review_count": reviewCount, "average_rating": rating})
 	}
 	return c.JSON(fiber.Map{"items": items, "has_more": len(items) == limit})
 }
