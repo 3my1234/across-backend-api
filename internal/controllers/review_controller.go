@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"log"
 	"strings"
@@ -98,6 +99,8 @@ func (rc *ReviewController) ListProductReviews(c *fiber.Ctx) error {
 }
 
 func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), 8*time.Second)
+	defer cancel()
 	userID := c.Locals("user_id").(string)
 	productID := c.Params("product_id")
 	var req struct {
@@ -117,14 +120,14 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 	}
 
 	var productActive bool
-	if err := rc.db.QueryRow(c.Context(), `
+	if err := rc.db.QueryRow(ctx, `
 		SELECT is_active FROM products WHERE id = $1
 	`, productID).Scan(&productActive); err != nil || !productActive {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
 	}
 
 	var orderID string
-	err := rc.db.QueryRow(c.Context(), `
+	err := rc.db.QueryRow(ctx, `
 		SELECT o.id
 		FROM orders o
 		JOIN order_items oi ON oi.order_id = o.id
@@ -139,7 +142,8 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 	}
 
 	var reviewID string
-	err = rc.db.QueryRow(c.Context(), `
+	var savedAt time.Time
+	err = rc.db.QueryRow(ctx, `
 		SELECT id FROM reviews
 		WHERE product_id = $1 AND user_id = $2
 		ORDER BY created_at DESC
@@ -150,32 +154,38 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 	}
 	created := errors.Is(err, pgx.ErrNoRows)
 	if created {
-		err = rc.db.QueryRow(c.Context(), `
+		err = rc.db.QueryRow(ctx, `
 			INSERT INTO reviews(product_id, user_id, order_id, rating, review_text, media_urls)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id
-		`, productID, userID, orderID, req.Rating, req.ReviewText, req.MediaURLs).Scan(&reviewID)
+			RETURNING id, created_at
+		`, productID, userID, orderID, req.Rating, req.ReviewText, req.MediaURLs).Scan(&reviewID, &savedAt)
 		if err != nil {
 			return fiber.NewError(fiber.StatusConflict, "review could not be created")
 		}
 	} else {
-		_, err = rc.db.Exec(c.Context(), `
+		err = rc.db.QueryRow(ctx, `
 			UPDATE reviews
 			SET rating = $3, review_text = $4, media_urls = $5, order_id = COALESCE(order_id, $6)
 			WHERE id = $1 AND user_id = $2
-		`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, orderID)
+			RETURNING created_at
+		`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, orderID).Scan(&savedAt)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "review could not be updated")
 		}
 	}
 
-	rewardClaimed, rewardErr := creditReviewReward(c.Context(), rc.db, userID, orderID)
+	rewardCtx, rewardCancel := context.WithTimeout(c.UserContext(), 2*time.Second)
+	rewardClaimed, rewardErr := creditReviewReward(rewardCtx, rc.db, userID, orderID)
+	rewardCancel()
 	if rewardErr != nil {
 		// The review is already durable. A secondary reward failure must never
 		// make the client retry or pretend the review was not saved.
 		log.Printf("review reward failed review_id=%s user_id=%s: %v", reviewID, userID, rewardErr)
 	}
-	return rc.sendReviewMutation(c, reviewID, userID, created, rewardClaimed, rewardErr != nil)
+	return rc.sendReviewMutation(c, reviewID, userID, created, rewardClaimed, rewardErr != nil, fiber.Map{
+		"id": reviewID, "rating": req.Rating, "review_text": req.ReviewText,
+		"media_urls": req.MediaURLs, "created_at": savedAt, "is_mine": true,
+	})
 }
 
 func (rc *ReviewController) MyProductReview(c *fiber.Ctx) error {
@@ -208,14 +218,16 @@ func (rc *ReviewController) MyProductReview(c *fiber.Ctx) error {
 	})
 }
 
-func (rc *ReviewController) sendReviewMutation(c *fiber.Ctx, reviewID, userID string, created, rewardClaimed, rewardPending bool) error {
+func (rc *ReviewController) sendReviewMutation(c *fiber.Ctx, reviewID, userID string, created, rewardClaimed, rewardPending bool, savedReview fiber.Map) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), time.Second)
+	defer cancel()
 	var reviewText, author string
 	var mediaURLs []string
 	var rating int
 	var createdAt time.Time
 	var reviewCount int64
 	var averageRating float64
-	if err := rc.db.QueryRow(c.Context(), `
+	if err := rc.db.QueryRow(ctx, `
 		SELECT r.rating, r.review_text, r.media_urls, r.created_at,
 			COALESCE(NULLIF(u.full_name, ''), 'Verified buyer'), p.review_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END
@@ -224,7 +236,14 @@ func (rc *ReviewController) sendReviewMutation(c *fiber.Ctx, reviewID, userID st
 		JOIN products p ON p.id = r.product_id
 		WHERE r.id = $1 AND r.user_id = $2
 	`, reviewID, userID).Scan(&rating, &reviewText, &mediaURLs, &createdAt, &author, &reviewCount, &averageRating); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "review saved but response could not be loaded")
+		// The mutation already committed. Optional presentation data must not
+		// turn a durable save into a failure or encourage another write.
+		status := fiber.StatusOK
+		if created {
+			status = fiber.StatusCreated
+		}
+		return c.Status(status).JSON(fiber.Map{"created": created, "review": savedReview,
+			"review_reward_claimed": rewardClaimed, "reward_pending": rewardPending})
 	}
 	status := fiber.StatusOK
 	if created {

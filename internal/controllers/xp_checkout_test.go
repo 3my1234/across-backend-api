@@ -170,4 +170,70 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	if err = db.QueryRow(ctx, `SELECT SUM(amount)::int,count(*) FILTER(WHERE amount<0) FROM xp_transactions WHERE user_id=$1`, user).Scan(&remaining, &debits); err != nil || remaining != 650-points || debits != 1 {
 		t.Fatal(remaining, debits, err)
 	}
+	// Cart grouping must match the actual server quote contract: two products
+	// for one seller/route combine; another seller or an import needs its own order.
+	secondProduct, otherProduct, importProduct, otherProvider := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, step := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO provider_organizations(id) VALUES($1)`, []any{otherProvider}},
+		{`INSERT INTO provider_payout_accounts(provider_id,flutterwave_subaccount_id) VALUES($1,'RS-other')`, []any{otherProvider}},
+		{`INSERT INTO products(id,sku,provider_id,local_selling_price) VALUES($1,'SECOND',$2,30),($3,'OTHER',$4,30)`, []any{secondProduct, provider, otherProduct, otherProvider}},
+		{`INSERT INTO products(id,sku,provider_id,local_selling_price,inventory_country_code,stock_state) VALUES($1,'IMPORT',$2,30,'CN','import_on_demand')`, []any{importProduct, provider}},
+		{`INSERT INTO product_delivery_areas(product_id,country_code,delivered_price,delivery_fee) VALUES($1,'NG',35,5),($2,'NG',35,5),($3,'NG',35,5)`, []any{secondProduct, otherProduct, importProduct}},
+	} {
+		if _, err = db.Exec(ctx, step.sql, step.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		id, sku string
+		want    int
+	}{{secondProduct, "SECOND", 200}, {otherProduct, "OTHER", 422}, {importProduct, "IMPORT", 422}} {
+		body, _ := json.Marshal(map[string]any{"country_code": "NG", "items": []map[string]any{{"product_id": product, "sku": "WATCH", "quantity": 1}, {"product_id": tc.id, "sku": tc.sku, "quantity": 2}}})
+		request := httptest.NewRequest("POST", "/quote", strings.NewReader(string(body)))
+		request.Header.Set("Content-Type", "application/json")
+		response, e := app.Test(request)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var payload map[string]any
+		if response.StatusCode == 200 {
+			e = json.NewDecoder(response.Body).Decode(&payload)
+		}
+		response.Body.Close()
+		if e != nil || response.StatusCode != tc.want {
+			t.Fatalf("group %s: %d %v %v", tc.sku, response.StatusCode, payload, e)
+		}
+		if tc.want == 200 {
+			if payload["items_total"] != sellerPrice+60 || payload["shipping_fee"] != float64(10) || payload["grand_total"] != roundMoney((sellerPrice+70)*1.01) {
+				t.Fatal("group total does not include both products and delivery", payload)
+			}
+			var sellerID, route string
+			if e = db.QueryRow(ctx, `SELECT provider_id::text,fulfillment_mode FROM orders WHERE id=$1`, payload["order_id"]).Scan(&sellerID, &route); e != nil || sellerID != provider || route != "merchant_local" {
+				t.Fatal("wrong group seller/route", sellerID, route, e)
+			}
+		}
+	}
+	// Seller names are included in real catalogue detail responses so the buyer
+	// can identify groups without being shown opaque provider UUIDs.
+	if _, err = db.Exec(ctx, `ALTER TABLE provider_organizations ADD business_name text DEFAULT 'Timo Ventures';
+	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0;`); err != nil {
+		t.Fatal(err)
+	}
+	catalog := NewCatalogController(db, config.Config{})
+	app.Get("/products/:product_id", catalog.GetProduct)
+	response, e := app.Test(httptest.NewRequest("GET", "/products/"+product+"?country_code=NG", nil))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer response.Body.Close()
+	var payload map[string]any
+	if e = json.NewDecoder(response.Body).Decode(&payload); e != nil || response.StatusCode != 200 {
+		t.Fatal("catalogue detail", response.StatusCode, e, payload)
+	}
+	if payload["product"].(map[string]any)["factory_details"].(map[string]any)["provider_name"] != "Timo Ventures" {
+		t.Fatal("catalogue missing seller name")
+	}
 }
