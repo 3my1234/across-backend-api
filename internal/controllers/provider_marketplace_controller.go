@@ -1054,11 +1054,15 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	conversationID, err := linkRequestConversation(c.Context(), tx, requestID)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
 	if err = tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
-	m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "request_created", "New buyer request", buyerName+" sent a "+wanted+" for "+listingTitle+".", "provider-request:"+requestID, map[string]any{"request_id": requestID, "request_type": wanted, "listing_title": listingTitle})
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": requestID, "status": "pending"})
+	m.queueProviderActivity(c.Context(), providerID, c.Params("listing_id"), "request_created", "New buyer request", buyerName+" sent a "+wanted+" for "+listingTitle+".", "provider-request:"+requestID, map[string]any{"request_id": requestID, "conversation_id": conversationID, "request_type": wanted, "listing_title": listingTitle})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": requestID, "status": "pending", "conversation_id": conversationID})
 }
 
 func (m *ProviderMarketplaceController) ListAvailability(c *fiber.Ctx) error {

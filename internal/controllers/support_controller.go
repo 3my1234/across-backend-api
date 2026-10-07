@@ -197,26 +197,47 @@ func (s *SupportController) AdminGetTicketMessages(c *fiber.Ctx) error {
 	return s.messagePage(c, ticketID)
 }
 
-// AdminListTickets - Admin lists all open tickets
+// AdminListTickets includes answered and closed tickets, with bounded history pages.
 func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
+	page, err := parseAdminPage(c)
+	if err != nil {
+		return err
+	}
+	if page.CursorID != "" {
+		if _, err := uuid.Parse(page.CursorID); err != nil {
+			return fiber.NewError(400, "invalid cursor")
+		}
+	}
+	filter := c.Query("status", "all")
+	if filter != "all" && filter != "open" && filter != "responded" && filter != "closed" {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid ticket status")
+	}
 	rows, err := s.db.Query(c.Context(), `
 		SELECT st.id, st.subject, st.message, st.status, u.email, st.created_at, st.updated_at
 		FROM support_tickets st
 		JOIN users u ON u.id = st.user_id
-		ORDER BY st.status = 'open' DESC, st.created_at DESC
-		LIMIT 50
-	`)
+		WHERE ($1 = 'all' OR st.status = $1)
+		AND ($2::timestamptz IS NULL OR (st.updated_at, st.id) < ($2::timestamptz, NULLIF($3, '')::uuid))
+		ORDER BY st.updated_at DESC, st.id DESC
+		LIMIT $4
+	`, filter, page.CursorTime, page.CursorID, page.Limit+1)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "query failed")
 	}
 	defer rows.Close()
 
 	tickets := make([]fiber.Map, 0)
+	nextCursor := ""
+	hasMore := false
 	for rows.Next() {
 		var id, subject, message, status, email string
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(&id, &subject, &message, &status, &email, &createdAt, &updatedAt); err != nil {
-			continue
+			return fiber.NewError(fiber.StatusInternalServerError, "ticket history could not be read")
+		}
+		if len(tickets) == page.Limit {
+			hasMore = true
+			break
 		}
 		tickets = append(tickets, fiber.Map{
 			"id":         id,
@@ -227,9 +248,17 @@ func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 			"created_at": createdAt,
 			"updated_at": updatedAt,
 		})
+		nextCursor = encodeAdminCursor(updatedAt, id)
+	}
+	if rows.Err() != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "ticket history could not be read")
+	}
+	// The extra row determines whether the last returned row has a successor.
+	if !hasMore {
+		nextCursor = ""
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"tickets": tickets})
+	return c.JSON(fiber.Map{"tickets": tickets, "next_cursor": nextCursor, "has_more": hasMore})
 }
 
 // AdminReply - Admin replies to a ticket
