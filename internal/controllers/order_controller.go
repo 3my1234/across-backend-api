@@ -157,7 +157,7 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 				ORDER BY (a.city_key<>'') DESC, (a.state_key<>'') DESC LIMIT 1
 			) area ON TRUE
 			WHERE p.id = $1 AND p.sku = $2 AND p.is_active = true AND p.moderation_status='approved' AND p.inventory_count >= $3
-			  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
+			  AND p.payment_mode IN ('flutterwave','both') AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 			  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 			  AND EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active')
 			  AND area.currency_code=$8

@@ -12,6 +12,7 @@ import (
 )
 
 type merchantProductPayload struct {
+	PaymentMode          string                `json:"payment_mode"`
 	Title                string                `json:"title"`
 	Description          string                `json:"description"`
 	CategoryPath         []string              `json:"category_path"`
@@ -43,6 +44,7 @@ func normalizeMerchantProduct(req *merchantProductPayload) {
 	// Marketplace sellers always retain fulfilment responsibility. Ignore the
 	// retired Atlantic last-mile flag from older cached portal builds.
 	req.AtlanticLastMile = false
+	req.PaymentMode = strings.ToLower(strings.TrimSpace(req.PaymentMode))
 	req.FulfillmentMode = strings.ToLower(strings.TrimSpace(req.FulfillmentMode))
 	if req.FulfillmentMode == "" {
 		req.FulfillmentMode = "merchant_local"
@@ -102,6 +104,9 @@ func normalizeMerchantProduct(req *merchantProductPayload) {
 }
 
 func validateMerchantProduct(req merchantProductPayload) error {
+	if req.PaymentMode != "" && req.PaymentMode != "flutterwave" && req.PaymentMode != "contact" && req.PaymentMode != "both" {
+		return fmt.Errorf("choose Flutterwave checkout, contact me, or both")
+	}
 	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Description) == "" {
 		return fmt.Errorf("title and description are required")
 	}
@@ -215,7 +220,7 @@ func (m *ProviderMarketplaceController) CreateMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrInternalServerError
 	}
 	defer tx.Rollback(c.Context())
-	err = tx.QueryRow(c.Context(), `INSERT INTO products(id,provider_id,fulfillment_mode,moderation_status,sku,title,description,category_path,variants,image_urls,cost_price_rmb,local_selling_price,compare_at_price,exchange_rate_snapshot,inventory_count,factory_details,is_active,is_flash_sale,flash_sale_price,inventory_country_code,inventory_city,inventory_location,stock_state,handling_time_hours,delivery_min_days,delivery_max_days,delivery_methods,return_policy,atlantic_last_mile,inventory_latitude,inventory_longitude,local_currency_code) VALUES($1,$2::uuid,$3,'draft',$4,$5,$6,$7,'[]'::jsonb,$8,0,$9,$10,1,$11,$12::jsonb,false,$13,CASE WHEN $13 THEN $14::numeric ELSE NULL END,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING id`, id, providerID, req.FulfillmentMode, sku, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, factory, req.IsFlashSale, req.FlashSalePrice, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode).Scan(&id)
+	err = tx.QueryRow(c.Context(), `INSERT INTO products(id,provider_id,fulfillment_mode,moderation_status,sku,title,description,category_path,variants,image_urls,cost_price_rmb,local_selling_price,compare_at_price,exchange_rate_snapshot,inventory_count,factory_details,is_active,is_flash_sale,flash_sale_price,inventory_country_code,inventory_city,inventory_location,stock_state,handling_time_hours,delivery_min_days,delivery_max_days,delivery_methods,return_policy,atlantic_last_mile,inventory_latitude,inventory_longitude,local_currency_code,payment_mode) VALUES($1,$2::uuid,$3,'draft',$4,$5,$6,$7,'[]'::jsonb,$8,0,$9,$10,1,$11,$12::jsonb,false,$13,CASE WHEN $13 THEN $14::numeric ELSE NULL END,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,COALESCE(NULLIF($28,''),'flutterwave')) RETURNING id`, id, providerID, req.FulfillmentMode, sku, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, factory, req.IsFlashSale, req.FlashSalePrice, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode, req.PaymentMode).Scan(&id)
 	if err != nil {
 		return fiber.NewError(fiber.StatusConflict, "could not create product; check that the SKU is unique")
 	}
@@ -271,7 +276,7 @@ func (m *ProviderMarketplaceController) UpdateMerchantProduct(c *fiber.Ctx) erro
 	if err = validateEnabledDeliveryMarkets(c.Context(), tx, req.DeliveryAreas); err != nil {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 	}
-	tag, err := tx.Exec(c.Context(), `UPDATE products SET title=$3,description=$4,category_path=$5,image_urls=$6,local_selling_price=$7,compare_at_price=$8,inventory_count=$9,is_flash_sale=$10,flash_sale_price=CASE WHEN $10 THEN $11::numeric ELSE NULL END,fulfillment_mode=$12,inventory_country_code=$13,inventory_city=$14,inventory_location=$15,stock_state=$16,handling_time_hours=$17,delivery_min_days=$18,delivery_max_days=$19,delivery_methods=$20,return_policy=$21,atlantic_last_mile=$22,inventory_latitude=$23,inventory_longitude=$24,local_currency_code=$25,moderation_status=CASE WHEN moderation_status IN ('pending','approved') THEN 'pending' ELSE moderation_status END,moderation_notes='',is_active=false,catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status<>'archived'`, c.Params("product_id"), providerID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, req.IsFlashSale, req.FlashSalePrice, req.FulfillmentMode, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode)
+	tag, err := tx.Exec(c.Context(), `UPDATE products SET title=$3,description=$4,category_path=$5,image_urls=$6,local_selling_price=$7,compare_at_price=$8,inventory_count=$9,is_flash_sale=$10,flash_sale_price=CASE WHEN $10 THEN $11::numeric ELSE NULL END,fulfillment_mode=$12,inventory_country_code=$13,inventory_city=$14,inventory_location=$15,stock_state=$16,handling_time_hours=$17,delivery_min_days=$18,delivery_max_days=$19,delivery_methods=$20,return_policy=$21,atlantic_last_mile=$22,inventory_latitude=$23,inventory_longitude=$24,local_currency_code=$25,payment_mode=COALESCE(NULLIF($26,''),payment_mode),moderation_status=CASE WHEN moderation_status IN ('pending','approved') THEN 'pending' ELSE moderation_status END,moderation_notes='',is_active=false,catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status<>'archived'`, c.Params("product_id"), providerID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, req.IsFlashSale, req.FlashSalePrice, req.FulfillmentMode, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode, req.PaymentMode)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -294,9 +299,9 @@ func (m *ProviderMarketplaceController) SubmitMerchantProduct(c *fiber.Ctx) erro
 		return fiber.ErrForbidden
 	}
 	var eligible bool
-	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())) AND EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active') FROM provider_organizations p WHERE p.id=$1::uuid`, providerID, !m.subscriptionsRequired()).Scan(&eligible)
+	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())) AND (EXISTS(SELECT 1 FROM products pr WHERE pr.id=$3::uuid AND pr.provider_id=p.id AND pr.payment_mode='contact') OR EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active')) FROM provider_organizations p WHERE p.id=$1::uuid`, providerID, !m.subscriptionsRequired(), c.Params("product_id")).Scan(&eligible)
 	if err != nil || !eligible {
-		return fiber.NewError(fiber.StatusPaymentRequired, "verified provider profile, active subscription, and Flutterwave settlement account are required")
+		return fiber.NewError(fiber.StatusPaymentRequired, "Your business must be verified and your subscription active. Products with Flutterwave checkout also need an active settlement account.")
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE products SET moderation_status='pending',is_active=false,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status IN ('draft','rejected') AND (fulfillment_mode<>'merchant_local' OR (inventory_latitude IS NOT NULL AND inventory_longitude IS NOT NULL))`, c.Params("product_id"), providerID)
 	if err != nil {
@@ -353,14 +358,14 @@ func (m *ProviderMarketplaceController) listMerchantProducts(c *fiber.Ctx, admin
 		cursorID = page.CursorID
 	}
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code,'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false)) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,p.payment_mode,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code,'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false)) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
 	defer rows.Close()
 	items := make([]fiber.Map, 0, page.Limit+1)
 	for rows.Next() {
-		var id, pid, business, sku, title, desc, moderation, notes, mode, country, city, location, stockState, returnPolicy, currency string
+		var id, pid, business, sku, title, desc, moderation, notes, mode, country, city, location, stockState, returnPolicy, currency, paymentMode string
 		var cats, images, deliveryMethods []string
 		var price float64
 		var compare, flash *float64
@@ -369,14 +374,14 @@ func (m *ProviderMarketplaceController) listMerchantProducts(c *fiber.Ctx, admin
 		var isFlash, active, atlanticLastMile bool
 		var created time.Time
 		var areasRaw []byte
-		if rows.Scan(&id, &pid, &business, &sku, &title, &desc, &cats, &images, &currency, &price, &compare, &stock, &isFlash, &flash, &moderation, &notes, &active, &mode, &country, &city, &location, &stockState, &handlingHours, &minDays, &maxDays, &deliveryMethods, &returnPolicy, &atlanticLastMile, &latitude, &longitude, &created, &areasRaw) != nil {
+		if rows.Scan(&id, &pid, &business, &sku, &title, &desc, &cats, &images, &currency, &price, &compare, &stock, &isFlash, &flash, &moderation, &notes, &active, &mode, &country, &city, &location, &stockState, &handlingHours, &minDays, &maxDays, &deliveryMethods, &returnPolicy, &atlanticLastMile, &latitude, &longitude, &created, &paymentMode, &areasRaw) != nil {
 			return fiber.ErrInternalServerError
 		}
 		var areas []productDeliveryArea
 		if err := json.Unmarshal(areasRaw, &areas); err != nil {
 			return fiber.ErrInternalServerError
 		}
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "sku": sku, "title": title, "description": desc, "category_path": cats, "image_urls": images, "currency_code": currency, "local_selling_price": price, "compare_at_price": compare, "inventory_count": stock, "is_flash_sale": isFlash, "flash_sale_price": flash, "moderation_status": moderation, "moderation_notes": notes, "is_active": active, "fulfillment_mode": mode, "inventory_country_code": country, "inventory_city": city, "inventory_location": location, "inventory_latitude": latitude, "inventory_longitude": longitude, "stock_state": stockState, "handling_time_hours": handlingHours, "delivery_min_days": minDays, "delivery_max_days": maxDays, "delivery_methods": deliveryMethods, "delivery_areas": areas, "return_policy": returnPolicy, "atlantic_last_mile": atlanticLastMile, "created_at": created})
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "sku": sku, "title": title, "description": desc, "category_path": cats, "image_urls": images, "currency_code": currency, "local_selling_price": price, "compare_at_price": compare, "inventory_count": stock, "is_flash_sale": isFlash, "flash_sale_price": flash, "moderation_status": moderation, "moderation_notes": notes, "is_active": active, "fulfillment_mode": mode, "inventory_country_code": country, "inventory_city": city, "inventory_location": location, "inventory_latitude": latitude, "inventory_longitude": longitude, "stock_state": stockState, "handling_time_hours": handlingHours, "delivery_min_days": minDays, "delivery_max_days": maxDays, "delivery_methods": deliveryMethods, "delivery_areas": areas, "payment_mode": paymentMode, "return_policy": returnPolicy, "atlantic_last_mile": atlanticLastMile, "created_at": created})
 	}
 	next := ""
 	if len(items) > page.Limit {

@@ -207,7 +207,7 @@ func normalizeS3ViewKey(raw string) (string, error) {
 	key := strings.TrimSpace(raw)
 	key = strings.TrimLeft(key, "/")
 	key = strings.ReplaceAll(key, ",", "/")
-	if key == "" || strings.Contains(key, "..") {
+	if key == "" || strings.Contains(key, "..") || strings.HasPrefix(key, "user-uploads/private-chat/") {
 		return "", fiber.NewError(fiber.StatusBadRequest, "invalid media key")
 	}
 	return key, nil
