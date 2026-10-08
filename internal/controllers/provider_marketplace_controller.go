@@ -534,9 +534,9 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 	var id, business, providerType, providerTypeOther, slug, description, email, phone, website, logo, address, city, state, country, verification, notes string
 	var active bool
 	var created time.Time
-	var subStatus string
+	var subStatus, subBillingMode string
 	var periodEnd *time.Time
-	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &providerType, &providerTypeOther, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd)
+	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end,COALESCE(s.billing_mode,'recurring') FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end,COALESCE(to_jsonb(provider_subscriptions)->>'billing_mode','recurring') AS billing_mode FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &providerType, &providerTypeOther, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd, &subBillingMode)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusNotFound, "provider profile not found")
 	}
@@ -555,7 +555,7 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 		}
 	}
 	required := m.subscriptionsRequired()
-	return c.JSON(fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "current_period_end": periodEnd, "required": required, "launch_access_active": !required}, "payout_account": payout})
+	return c.JSON(fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "billing_mode": subBillingMode, "current_period_end": periodEnd, "required": required, "launch_access_active": !required}, "payout_account": payout})
 }
 
 type listingPayload struct {
@@ -1406,11 +1406,23 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		return fiber.NewError(fiber.StatusConflict, "this provider already has an active subscription")
 	}
 	var req struct {
-		PlanID      string `json:"plan_id"`
-		RedirectURL string `json:"redirect_url"`
+		PlanID        string `json:"plan_id"`
+		PaymentMethod string `json:"payment_method"`
+		RedirectURL   string `json:"redirect_url"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.ErrBadRequest
+	}
+	method := strings.ToLower(strings.TrimSpace(req.PaymentMethod))
+	if method == "" {
+		method = "card"
+	}
+	if method != "card" && method != "banktransfer" {
+		return fiber.NewError(422, "Choose card or bank transfer")
+	}
+	billingMode := "recurring"
+	if method == "banktransfer" {
+		billingMode = "one_time"
 	}
 	var planID, name string
 	var amount float64
@@ -1419,11 +1431,15 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "subscription plan not found")
 	}
-	if fwPlanID == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
-	}
-	if err := m.validateMonthlyPaymentPlan(c.Context(), *fwPlanID, amount); err != nil {
-		return err
+	if method == "card" {
+		if fwPlanID == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
+		}
+		if err := m.validateMonthlyPaymentPlan(c.Context(), *fwPlanID, amount); err != nil {
+			return err
+		}
+	} else {
+		fwPlanID = nil
 	}
 	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
@@ -1461,24 +1477,24 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	}
 	var subscriptionID string
 	err = m.db.QueryRow(c.Context(), `
-		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn)
-		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5)
+		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode)
+		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6)
 		RETURNING id::text
-	`, providerID, planID, txRef, email, amount).Scan(&subscriptionID)
+	`, providerID, planID, txRef, email, amount, billingMode).Scan(&subscriptionID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	if err := recordSubscriptionPaymentAttempt(c.Context(), m.db, m.paymentProvider.Name(), subscriptionID, userID, countryCode, amount, "NGN", txRef, "card"); err != nil {
+	if err := recordSubscriptionPaymentAttempt(c.Context(), m.db, m.paymentProvider.Name(), subscriptionID, userID, countryCode, amount, "NGN", txRef, method); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not record subscription payment")
 	}
 	checkout, err := m.paymentProvider.InitializeCheckout(c.Context(), paymentCheckoutInput{
 		Reference: txRef, Amount: amount, Currency: "NGN", RedirectURL: redirect,
-		PaymentMethods: []string{"card"}, PaymentPlanID: fwPlanID,
+		PaymentMethods: []string{method}, PaymentPlanID: fwPlanID,
 		Customer: buildFlutterwaveCustomer(email, fullName, phone),
 		Title:    "Atlantic Express Provider Subscription", Description: name + " monthly plan",
 		Metadata: map[string]any{
 			"payment_kind": "provider_subscription", "provider_id": providerID,
-			"plan_id": planID, "payment_provider": m.paymentProvider.Name(),
+			"billing_mode": billingMode, "plan_id": planID, "payment_provider": m.paymentProvider.Name(),
 		},
 	})
 	if err != nil {
@@ -1493,7 +1509,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		return fiber.NewError(fiber.StatusInternalServerError, "could not finalize subscription payment")
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"tx_ref": txRef, "provider": m.paymentProvider.Name(),
+		"billing_mode": billingMode, "payment_method": method, "tx_ref": txRef, "provider": m.paymentProvider.Name(),
 		"checkout_link": checkout.CheckoutURL, "redirect_url": redirect,
 	})
 }
@@ -1520,18 +1536,21 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var subscriptionID, providerID, ownerUserID, countryCode string
+	var subscriptionID, providerID, ownerUserID, countryCode, billingMode, existingTransaction string
 	var expected float64
 	err = tx.QueryRow(ctx, `
-		SELECT s.id::text,s.provider_id::text,s.expected_amount_ngn,organization.owner_user_id::text,organization.country_code
+		SELECT s.id::text,s.provider_id::text,s.expected_amount_ngn,organization.owner_user_id::text,organization.country_code,COALESCE(to_jsonb(s)->>'billing_mode','recurring'),COALESCE(s.flutterwave_transaction_id,'')
 		FROM provider_subscriptions s
 		JOIN provider_subscription_plans p ON p.id=s.plan_id
 		JOIN provider_organizations organization ON organization.id=s.provider_id
 		WHERE s.tx_ref=$1::text
 		FOR UPDATE OF s
-	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode)
+	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode, &billingMode, &existingTransaction)
 	if err != nil {
 		return fmt.Errorf("provider subscription not found")
+	}
+	if billingMode == "one_time" && existingTransaction != "" && existingTransaction != transactionID {
+		return fmt.Errorf("this one-month payment has already been confirmed")
 	}
 	if strings.ToUpper(strings.TrimSpace(currency)) != "NGN" || paidAmount+0.01 < expected {
 		return fmt.Errorf("provider subscription amount mismatch")
@@ -1562,6 +1581,10 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 		if existingSubscriptionID != subscriptionID || existingTxRef != txRef {
 			return fmt.Errorf("provider subscription payment reference conflict")
 		}
+	}
+	// A repeated callback must never grant another free month for a transfer.
+	if !isNewPayment && billingMode == "one_time" {
+		return tx.Commit(ctx)
 	}
 	var updateTag pgconn.CommandTag
 	if isNewPayment {

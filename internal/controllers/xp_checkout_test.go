@@ -36,7 +36,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
  CREATE TABLE provider_organizations(id uuid,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
  ALTER TABLE provider_payout_accounts ADD COLUMN payment_provider text DEFAULT 'flutterwave',ADD COLUMN status text DEFAULT 'active';
- CREATE TABLE products(id uuid,sku text,provider_id uuid,title text DEFAULT 'Watch',description text DEFAULT '',cost_price_rmb numeric DEFAULT 0,image_urls text[] DEFAULT '{}',factory_details jsonb DEFAULT '{}',origin_hub_id uuid,is_flash_sale boolean DEFAULT false,flash_sale_price numeric DEFAULT 0,local_currency_code text DEFAULT 'NGN',local_selling_price numeric DEFAULT 65000,inventory_count int DEFAULT 10,inventory_country_code text DEFAULT 'NG',inventory_city text DEFAULT 'Abuja',inventory_location text DEFAULT 'Market',stock_state text DEFAULT 'locally_available',delivery_max_days int DEFAULT 3,delivery_min_days int DEFAULT 1,handling_time_hours int DEFAULT 24,delivery_methods text[] DEFAULT ARRAY['delivery'],return_policy text DEFAULT '',is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved',fulfillment_mode text DEFAULT 'merchant_local',sold_count int DEFAULT 0,updated_at timestamptz DEFAULT now());
+ CREATE TABLE products(id uuid,sku text,payment_mode text DEFAULT 'flutterwave',provider_id uuid,title text DEFAULT 'Watch',description text DEFAULT '',cost_price_rmb numeric DEFAULT 0,image_urls text[] DEFAULT '{}',factory_details jsonb DEFAULT '{}',origin_hub_id uuid,is_flash_sale boolean DEFAULT false,flash_sale_price numeric DEFAULT 0,local_currency_code text DEFAULT 'NGN',local_selling_price numeric DEFAULT 65000,inventory_count int DEFAULT 10,inventory_country_code text DEFAULT 'NG',inventory_city text DEFAULT 'Abuja',inventory_location text DEFAULT 'Market',stock_state text DEFAULT 'locally_available',delivery_max_days int DEFAULT 3,delivery_min_days int DEFAULT 1,handling_time_hours int DEFAULT 24,delivery_methods text[] DEFAULT ARRAY['delivery'],return_policy text DEFAULT '',is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved',fulfillment_mode text DEFAULT 'merchant_local',sold_count int DEFAULT 0,updated_at timestamptz DEFAULT now());
  CREATE TABLE product_delivery_areas(product_id uuid,country_code text,state_key text DEFAULT '',city_key text DEFAULT '',currency_code text DEFAULT 'NGN',delivered_price numeric,delivery_fee numeric DEFAULT 0);
  CREATE TABLE logistics_hubs(id uuid,code text,name text,city text,address text);
  ALTER TABLE orders ALTER COLUMN id SET DEFAULT gen_random_uuid(), ADD COLUMN user_id uuid,ADD COLUMN country_id uuid,ADD COLUMN total_amount numeric,ADD COLUMN shipping_fee numeric,ADD COLUMN customs_fee numeric,ADD COLUMN vat_fee numeric,ADD COLUMN stamp_duty_fee numeric,ADD COLUMN platform_fee numeric,ADD COLUMN delivery_promised_at timestamptz,ADD COLUMN fulfillment_contact_snapshot jsonb,ADD COLUMN fulfillment_mode text,ADD COLUMN order_status text DEFAULT 'Pending',ADD COLUMN batch_id uuid,ADD COLUMN package_label text,ADD COLUMN flutterwave_transaction_id text,ADD COLUMN paid_at timestamptz,ADD COLUMN updated_at timestamptz DEFAULT now();
@@ -236,4 +236,123 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	if payload["product"].(map[string]any)["factory_details"].(map[string]any)["provider_name"] != "Timo Ventures" {
 		t.Fatal("catalogue missing seller name")
 	}
+	// Contact-only products remain visible without a payout account, but the
+	// real checkout endpoint rejects them, including requests from older apps.
+	if _, err = db.Exec(ctx, `ALTER TABLE products ADD created_at timestamptz DEFAULT now(),ADD inventory_latitude numeric,ADD inventory_longitude numeric;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE products SET payment_mode='contact',is_flash_sale=true,flash_sale_price=local_selling_price/2 WHERE id=$1`, product); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `DELETE FROM provider_payout_accounts WHERE provider_id=$1`, provider); err != nil {
+		t.Fatal(err)
+	}
+	app.Get("/catalog", catalog.ListProducts)
+	app.Get("/deals", catalog.ListFlashSales)
+	for _, url := range []string{"/products/" + product + "?country_code=NG", "/catalog?country_code=NG", "/deals?country_code=NG"} {
+		res, e := app.Test(httptest.NewRequest("GET", url, nil))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var body map[string]any
+		e = json.NewDecoder(res.Body).Decode(&body)
+		res.Body.Close()
+		if e != nil || res.StatusCode != 200 {
+			t.Fatal("contact catalogue", url, res.StatusCode, e, body)
+		}
+		var item map[string]any
+		if strings.HasPrefix(url, "/products/") {
+			item = body["product"].(map[string]any)
+		} else {
+			for _, candidate := range body["products"].([]any) {
+				entry := candidate.(map[string]any)
+				if entry["id"] == product {
+					item = entry
+					break
+				}
+			}
+		}
+		if item == nil || item["factory_details"].(map[string]any)["payment_mode"] != "contact" {
+			t.Fatal("contact-only missing", url, body)
+		}
+	}
+	request := httptest.NewRequest("POST", "/quote", strings.NewReader(`{"country_code":"NG","items":[{"product_id":"`+product+`","sku":"WATCH","quantity":1}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	res, e := app.Test(request)
+	if e != nil {
+		t.Fatal(e)
+	}
+	res.Body.Close()
+	if res.StatusCode != 400 {
+		t.Fatal("contact-only accepted checkout", res.StatusCode)
+	}
+
+	// Exercise the real seller create/edit/submit routes. Omitted mode preserves
+	// older portal updates; new products default to Flutterwave.
+	if _, err = db.Exec(ctx, `CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text DEFAULT 'owner',is_active boolean DEFAULT true);
+ ALTER TABLE provider_organizations ADD provider_type text DEFAULT 'product_merchant';
+ ALTER TABLE products ADD variants jsonb,ADD compare_at_price numeric,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
+ ALTER TABLE product_delivery_areas ADD uses_primary_price boolean DEFAULT false;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO provider_members(provider_id,user_id) VALUES($1,$2)`, provider, user); err != nil {
+		t.Fatal(err)
+	}
+	merchant := &ProviderMarketplaceController{db: db}
+	app.Post("/seller/products", merchant.CreateMerchantProduct)
+	app.Put("/seller/products/:product_id", merchant.UpdateMerchantProduct)
+	app.Post("/seller/products/:product_id/submit", merchant.SubmitMerchantProduct)
+	sellerCall := func(method, url, mode string) (int, map[string]any) {
+		t.Helper()
+		body := map[string]any{"title": "New watch", "description": "Description", "category_path": []string{"Custom category"}, "image_urls": []string{"https://example.test/photo.jpg"}, "local_selling_price": 110, "inventory_count": 2, "inventory_city": "Abuja", "inventory_location": "Market", "inventory_latitude": 9.0, "inventory_longitude": 7.0}
+		if mode != "" {
+			body["payment_mode"] = mode
+		}
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, strings.NewReader(string(raw)))
+		req.Header.Set("Content-Type", "application/json")
+		res, e := app.Test(req)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		var result map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&result)
+		return res.StatusCode, result
+	}
+	for _, choice := range []string{"", "flutterwave", "contact", "both"} {
+		code, created := sellerCall("POST", "/seller/products", choice)
+		if code != 201 {
+			t.Fatal("create choice", choice, code, created)
+		}
+		id := created["id"].(string)
+		expected := choice
+		if expected == "" {
+			expected = "flutterwave"
+		}
+		var savedMode, sku string
+		if err = db.QueryRow(ctx, `SELECT payment_mode,sku FROM products WHERE id=$1`, id).Scan(&savedMode, &sku); err != nil || savedMode != expected || sku == "" {
+			t.Fatal(savedMode, sku, err)
+		}
+		code, result := sellerCall("PUT", "/seller/products/"+id, "")
+		if code != 204 {
+			t.Fatal("legacy edit", code, result)
+		}
+		if err = db.QueryRow(ctx, `SELECT payment_mode FROM products WHERE id=$1`, id).Scan(&savedMode); err != nil || savedMode != expected {
+			t.Fatal("legacy edit changed mode", savedMode, err)
+		}
+		code, result = sellerCall("POST", "/seller/products/"+id+"/submit", "")
+		want := 402
+		if expected == "contact" {
+			want = 204
+		}
+		if code != want {
+			t.Fatal("publish without payout", expected, code, result)
+		}
+	}
+	code, invalid := sellerCall("POST", "/seller/products", "unexpected")
+	if code != 422 {
+		t.Fatal("invalid mode accepted", code, invalid)
+	}
+
 }

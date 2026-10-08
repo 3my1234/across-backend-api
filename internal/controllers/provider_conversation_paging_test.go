@@ -15,7 +15,7 @@ func TestProviderChatLatestMessagesAndOlderPages(t *testing.T) {
 	ctx := context.Background()
 	buyer, other, conversation := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	_, err := db.Exec(ctx, `CREATE TABLE provider_conversations(id uuid PRIMARY KEY,user_id uuid,provider_id uuid,buyer_last_read_at timestamptz,provider_last_read_at timestamptz);
- CREATE TABLE provider_conversation_messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),conversation_id uuid,sender_type text,body text,created_at timestamptz);
+ CREATE TABLE provider_conversation_messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),conversation_id uuid,sender_type text,body text,created_at timestamptz,media_keys text[] DEFAULT '{}');
  INSERT INTO provider_conversations(id,user_id) VALUES('`+conversation+`','`+buyer+`');`)
 	if err != nil {
 		t.Fatal(err)

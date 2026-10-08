@@ -96,6 +96,12 @@ func (s *S3) PresignPut(key, contentType string, expires time.Duration) (string,
 }
 
 func (s *S3) ObjectGetURL(key string, expires time.Duration) (string, error) {
+	return s.objectReadURL(key, expires, http.MethodGet)
+}
+func (s *S3) ObjectHeadURL(key string, expires time.Duration) (string, error) {
+	return s.objectReadURL(key, expires, http.MethodHead)
+}
+func (s *S3) objectReadURL(key string, expires time.Duration, method string) (string, error) {
 	if !s.Configured() {
 		return "", errors.New("s3 is not configured")
 	}
@@ -115,7 +121,7 @@ func (s *S3) ObjectGetURL(key string, expires time.Duration) (string, error) {
 	q.Set("X-Amz-Expires", fmt.Sprintf("%d", int(expires.Seconds())))
 	q.Set("X-Amz-SignedHeaders", "host")
 	u.RawQuery = canonicalQuery(q)
-	canonicalRequest := strings.Join([]string{http.MethodGet, u.EscapedPath(), u.RawQuery, "host:" + u.Host + "\n", "host", "UNSIGNED-PAYLOAD"}, "\n")
+	canonicalRequest := strings.Join([]string{method, u.EscapedPath(), u.RawQuery, "host:" + u.Host + "\n", "host", "UNSIGNED-PAYLOAD"}, "\n")
 	stringToSign := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, credentialScope, hexSHA256(canonicalRequest)}, "\n")
 	q.Set("X-Amz-Signature", hex.EncodeToString(hmacSHA256(signingKey(s.secretKey, dateStamp, s.region, "s3"), stringToSign)))
 	u.RawQuery = canonicalQuery(q)

@@ -60,6 +60,9 @@ func TestRequestConversationBackfillAndAtomicBooking(t *testing.T) {
 	if _, err = db.Exec(ctx, `INSERT INTO provider_requests(listing_id,provider_id,user_id,request_type,message,created_at) VALUES($1,$3,$4,'booking','Fix my car','2026-01-02'),($1,$3,$4,'appointment','Another visit','2026-01-03'),($2,$3,$4,'enquiry','Details please','2026-01-02')`, first, second, provider, buyer); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(ctx, `CREATE TABLE products(id uuid PRIMARY KEY,title text);ALTER TABLE provider_conversations ADD COLUMN product_id uuid;ALTER TABLE provider_conversation_messages ADD COLUMN media_keys text[] DEFAULT '{}';`); err != nil {
+		t.Fatal(err)
+	}
 	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "063_request_conversations_and_support_history.sql"))
 	if err != nil {
 		t.Fatal(err)

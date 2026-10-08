@@ -258,6 +258,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Put("/marketplace/listings/:listing_id/review", marketplaceController.UpsertListingReview)
 	authed.Post("/marketplace/listings/:listing_id/reports", marketplaceController.ReportListing)
 	authed.Post("/marketplace/listings/:listing_id/conversations", marketplaceController.StartProviderConversation)
+	authed.Post("/marketplace/products/:product_id/conversations", marketplaceController.StartProductConversation)
+	authed.Post("/marketplace/chat-images/presign", marketplaceController.PresignChatImage)
 	authed.Get("/marketplace/conversations", marketplaceController.ListBuyerConversations)
 	authed.Get("/marketplace/conversations/:conversation_id/messages", marketplaceController.BuyerConversationMessages)
 	authed.Post("/marketplace/conversations/:conversation_id/messages", marketplaceController.SendBuyerConversationMessage)
