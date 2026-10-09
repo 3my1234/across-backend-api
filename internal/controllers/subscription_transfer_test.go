@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,13 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
  CREATE TABLE provider_marketplace_events(provider_id uuid,event_type text,metadata jsonb);
  ALTER TABLE payments ADD COLUMN provider_subscription_id uuid,ADD COLUMN user_id uuid,ADD COLUMN country_code text,ADD COLUMN amount numeric,ADD COLUMN idempotency_key text,ADD COLUMN payment_method text,ADD COLUMN checkout_url text,ADD COLUMN provider_status text,ADD COLUMN failure_code text,ADD COLUMN failure_message text;`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", "065_prepaid_provider_subscription_periods.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(sql)); err != nil {
 		t.Fatal(err)
 	}
 	user, seller, plan := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -60,9 +69,14 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", user); return c.Next() })
 	app.Post("/checkout", controller.SubscriptionCheckout)
-	checkout := func(method string) (int, map[string]any) {
+	checkout := func(method string, periods ...int) (int, map[string]any) {
 		t.Helper()
-		req := httptest.NewRequest("POST", "/checkout", strings.NewReader(`{"plan_id":"`+plan+`","payment_method":"`+method+`"}`))
+		months := 1
+		if len(periods) > 0 {
+			months = periods[0]
+		}
+		payload, _ := json.Marshal(map[string]any{"plan_id": plan, "payment_method": method, "duration_months": months})
+		req := httptest.NewRequest("POST", "/checkout", strings.NewReader(string(payload)))
 		req.Header.Set("Content-Type", "application/json")
 		res, err := app.Test(req)
 		if err != nil {
@@ -80,11 +94,66 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	if planChecks != 1 || gatewayBodies[0]["payment_options"] != "card" || gatewayBodies[0]["payment_plan"] != float64(123) {
 		t.Fatal(gatewayBodies, planChecks)
 	}
+	for _, bad := range []int{-1, 2, 24} {
+		status, body := checkout("banktransfer", bad)
+		if status != 422 {
+			t.Fatal("invalid duration accepted", status, body)
+		}
+	}
+	status, body := checkout("card", 3)
+	if status != 422 {
+		t.Fatal("nonmonthly recurring charge accepted", status, body)
+	}
+	for _, months := range []int{3, 6, 12} {
+		status, paid := checkout("banktransfer", months)
+		if status != 202 {
+			t.Fatal(status, paid)
+		}
+		amount := float64(500 * months)
+		ref := paid["tx_ref"].(string)
+		if paid["amount_ngn"] != amount || gatewayBodies[len(gatewayBodies)-1]["amount"] != amount {
+			t.Fatal("incorrect prepaid total", paid)
+		}
+		if err = settleProviderSubscription(ctx, db, ref, ref, amount-1, "NGN"); err == nil {
+			t.Fatal("prepaid underpayment accepted")
+		}
+		// Price changes after checkout must not alter this purchase's saved amount.
+		if _, err = db.Exec(ctx, "UPDATE provider_subscription_plans SET amount_ngn=700 WHERE id=$1", plan); err != nil {
+			t.Fatal(err)
+		}
+		if err = settleProviderSubscription(ctx, db, ref, ref, amount, "NGN"); err != nil {
+			t.Fatal(err)
+		}
+		var start, end time.Time
+		if err = db.QueryRow(ctx, "SELECT starts_at,current_period_end FROM provider_subscriptions WHERE tx_ref=$1", ref).Scan(&start, &end); err != nil {
+			t.Fatal(err)
+		}
+		var days float64
+		_ = db.QueryRow(ctx, "SELECT EXTRACT(EPOCH FROM current_period_end-starts_at)/86400 FROM provider_subscriptions WHERE tx_ref=$1", ref).Scan(&days)
+		if days < float64(months*28) || days > float64(months*31+1) {
+			t.Fatal("wrong paid period", months, start, end, days)
+		}
+		if err = settleProviderSubscription(ctx, db, ref, ref, amount, "NGN"); err != nil {
+			t.Fatal(err)
+		}
+		var again time.Time
+		_ = db.QueryRow(ctx, "SELECT current_period_end FROM provider_subscriptions WHERE tx_ref=$1", ref).Scan(&again)
+		if !again.Equal(end) {
+			t.Fatal("callback extended prepaid access")
+		}
+		if _, err = db.Exec(ctx, "UPDATE provider_subscriptions SET duration_months=1 WHERE tx_ref=$1", ref); err == nil {
+			t.Fatal("purchase duration changed")
+		}
+		if _, err = db.Exec(ctx, "UPDATE provider_subscriptions SET status='expired',current_period_end=now()-interval '1 day' WHERE tx_ref=$1", ref); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = db.Exec(ctx, "UPDATE provider_subscription_plans SET amount_ngn=500 WHERE id=$1", plan)
+	}
 	status, transfer := checkout("banktransfer")
 	if status != 202 || transfer["billing_mode"] != "one_time" {
 		t.Fatal(status, transfer)
 	}
-	if planChecks != 1 || gatewayBodies[1]["payment_options"] != "banktransfer" || gatewayBodies[1]["payment_plan"] != nil {
+	if planChecks != 1 || gatewayBodies[len(gatewayBodies)-1]["payment_options"] != "banktransfer" || gatewayBodies[len(gatewayBodies)-1]["payment_plan"] != nil {
 		t.Fatal("transfer must not create recurring card checkout", gatewayBodies[1])
 	}
 	ref := transfer["tx_ref"].(string)

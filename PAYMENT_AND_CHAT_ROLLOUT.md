@@ -70,3 +70,37 @@ conversation permissions, photo-only messages and retry deduplication, and
 card/transfer checkout payloads with verified entitlement and replay handling.
 Mobile and portal scripts additionally cover photo upload, retained retries,
 session isolation, expiry refresh and acknowledgement handling.
+
+## Appearance and prepaid-period rollout (9 October 2026)
+
+The latest migration is **065_prepaid_provider_subscription_periods.sql**.
+Redeploy the new backend image first. In Coolify, `RUN_MIGRATIONS=true`
+(the default) applies all pending migrations before the API starts. The
+runner holds a PostgreSQL advisory lock, uses the locked connection, and
+commits each migration's schema changes and applied record atomically.
+It stops startup on a migration error. Re-running skips recorded migrations.
+
+If startup migrations are disabled, run `cd /app && ./across-migrate` in
+the NEW backend container. Take a database backup before production schema
+changes. Do not edit applied migration files. For a larger deployment,
+run one migration job before rolling out API replicas and keep schema
+changes compatible with the old version during that rollout.
+
+Deploy the portal after migration 065. Transfers support 1, 3, 6 or 12
+months at the existing monthly rate. Cards remain monthly recurring.
+The server calculates totals, saves the purchased period/amount, and
+checks verified payments against that purchase even if the plan price
+later changes. Duplicate callbacks do not extend prepaid access.
+Older portal requests default to one month. Older backends do not advertise
+longer periods, so the new portal exposes only one month until deployed.
+
+Appearance is System/Light/Dark, saved locally. Portal controls appear in
+the header (and admin sign-in); mobile controls are Account > Appearance.
+The mobile change requires a NEW build from the updated source. A queued
+build from an earlier commit does not acquire these changes.
+
+Before real charges, test transfer/card payment, plan activation and expiry,
+product payment history, tracking/cart clearing, XP redemption, seller
+messages/photos, and both light/dark themes. Use the exact amount and
+account Flutterwave displays. This release's gateway tests are simulated;
+no real charge or production migration was performed during development.
