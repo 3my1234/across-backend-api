@@ -35,6 +35,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authController := controllers.NewAuthController(db, cfg)
 	sesController := controllers.NewSESController(db, cfg)
 	xpController := controllers.NewXPController(db)
+	waitlist := controllers.NewWaitlistController(db)
 	supportController := controllers.NewSupportController(db)
 	analyticsController := controllers.NewAnalyticsController(db)
 	profileController := controllers.NewProfileController(db)
@@ -63,6 +64,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		c.Set(fiber.HeaderCacheControl, "private, no-store")
 		return err
 	})
+	v1.Post("/waitlist", middleware.DistributedRateLimit(cache, "waitlist", 20, time.Hour), waitlist.Join)
 	v1.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -269,6 +271,12 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)
 	authed.Get("/xp/balance", xpController.GetBalance)
 	authed.Get("/xp/history", xpController.GetHistory)
+	authed.Get("/xp/withdrawals", xpController.ListWithdrawals)
+	authed.Post("/xp/withdrawals", xpController.RequestWithdrawal)
+	adminRoutes.Get("/waitlist", superOnly, waitlist.AdminList)
+	adminRoutes.Get("/waitlist/export", superOnly, waitlist.AdminExport)
+	adminRoutes.Get("/xp/withdrawals", superOnly, xpController.AdminListWithdrawals)
+	adminRoutes.Patch("/xp/withdrawals/:withdrawal_id", superOnly, xpController.AdminReviewWithdrawal)
 	authed.Post("/orders/:order_id/xp-award", xpController.AwardPurchaseXP)
 
 	// Support Tickets

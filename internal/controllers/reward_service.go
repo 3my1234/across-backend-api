@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -10,8 +11,8 @@ import (
 )
 
 const (
-	welcomeXP      = 650
-	reviewRewardXP = 10
+	welcomeXP      = 5
+	reviewRewardXP = 1
 )
 
 type RewardService struct {
@@ -22,25 +23,18 @@ func NewRewardService(db *pgxpool.Pool) *RewardService {
 	return &RewardService{db: db}
 }
 
+// Rewards consume at most 10% of the standard 1% service fee, capped per order.
 func purchaseXP(total float64) int {
-	switch {
-	case total < 1000:
-		return 1
-	case total < 10000:
-		return 2
-	case total < 100000:
-		return 5
-	case total < 500000:
-		return 10
-	default:
-		return 25
+	if math.IsNaN(total) || math.IsInf(total, 0) || total < 1000 {
+		return 0
 	}
+	return int(math.Min(25, math.Floor(total/1000)))
 }
 
 func (r *RewardService) AwardWelcome(ctx context.Context, userID string) (bool, error) {
 	return r.award(ctx, userID, "", welcomeXP, "welcome", "account-welcome", "welcome-xp:"+userID,
-		"Welcome to Atlantic Express - 650 XP earned",
-		"You received 650 XP. This welcome bonus is awarded once per account."+xpUsage)
+		"Welcome to Atlantic Express - 5 XP earned",
+		"You received 5 XP. This welcome bonus is awarded once per account."+xpUsage)
 }
 
 func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now time.Time) (bool, error) {
@@ -82,7 +76,19 @@ func (r *RewardService) AwardDailyLogin(ctx context.Context, userID string, now 
 }
 
 func (r *RewardService) AwardPurchase(ctx context.Context, userID, orderID string, total float64) (bool, int, error) {
-	amount := purchaseXP(total)
+	// Payment callbacks cannot award cash rewards before completion.
+	var completed bool
+	var retainedFee float64
+	if err := r.db.QueryRow(ctx, `SELECT COALESCE(bool_or(order_status='Completed' AND currency_code='NGN'),false),COALESCE(MAX(platform_fee),0) FROM orders WHERE id=$1 AND user_id=$2`, orderID, userID).Scan(&completed, &retainedFee); err != nil {
+		return false, 0, err
+	}
+	if !completed {
+		return false, 0, nil
+	}
+	amount := int(math.Min(float64(purchaseXP(total)), math.Floor(retainedFee*0.1)))
+	if amount == 0 {
+		return false, 0, nil
+	}
 	awarded, err := r.award(ctx, userID, orderID, amount, "purchase", "purchase-"+orderID, "purchase-xp:"+orderID,
 		"Purchase reward earned", fmt.Sprintf("You earned %d XP from your completed purchase.", amount)+xpUsage)
 	return awarded, amount, err

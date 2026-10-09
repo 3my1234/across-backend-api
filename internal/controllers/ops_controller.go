@@ -458,7 +458,7 @@ func (o *OpsController) ClaimReviewReward(c *fiber.Ctx) error {
 	if !claimed {
 		return fiber.NewError(fiber.StatusNotFound, "submit a review before claiming this reward")
 	}
-	return c.JSON(fiber.Map{"claimed": true, "reward": fmt.Sprintf("%d XP for eligible service-fee discounts", reviewRewardXP), "xp_credited": reviewRewardXP})
+	return c.JSON(fiber.Map{"claimed": true, "reward": fmt.Sprintf("%d XP added to your withdrawable balance", reviewRewardXP), "xp_credited": reviewRewardXP})
 }
 
 func creditReviewReward(ctx context.Context, db *pgxpool.Pool, userID, orderID string) (bool, error) {
@@ -534,6 +534,13 @@ func (o *OpsController) AutoConfirmDeliveries(c *fiber.Ctx) error {
 }
 
 func createReviewRewardTx(ctx context.Context, tx pgx.Tx, userID, orderID string) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO xp_transactions(user_id,amount,reason,reference_id)
+ SELECT user_id,LEAST(25,FLOOR(platform_fee*0.1)::int),'purchase','purchase-'||id::text
+ FROM orders WHERE id=$2::uuid AND user_id=$1::uuid AND order_status='Completed'
+ AND currency_code='NGN' AND platform_fee>=10 ON CONFLICT DO NOTHING`, userID, orderID); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO review_rewards(user_id, order_id, reward_amount, reward_currency)
 		VALUES ($1::uuid, $2::uuid, $3, 'NGN')
