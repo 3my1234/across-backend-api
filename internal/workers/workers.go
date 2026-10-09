@@ -18,9 +18,10 @@ import (
 // and idempotent database keys, so multiple worker replicas can run safely.
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 	var group sync.WaitGroup
-	group.Add(5)
+	group.Add(6)
 	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runPushLoop(ctx, db) }()
+	go func() { defer group.Done(); runPushReceiptLoop(ctx, db) }()
 	go func() { defer group.Done(); runAutoConfirmLoop(ctx, db) }()
 	go func() { defer group.Done(); runBatchClosureLoop(ctx, db) }()
 	go func() { defer group.Done(); runSettlementReconciliationLoop(ctx, db, cfg) }()
@@ -105,8 +106,22 @@ func runPush(ctx context.Context, db *pgxpool.Pool, client *http.Client) {
 	if count > 0 {
 		log.Printf("push notification worker: submitted %d deliveries", count)
 	}
-	if _, err = services.RunPushReceiptBatch(ctx, db, client); err != nil {
-		log.Printf("push receipt worker error: %v", err)
+}
+
+// Receipt lookups must not block sending new order updates when Expo is slow.
+func runPushReceiptLoop(ctx context.Context, db *pgxpool.Pool) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	client := &http.Client{Timeout: 15 * time.Second}
+	for {
+		select {
+		case <-ticker.C:
+			if _, err := services.RunPushReceiptBatch(ctx, db, client); err != nil {
+				log.Printf("push receipt worker error: %v", err)
+			}
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

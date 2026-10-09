@@ -212,6 +212,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
 	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Post("/notifications/push-token", notifications.RegisterPushToken)
+	authed.Post("/notifications/test-push", notifications.TestPush)
 	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
 
 	// Provider marketplace. Providers authenticate through the verified buyer
