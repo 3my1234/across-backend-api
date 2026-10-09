@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,7 +30,9 @@ func Run(ctx context.Context, db *pgxpool.Pool) error {
 		_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext('atlantic-express-schema-migrations'))`)
 	}()
 
-	if err := ensureTrackingTable(ctx, db); err != nil {
+	conn := lockConn.Conn()
+
+	if err := ensureTrackingTable(ctx, conn); err != nil {
 		return err
 	}
 
@@ -37,12 +41,12 @@ func Run(ctx context.Context, db *pgxpool.Pool) error {
 		return err
 	}
 
-	applied, err := appliedMigrations(ctx, db)
+	applied, err := appliedMigrations(ctx, conn)
 	if err != nil {
 		return err
 	}
 
-	hasBaseline, err := coreSchemaExists(ctx, db)
+	hasBaseline, err := coreSchemaExists(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -53,18 +57,15 @@ func Run(ctx context.Context, db *pgxpool.Pool) error {
 		}
 
 		if name == "schema.sql" && hasBaseline {
-			if err := markApplied(ctx, db, name); err != nil {
+			if err := markApplied(ctx, conn, name); err != nil {
 				return err
 			}
 			log.Printf("migration marked as applied: %s", name)
 			continue
 		}
 
-		if err := applyMigration(ctx, db, name); err != nil {
+		if err := applyMigration(ctx, conn, name); err != nil {
 			return fmt.Errorf("apply migration %s: %w", name, err)
-		}
-		if err := markApplied(ctx, db, name); err != nil {
-			return err
 		}
 		log.Printf("migration applied: %s", name)
 	}
@@ -72,7 +73,7 @@ func Run(ctx context.Context, db *pgxpool.Pool) error {
 	return nil
 }
 
-func ensureTrackingTable(ctx context.Context, db *pgxpool.Pool) error {
+func ensureTrackingTable(ctx context.Context, db *pgx.Conn) error {
 	_, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			name TEXT PRIMARY KEY,
@@ -82,7 +83,7 @@ func ensureTrackingTable(ctx context.Context, db *pgxpool.Pool) error {
 	return err
 }
 
-func appliedMigrations(ctx context.Context, db *pgxpool.Pool) (map[string]struct{}, error) {
+func appliedMigrations(ctx context.Context, db *pgx.Conn) (map[string]struct{}, error) {
 	rows, err := db.Query(ctx, `SELECT name FROM schema_migrations`)
 	if err != nil {
 		return nil, err
@@ -100,7 +101,11 @@ func appliedMigrations(ctx context.Context, db *pgxpool.Pool) (map[string]struct
 	return applied, rows.Err()
 }
 
-func markApplied(ctx context.Context, db *pgxpool.Pool, name string) error {
+type migrationExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func markApplied(ctx context.Context, db migrationExecutor, name string) error {
 	_, err := db.Exec(ctx, `
 		INSERT INTO schema_migrations(name, applied_at)
 		VALUES ($1, $2)
@@ -133,7 +138,7 @@ func loadMigrationNames() ([]string, error) {
 	return names, nil
 }
 
-func applyMigration(ctx context.Context, db *pgxpool.Pool, name string) error {
+func applyMigration(ctx context.Context, db *pgx.Conn, name string) error {
 	content, err := os.ReadFile(filepath.Join("migrations", name))
 	if err != nil {
 		return err
@@ -151,6 +156,11 @@ func applyMigration(ctx context.Context, db *pgxpool.Pool, name string) error {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return err
 		}
+	}
+	// Schema changes and their ledger entry must commit together. A crash after
+	// commit cannot cause a non-repeatable migration to run again on restart.
+	if err := markApplied(ctx, tx, name); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -295,7 +305,7 @@ func scanDollarTag(input string) (string, bool) {
 	return "", false
 }
 
-func coreSchemaExists(ctx context.Context, db *pgxpool.Pool) (bool, error) {
+func coreSchemaExists(ctx context.Context, db *pgx.Conn) (bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('public.countries_config') IS NOT NULL`).Scan(&exists); err != nil {
 		return false, err

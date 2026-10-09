@@ -1381,7 +1381,7 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		_ = json.Unmarshal(features, &f)
 		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f})
 	}
-	return c.JSON(fiber.Map{"items": items})
+	return c.JSON(fiber.Map{"items": items, "transfer_months": []int{1, 3, 6, 12}})
 }
 
 func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error {
@@ -1406,9 +1406,10 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		return fiber.NewError(fiber.StatusConflict, "this provider already has an active subscription")
 	}
 	var req struct {
-		PlanID        string `json:"plan_id"`
-		PaymentMethod string `json:"payment_method"`
-		RedirectURL   string `json:"redirect_url"`
+		PlanID         string `json:"plan_id"`
+		PaymentMethod  string `json:"payment_method"`
+		RedirectURL    string `json:"redirect_url"`
+		DurationMonths int    `json:"duration_months"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.ErrBadRequest
@@ -1419,6 +1420,16 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	}
 	if method != "card" && method != "banktransfer" {
 		return fiber.NewError(422, "Choose card or bank transfer")
+	}
+	months := req.DurationMonths
+	if months == 0 {
+		months = 1
+	}
+	if months != 1 && months != 3 && months != 6 && months != 12 {
+		return fiber.NewError(422, "Choose 1, 3, 6 or 12 months")
+	}
+	if method == "card" && months != 1 {
+		return fiber.NewError(422, "Card subscriptions renew monthly; choose bank transfer to pay for several months")
 	}
 	billingMode := "recurring"
 	if method == "banktransfer" {
@@ -1441,6 +1452,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	} else {
 		fwPlanID = nil
 	}
+	amount = math.Round(amount*float64(months)*100) / 100
 	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
 	err = m.db.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
@@ -1477,10 +1489,10 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	}
 	var subscriptionID string
 	err = m.db.QueryRow(c.Context(), `
-		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode)
-		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6)
+		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months)
+		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6,$7)
 		RETURNING id::text
-	`, providerID, planID, txRef, email, amount, billingMode).Scan(&subscriptionID)
+	`, providerID, planID, txRef, email, amount, billingMode, months).Scan(&subscriptionID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1491,10 +1503,10 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		Reference: txRef, Amount: amount, Currency: "NGN", RedirectURL: redirect,
 		PaymentMethods: []string{method}, PaymentPlanID: fwPlanID,
 		Customer: buildFlutterwaveCustomer(email, fullName, phone),
-		Title:    "Atlantic Express Provider Subscription", Description: name + " monthly plan",
+		Title:    "Atlantic Express Provider Subscription", Description: fmt.Sprintf("%s: %d month(s)", name, months),
 		Metadata: map[string]any{
 			"payment_kind": "provider_subscription", "provider_id": providerID,
-			"billing_mode": billingMode, "plan_id": planID, "payment_provider": m.paymentProvider.Name(),
+			"billing_mode": billingMode, "duration_months": months, "plan_id": planID, "payment_provider": m.paymentProvider.Name(),
 		},
 	})
 	if err != nil {
@@ -1509,7 +1521,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		return fiber.NewError(fiber.StatusInternalServerError, "could not finalize subscription payment")
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"billing_mode": billingMode, "payment_method": method, "tx_ref": txRef, "provider": m.paymentProvider.Name(),
+		"billing_mode": billingMode, "duration_months": months, "amount_ngn": amount, "payment_method": method, "tx_ref": txRef, "provider": m.paymentProvider.Name(),
 		"checkout_link": checkout.CheckoutURL, "redirect_url": redirect,
 	})
 }
@@ -1538,19 +1550,20 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	defer tx.Rollback(ctx)
 	var subscriptionID, providerID, ownerUserID, countryCode, billingMode, existingTransaction string
 	var expected float64
+	var months int
 	err = tx.QueryRow(ctx, `
-		SELECT s.id::text,s.provider_id::text,s.expected_amount_ngn,organization.owner_user_id::text,organization.country_code,COALESCE(to_jsonb(s)->>'billing_mode','recurring'),COALESCE(s.flutterwave_transaction_id,'')
+		SELECT s.id::text,s.provider_id::text,s.expected_amount_ngn,organization.owner_user_id::text,organization.country_code,COALESCE(to_jsonb(s)->>'billing_mode','recurring'),COALESCE(s.flutterwave_transaction_id,''),COALESCE((to_jsonb(s)->>'duration_months')::int,1)
 		FROM provider_subscriptions s
 		JOIN provider_subscription_plans p ON p.id=s.plan_id
 		JOIN provider_organizations organization ON organization.id=s.provider_id
 		WHERE s.tx_ref=$1::text
 		FOR UPDATE OF s
-	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode, &billingMode, &existingTransaction)
+	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode, &billingMode, &existingTransaction, &months)
 	if err != nil {
 		return fmt.Errorf("provider subscription not found")
 	}
 	if billingMode == "one_time" && existingTransaction != "" && existingTransaction != transactionID {
-		return fmt.Errorf("this one-month payment has already been confirmed")
+		return fmt.Errorf("this prepaid payment has already been confirmed")
 	}
 	if strings.ToUpper(strings.TrimSpace(currency)) != "NGN" || paidAmount+0.01 < expected {
 		return fmt.Errorf("provider subscription amount mismatch")
@@ -1588,7 +1601,7 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 	}
 	var updateTag pgconn.CommandTag
 	if isNewPayment {
-		updateTag, err = tx.Exec(ctx, `WITH entitlement AS (SELECT GREATEST(now(),COALESCE(MAX(current_period_end) FILTER (WHERE status='active' AND current_period_end>now() AND id<>$1::uuid),now())) AS starts_at FROM provider_subscriptions WHERE provider_id=$3::uuid) UPDATE provider_subscriptions s SET status='active',flutterwave_transaction_id=$2::text,starts_at=entitlement.starts_at,current_period_end=entitlement.starts_at+interval '1 month',last_payment_at=now(),updated_at=now(),version=s.version+1 FROM entitlement WHERE s.id=$1::uuid`, subscriptionID, transactionID, providerID)
+		updateTag, err = tx.Exec(ctx, `WITH entitlement AS (SELECT GREATEST(now(),COALESCE(MAX(current_period_end) FILTER (WHERE status='active' AND current_period_end>now() AND id<>$1::uuid),now())) AS starts_at FROM provider_subscriptions WHERE provider_id=$3::uuid) UPDATE provider_subscriptions s SET status='active',flutterwave_transaction_id=$2::text,starts_at=entitlement.starts_at,current_period_end=entitlement.starts_at+make_interval(months=>$4::int),last_payment_at=now(),updated_at=now(),version=s.version+1 FROM entitlement WHERE s.id=$1::uuid`, subscriptionID, transactionID, providerID, months)
 	} else {
 		updateTag, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status='active',flutterwave_transaction_id=$2::text,starts_at=COALESCE(starts_at,now()),current_period_end=CASE WHEN current_period_end IS NULL OR current_period_end <= now() THEN now()+interval '1 month' ELSE current_period_end END,last_payment_at=COALESCE(last_payment_at,now()),updated_at=now(),version=version+1 WHERE id=$1::uuid AND (status<>'active' OR flutterwave_transaction_id IS NULL OR starts_at IS NULL OR current_period_end IS NULL OR current_period_end <= now())`, subscriptionID, transactionID)
 	}
