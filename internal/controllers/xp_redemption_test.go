@@ -231,7 +231,7 @@ func TestXPReservationsConcurrencyExpiryConsumptionAndOwnership(t *testing.T) {
 	if err = json.NewDecoder(res.Body).Decode(&balance); err != nil {
 		t.Fatal(err)
 	}
-	if res.StatusCode != 200 || balance["reserved_xp"] != float64(0) || balance["redemption_enabled"] != true {
+	if res.StatusCode != 200 || balance["reserved_xp"] != float64(0) || balance["redemption_enabled"] != false {
 		t.Fatal(balance)
 	}
 }

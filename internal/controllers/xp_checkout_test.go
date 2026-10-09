@@ -24,7 +24,7 @@ func TestXPCheckoutQuoteAndRepeatedVerifiedPayment(t *testing.T) {
 }
 
 func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
-	points := xpDiscount(650, roundMoney(sellerPrice*0.01), "NGN")
+	points := 0 // New quotes ignore use_xp, including requests from older APKs.
 	netFee := roundMoney(sellerPrice*0.01 - float64(points))
 	paidTotal := roundMoney(sellerPrice + netFee)
 	db := settlementTestDB(t)
@@ -115,11 +115,19 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	if noXP["grand_total"] != roundMoney(sellerPrice*1.01) || noXP["xp_available"] != float64(650) {
 		t.Fatal(noXP)
 	}
-	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", first["order_id"].(string), user, "NG", paidTotal, "NGN", "expired", "card", "RS-seller"); err == nil {
-		t.Fatal("replaced quote accepted")
-	}
 	final := quote(true)
 	order := final["order_id"].(string)
+	// Simulate a discount quote issued before retirement. It must still settle.
+	points = xpDiscount(650, roundMoney(sellerPrice*0.01), "NGN")
+	netFee = roundMoney(sellerPrice*0.01 - float64(points))
+	paidTotal = roundMoney(sellerPrice + netFee)
+	if _, err = db.Exec(ctx, `UPDATE orders SET xp_discount=$2,platform_fee=$3,total_amount=$4 WHERE id=$1`, order, points, netFee, paidTotal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO xp_redemptions(order_id,user_id,points) VALUES($1,$2,$3)`, order, user, points); err != nil {
+		t.Fatal(err)
+	}
+
 	ref := newPaymentReference(order)
 	if err = recordOrderPaymentAttempt(ctx, db, "flutterwave", order, user, "NG", paidTotal, "NGN", ref, "card", "RS-seller"); err != nil {
 		t.Fatal(err)

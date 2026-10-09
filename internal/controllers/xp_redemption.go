@@ -8,7 +8,7 @@ import (
 	"math"
 )
 
-const xpUsage = " XP can reduce only the Atlantic Express service fee on eligible NGN product orders: 1 XP = NGN 1. It cannot pay for seller products, delivery or Flutterwave charges, and cannot be withdrawn."
+const xpUsage = " 1 XP = NGN 1. Withdraw at least 1,000 XP to your Nigerian bank account after admin review. Existing points remain eligible. XP cannot be used at checkout."
 
 func xpDiscount(points int, fee float64, currency string) int {
 	if currency != "NGN" || points <= 0 || math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 1 {

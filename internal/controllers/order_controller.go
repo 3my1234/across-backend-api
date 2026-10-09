@@ -180,6 +180,8 @@ func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
 	if orderProviderID == nil || (fulfillmentMode != "merchant_local" && fulfillmentMode != "merchant_cross_border") {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "this product does not have seller-managed fulfilment")
 	}
+	// Retire new discounts; existing payment reservations can still reconcile.
+	req.UseXP = false
 	// Sellers publish the complete product price for both local and imported
 	// stock. Atlantic Express adds one clearly disclosed marketplace service
 	// fee; Flutterwave handles its own processing and statutory deductions.

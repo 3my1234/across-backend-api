@@ -1363,7 +1363,7 @@ func (m *ProviderMarketplaceController) ReportListing(c *fiber.Ctx) error {
 }
 
 func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
-	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,listing_limit,features FROM provider_subscription_plans WHERE is_active=true ORDER BY amount_ngn,id`)
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,listing_limit,features,flutterwave_plan_id IS NOT NULL FROM provider_subscription_plans WHERE is_active=true ORDER BY amount_ngn,id`)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1374,12 +1374,13 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		var amount float64
 		var limit int
 		var features []byte
-		if err := rows.Scan(&id, &code, &name, &desc, &amount, &limit, &features); err != nil {
+		var cardAvailable bool
+		if err := rows.Scan(&id, &code, &name, &desc, &amount, &limit, &features, &cardAvailable); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		var f map[string]any
 		_ = json.Unmarshal(features, &f)
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f})
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "card_available": cardAvailable, "banktransfer_available": true})
 	}
 	return c.JSON(fiber.Map{"items": items, "transfer_months": []int{1, 3, 6, 12}})
 }

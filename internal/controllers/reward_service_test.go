@@ -7,9 +7,8 @@ func TestPurchaseXP(t *testing.T) {
 		total float64
 		want  int
 	}{
-		{0, 1}, {999.99, 1}, {1000, 2}, {9999.99, 2},
-		{10000, 5}, {99999.99, 5}, {100000, 10},
-		{499999.99, 10}, {500000, 25},
+		{0, 0}, {999.99, 0}, {1000, 1}, {9999.99, 9},
+		{10000, 10}, {25000, 25}, {100000, 25},
 	}
 	for _, test := range cases {
 		if got := purchaseXP(test.total); got != test.want {

@@ -39,7 +39,7 @@ func (x *XPController) GetBalance(c *fiber.Ctx) error {
 	if err = lockXPUser(c.Context(), tx, userID); err != nil {
 		return err
 	}
-	var ready bool
+	var ready, withdrawalReady bool
 	if err = tx.QueryRow(c.Context(), `SELECT to_regclass('xp_redemptions') IS NOT NULL`).Scan(&ready); err != nil {
 		return err
 	}
@@ -55,11 +55,14 @@ func (x *XPController) GetBalance(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(500, "XP balance unavailable")
 	}
+	if err = tx.QueryRow(c.Context(), `SELECT to_regclass('xp_withdrawals') IS NOT NULL`).Scan(&withdrawalReady); err != nil {
+		return err
+	}
 	if err = tx.Commit(c.Context()); err != nil {
 		return err
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"xp": available, "reserved_xp": reserved, "total_xp": available + reserved, "naira_value": available, "redemption_enabled": ready, "usage": strings.TrimSpace(xpUsage)})
+	return c.JSON(fiber.Map{"xp": available, "reserved_xp": reserved, "total_xp": available + reserved, "naira_value": available, "redemption_enabled": false, "withdrawal_enabled": withdrawalReady, "minimum_withdrawal_xp": 1000, "usage": strings.TrimSpace(xpUsage)})
 }
 
 func (x *XPController) GetHistory(c *fiber.Ctx) error {
@@ -97,8 +100,8 @@ func (x *XPController) AwardPurchaseXP(c *fiber.Ctx) error {
 	if err := x.db.QueryRow(c.Context(), `SELECT order_status::text, total_amount FROM orders WHERE id = $1 AND user_id = $2`, orderID, userID).Scan(&orderStatus, &total); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "order not found")
 	}
-	if orderStatus != "Paid" && orderStatus != "Shipped" && orderStatus != "Delivered" && orderStatus != "Completed" {
-		return fiber.NewError(fiber.StatusConflict, "purchase reward is available after payment confirmation")
+	if orderStatus != "Completed" {
+		return fiber.NewError(fiber.StatusConflict, "purchase reward is available after delivery completion")
 	}
 	awarded, amount, err := x.rewards.AwardPurchase(c.Context(), userID, orderID, total)
 	if err != nil {

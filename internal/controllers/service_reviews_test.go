@@ -112,7 +112,7 @@ func TestServiceReviewsOwnershipDiscoveryAndConcurrentTotals(t *testing.T) {
 	}
 	call("PUT", path, buyer, review(0, "Invalid"), 422)
 	call("PUT", path, buyer, review(5, strings.Repeat("x", 1001)), 422)
-	if got := call("PUT", path, buyer, review(5, "Great work"), 200); got["xp_awarded"] != float64(10) {
+	if got := call("PUT", path, buyer, review(5, "Great work"), 200); got["xp_awarded"] != float64(reviewRewardXP) {
 		t.Fatal(got)
 	}
 	if got := call("PUT", path, buyer, review(3, "Updated experience"), 200); got["xp_awarded"] != float64(0) {
