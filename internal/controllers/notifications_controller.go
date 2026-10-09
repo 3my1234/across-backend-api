@@ -218,3 +218,55 @@ func notifyBatchUsers(ctx context.Context, db *pgxpool.Pool, batchID, notificati
 	}
 	return rows.Err()
 }
+
+// TestPush uses the same durable delivery queue as order notifications, scoped
+// to the current device. A local notification cannot verify this path.
+func (nc *NotificationsController) TestPush(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := c.BodyParser(&req); err != nil || !expoPushTokenPattern.MatchString(strings.TrimSpace(req.Token)) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid push token")
+	}
+	tx, err := nc.db.Begin(c.Context())
+	if err != nil {
+		return fiber.NewError(503, "notification test unavailable")
+	}
+	defer tx.Rollback(c.Context())
+	var tokenID string
+	var sound bool
+	if err := tx.QueryRow(c.Context(), `SELECT id::text,sound_enabled FROM user_push_tokens
+ WHERE user_id=$1::uuid AND expo_push_token=$2 AND disabled_at IS NULL FOR UPDATE`, userID, strings.TrimSpace(req.Token)).Scan(&tokenID, &sound); err != nil {
+		return fiber.NewError(409, "Register this phone for notifications before testing")
+	}
+	if !sound {
+		return fiber.NewError(409, "Turn notification sound on before testing")
+	}
+	var recent bool
+	if err := tx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM notifications WHERE user_id=$1::uuid
+ AND type='sound_test' AND data->>'test_push_token_id'=$2 AND created_at>now()-interval '30 seconds')`, userID, tokenID).Scan(&recent); err != nil {
+		return err
+	}
+	if recent {
+		return fiber.NewError(429, "Please wait 30 seconds before testing again")
+	}
+	var id string
+	if err := tx.QueryRow(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,is_read)
+ VALUES($1::uuid,'sound_test','Atl notification sound test','This notification came from the same server delivery service as your order updates.',
+ jsonb_build_object('notification_type','sound_test','test_push_token_id',$2::text),true) RETURNING id::text`, userID, tokenID).Scan(&id); err != nil {
+		return err
+	}
+	// The insert trigger normally queues every registered device; this test is
+	// deliberately for the phone that requested it.
+	if _, err := tx.Exec(c.Context(), `DELETE FROM notification_push_deliveries WHERE notification_id=$1::uuid AND push_token_id<>$2::uuid`, id, tokenID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(c.Context(), `INSERT INTO notification_push_deliveries(notification_id,push_token_id) VALUES($1::uuid,$2::uuid) ON CONFLICT DO NOTHING`, id, tokenID); err != nil {
+		return err
+	}
+	if err := tx.Commit(c.Context()); err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"queued": true, "notification_id": id})
+}
