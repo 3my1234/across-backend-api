@@ -190,6 +190,21 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// Auto-confirm is a settlement safeguard, not a delivery operation.
 	adminRoutes.Post("/deliveries/auto-confirm", superOnly, ops.AutoConfirmDeliveries)
 
+	adminRoutes.Get("/waitlist", superOnly, waitlist.AdminList)
+	adminRoutes.Get("/waitlist/export", superOnly, waitlist.AdminExport)
+	adminRoutes.Get("/xp/withdrawals", superOnly, xpController.AdminListWithdrawals)
+	adminRoutes.Patch("/xp/withdrawals/:withdrawal_id", superOnly, xpController.AdminReviewWithdrawal)
+	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)
+	adminRoutes.Get("/support/tickets/:ticket_id/messages", catalogOnly, supportController.AdminGetTicketMessages)
+	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
+	adminRoutes.Post("/support/tickets/:ticket_id/close", catalogOnly, supportController.AdminCloseTicket)
+	adminRoutes.Get("/analytics/daily-sales", catalogOnly, analyticsController.GetDailySales)
+	adminRoutes.Get("/analytics/complaints", catalogOnly, analyticsController.ListComplaints)
+	adminRoutes.Post("/analytics/complaints", catalogOnly, analyticsController.CreateComplaint)
+	adminRoutes.Post("/analytics/complaints/:complaint_id/resolve", catalogOnly, analyticsController.ResolveComplaint)
+	adminRoutes.Get("/analytics/profit-loss", superOnly, analyticsController.GetProfitLoss)
+
+	// Register every admin endpoint before the broad customer auth group.
 	authed := v1.Group("", middleware.RequireAuth(cfg, db))
 	authed.Get("/auth/session", authController.Session)
 	authed.Get("/profile/bootstrap", orders.BootstrapProfile)
@@ -273,10 +288,6 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/xp/history", xpController.GetHistory)
 	authed.Get("/xp/withdrawals", xpController.ListWithdrawals)
 	authed.Post("/xp/withdrawals", xpController.RequestWithdrawal)
-	adminRoutes.Get("/waitlist", superOnly, waitlist.AdminList)
-	adminRoutes.Get("/waitlist/export", superOnly, waitlist.AdminExport)
-	adminRoutes.Get("/xp/withdrawals", superOnly, xpController.AdminListWithdrawals)
-	adminRoutes.Patch("/xp/withdrawals/:withdrawal_id", superOnly, xpController.AdminReviewWithdrawal)
 	authed.Post("/orders/:order_id/xp-award", xpController.AwardPurchaseXP)
 
 	// Support Tickets
@@ -286,19 +297,10 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/support/tickets/:ticket_id/reply", supportController.UserReply)
 
 	// Admin Support Tickets
-	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)
-	adminRoutes.Get("/support/tickets/:ticket_id/messages", catalogOnly, supportController.AdminGetTicketMessages)
-	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
-	adminRoutes.Post("/support/tickets/:ticket_id/close", catalogOnly, supportController.AdminCloseTicket)
 
 	// Analytics (Admin I and Super Admin)
-	adminRoutes.Get("/analytics/daily-sales", catalogOnly, analyticsController.GetDailySales)
-	adminRoutes.Get("/analytics/complaints", catalogOnly, analyticsController.ListComplaints)
-	adminRoutes.Post("/analytics/complaints", catalogOnly, analyticsController.CreateComplaint)
-	adminRoutes.Post("/analytics/complaints/:complaint_id/resolve", catalogOnly, analyticsController.ResolveComplaint)
 
 	// Profit/Loss (Super Admin only)
-	adminRoutes.Get("/analytics/profit-loss", superOnly, analyticsController.GetProfitLoss)
 
 	// Profile
 	authed.Get("/profile", profileController.GetProfile)

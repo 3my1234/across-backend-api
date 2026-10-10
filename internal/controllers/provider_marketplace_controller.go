@@ -1766,7 +1766,9 @@ func (m *ProviderMarketplaceController) validateActiveProviderPlans(ctx context.
 	}
 	for _, item := range plans {
 		if item.gatewayID == nil {
-			return fiber.NewError(fiber.StatusConflict, "every active subscription plan needs a matching Flutterwave plan")
+			// Prepaid bank-transfer tiers do not use recurring payment plans.
+			// Card checkout stays disabled until a matching gateway ID is linked.
+			continue
 		}
 		if err := m.validateMonthlyPaymentPlan(ctx, *item.gatewayID, item.amount); err != nil {
 			return err

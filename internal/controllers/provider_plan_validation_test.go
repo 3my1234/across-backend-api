@@ -44,3 +44,40 @@ func TestProviderCheckoutRejectsMismatchedGatewayPlan(t *testing.T) {
 		})
 	}
 }
+
+func TestPaidAccessAllowsTransferOnlyTiersAndValidatesLinkedCardPlans(t *testing.T) {
+	db := settlementTestDB(t)
+	ctx := context.Background()
+	_, err := db.Exec(ctx, `CREATE TABLE provider_subscription_plans(amount_ngn numeric,flutterwave_plan_id bigint,is_active boolean);
+	 INSERT INTO provider_subscription_plans VALUES(500,168975,true),(1000,NULL,true),(2000,NULL,true)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	client := &http.Client{Transport: paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.URL.Path != "/v3/payment-plans/168975" {
+			t.Fatalf("unexpected plan: %s", req.URL.Path)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"success","data":{"id":168975,"amount":500,"currency":"NGN","interval":"monthly","status":"active"}}`)), Header: make(http.Header)}, nil
+	})}
+	controller := &ProviderMarketplaceController{db: db, paymentProvider: &flutterwaveProvider{secretKey: "test", client: client}}
+	if err := controller.validateActiveProviderPlans(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected only the linked card tier to be checked, got %d", calls)
+	}
+	if _, err := db.Exec(ctx, `UPDATE provider_subscription_plans SET amount_ngn=600 WHERE flutterwave_plan_id=168975`); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.validateActiveProviderPlans(ctx); err == nil {
+		t.Fatal("a mismatched linked recurring tier must still block paid access")
+	}
+	if _, err := db.Exec(ctx, `UPDATE provider_subscription_plans SET is_active=false`); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.validateActiveProviderPlans(ctx); err == nil {
+		t.Fatal("paid access requires at least one active tier")
+	}
+}
