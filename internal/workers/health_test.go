@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,4 +21,23 @@ func TestMonitorDetectsAndRecoversStalledLoop(t *testing.T) {
 		t.Fatal("completed polling should restore heartbeat")
 	}
 	heartbeat(context.Background(), "email") // inline API mode has no monitor
+}
+
+func TestMonitorConcurrentPollingAndProbes(t *testing.T) {
+	m := NewMonitor()
+	ctx := WithMonitor(context.Background(), m)
+	var group sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for n := 0; n < 100; n++ {
+				heartbeat(ctx, "email")
+				if healthy, _ := m.Snapshot(); !healthy {
+					t.Error("active concurrent polling should remain healthy")
+				}
+			}
+		}()
+	}
+	group.Wait()
 }
