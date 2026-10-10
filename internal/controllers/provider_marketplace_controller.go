@@ -484,14 +484,28 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 	if payoutCurrency == "" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "seller settlement is not yet supported for this bank country")
 	}
+	// Serialize external account creation across API instances. Never retry an
+	// ambiguous gateway mutation automatically or attach another seller's account.
+	tx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer tx.Rollback(c.Context())
+	var locked bool
+	if err := tx.QueryRow(c.Context(), `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "provider-payout:"+providerID).Scan(&locked); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if !locked {
+		return fiber.NewError(fiber.StatusConflict, "your bank account is already being connected; wait a moment and refresh before trying again")
+	}
 	var existingStatus string
-	if err := m.db.QueryRow(c.Context(), `SELECT status FROM provider_payout_accounts WHERE provider_id=$1::uuid`, providerID).Scan(&existingStatus); err == nil {
-		return fiber.NewError(fiber.StatusConflict, "a settlement account is already connected; contact Atlantic Express support to replace it safely")
+	if err := tx.QueryRow(c.Context(), `SELECT status FROM provider_payout_accounts WHERE provider_id=$1::uuid`, providerID).Scan(&existingStatus); err == nil {
+		return fiber.NewError(fiber.StatusConflict, "Your payout account is already connected. To change it, contact support@atlxpres.com.")
 	} else if err != pgx.ErrNoRows {
 		return fiber.ErrInternalServerError
 	}
 	var business, phone, email string
-	if err := m.db.QueryRow(c.Context(), `SELECT business_name,contact_phone,contact_email FROM provider_organizations WHERE id=$1::uuid`, providerID).Scan(&business, &phone, &email); err != nil {
+	if err := tx.QueryRow(c.Context(), `SELECT business_name,contact_phone,contact_email FROM provider_organizations WHERE id=$1::uuid`, providerID).Scan(&business, &phone, &email); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	result, err := m.paymentProvider.CreateCollectionSubaccount(c.Context(), collectionSubaccountInput{
@@ -502,6 +516,9 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 	if err != nil {
 		var providerErr *paymentProviderError
 		if errors.As(err, &providerErr) {
+			if strings.Contains(strings.ToLower(providerErr.Message), "subaccount") && strings.Contains(strings.ToLower(providerErr.Message), "already exists") {
+				return fiber.NewError(fiber.StatusConflict, "This bank account is already connected to Flutterwave. Use a different bank account, or contact support@atlxpres.com for help with its existing connection.")
+			}
 			return fiber.NewError(fiber.StatusBadGateway, providerErr.Message)
 		}
 		return fiber.NewError(fiber.StatusBadGateway, "could not connect the Flutterwave settlement account")
@@ -510,7 +527,7 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 	if len(last4) > 4 {
 		last4 = last4[len(last4)-4:]
 	}
-	_, err = m.db.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		INSERT INTO provider_payout_accounts(
 			provider_id,country_code,currency_code,account_bank,account_number_last4,
 			account_name,bank_name,flutterwave_subaccount_id,flutterwave_subaccount_numeric_id,status
@@ -518,6 +535,9 @@ func (m *ProviderMarketplaceController) ConfigurePayoutAccount(c *fiber.Ctx) err
 	`, providerID, country, payoutCurrency, bank, last4,
 		strings.TrimSpace(result.AccountName), strings.TrimSpace(result.BankName),
 		result.SubaccountID, result.NumericID)
+	if err == nil {
+		err = tx.Commit(c.Context())
+	}
 	if err != nil {
 		log.Printf("Flutterwave subaccount created but local settlement save failed provider_id=%s subaccount_id=%s: %v", providerID, result.SubaccountID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "Flutterwave connected the account, but Atlantic Express could not finish saving it; contact support before retrying")
