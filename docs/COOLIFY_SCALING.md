@@ -1,6 +1,7 @@
 # Atlantic Express production scaling on Coolify
 
-The repository now builds two processes from one Docker image:
+The main Dockerfile builds these processes. A separate `Dockerfile.worker`
+starts the worker by default for Coolify Dockerfile resources:
 
 - API: `/app/across-api`
 - durable background worker: `/app/across-worker`
@@ -19,18 +20,21 @@ job.
 2. Add a private Redis resource in Coolify with persistence and a password.
    Set `REDIS_URL` and `REDIS_OPTIONAL=false` on the API.
 3. Duplicate the backend resource as **atlxpres-worker**. Use the same repository,
-   branch, Dockerfile, database, Redis, SES, Expo, and application secrets.
+   branch, database, Redis, SES, Expo, and application secrets.
+   In the worker resource's General/Build configuration, set **Dockerfile Location**
+   to `/Dockerfile.worker` (keep the existing Base Directory). The main API resource
+   must continue using `/Dockerfile`.
    Leave `DATABASE_READ_URL` blank on worker resources because workers never
    serve catalogue reads. Start with `DB_MAX_CONNS=10` and `DB_MIN_CONNS=1`.
-   Override its start command with:
-
-   ```
-   /app/across-worker
-   ```
-
    Do not attach a public domain to the worker.
    Configure its internal health check as `/api/v1/health` on port 8080.
-4. Confirm the worker logs show `Atlantic Express background worker started`.
+   Keep `RUN_INLINE_WORKERS=false` on the dedicated worker; its worker entry point
+   runs background jobs independently of that API-only setting.
+4. Redeploy the worker from the same release as the API. Confirm the worker logs
+   show `Atlantic Express background worker started`, and its terminal command
+   `ps -o pid,comm` shows `across-worker` rather than `across-api`. A healthy API
+   running under a resource named worker does not process queues with inline
+   workers disabled. Inspect the queued email's attempts/status after startup.
 5. Change the API resource to `RUN_INLINE_WORKERS=false` and redeploy it.
    This prevents the API replicas from also running the worker loops.
 6. Scale the API to at least two replicas behind Coolify's proxy. Scale workers

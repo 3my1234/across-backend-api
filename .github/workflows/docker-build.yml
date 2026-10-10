@@ -10,9 +10,12 @@ on:
 jobs:
   docker-build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile: [Dockerfile, Dockerfile.worker]
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Build production image
-        run: docker build --progress=plain --tag across-backend:ci .
+        run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .
