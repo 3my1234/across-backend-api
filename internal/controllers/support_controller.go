@@ -315,12 +315,14 @@ func (s *SupportController) AdminReply(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to update ticket")
 	}
+	// Persist notification and reply together; the notification insert trigger
+	// queues registered devices in this same transaction for durable delivery.
+	if err := insertNotification(c.Context(), tx, userID, "", nil, "ticket_reply", "Atlantic Express Support", "Support replied to your message.", map[string]any{"ticket_id": ticketID, "notification_type": "ticket_reply"}, ""); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "could not queue the support reply notification; reply was not saved")
+	}
 	if err := tx.Commit(c.Context()); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to send reply")
 	}
-
-	// Notify the user
-	CreateNotification(c.Context(), s.db, userID, "", nil, "ticket_reply", "Support Ticket Updated", "An admin has replied to your support ticket.", nil)
 
 	return c.JSON(fiber.Map{"message": "Reply sent"})
 }

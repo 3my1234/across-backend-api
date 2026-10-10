@@ -1856,7 +1856,8 @@ func (m *ProviderMarketplaceController) AdminUpsertPlan(c *fiber.Ctx) error {
 
 func (m *ProviderMarketplaceController) AdminChangePlanPrice(c *fiber.Ctx) error {
 	var req struct {
-		AmountNGN *int64 `json:"amount_ngn"`
+		AmountNGN         *int64 `json:"amount_ngn"`
+		FlutterwavePlanID *int64 `json:"flutterwave_plan_id"`
 	}
 	if err := c.BodyParser(&req); err != nil || req.AmountNGN == nil || *req.AmountNGN < 1 || *req.AmountNGN > 100000000 {
 		return fiber.NewError(fiber.StatusBadRequest, "amount_ngn must be a positive whole-naira amount")
@@ -1872,7 +1873,15 @@ func (m *ProviderMarketplaceController) AdminChangePlanPrice(c *fiber.Ctx) error
 		return fiber.ErrInternalServerError
 	}
 	newGatewayID := int64(0)
-	if oldGatewayID != nil {
+	if req.FlutterwavePlanID != nil {
+		if *req.FlutterwavePlanID < 1 {
+			return fiber.NewError(fiber.StatusBadRequest, "flutterwave_plan_id must be positive")
+		}
+		if err := m.validateMonthlyPaymentPlan(c.Context(), *req.FlutterwavePlanID, float64(*req.AmountNGN)); err != nil {
+			return err
+		}
+		newGatewayID = *req.FlutterwavePlanID
+	} else if oldGatewayID != nil {
 		gatewayPlan, err := m.paymentProvider.GetPaymentPlan(c.Context(), *oldGatewayID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, "the linked Flutterwave plan could not be verified")
