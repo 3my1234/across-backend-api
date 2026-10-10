@@ -17,5 +17,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Check worker health and heartbeat concurrency
+        run: CGO_ENABLED=1 go test -race ./cmd/worker ./internal/workers
       - name: Build production image
         run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .

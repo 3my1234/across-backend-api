@@ -28,6 +28,8 @@ job.
    serve catalogue reads. Start with `DB_MAX_CONNS=10` and `DB_MIN_CONNS=1`.
    Do not attach a public domain to the worker.
    Configure its internal health check as `/api/v1/health` on port 8080.
+   The worker also accepts `/` for Coolify's default HTTP probe. Both report
+   `service: worker` and consumer heartbeat health; unknown paths return 404.
    Keep `RUN_INLINE_WORKERS=false` on the dedicated worker; its worker entry point
    runs background jobs independently of that API-only setting.
 4. Redeploy the worker from the same release as the API. Confirm the worker logs
@@ -80,6 +82,23 @@ used as proof of payment.
 
 - Liveness: `/api/v1/health`
 - Readiness: `/api/v1/ready`
+
+The dedicated worker detects polling loops that stop completing. Email allows
+ten minutes, push/receipt loops two minutes, settlement loops 45 minutes,
+batch closure five minutes,
+and hourly auto-confirm two hours. A watchdog exits a stalled process so the
+container restart policy can recover it. Confirm an automatic restart policy is
+enabled on the deployed container; do not rely on an unhealthy Docker status alone
+to restart a process. Queued jobs remain in PostgreSQL and expired leases are
+retried. SMTP/provider failures are retried as jobs, rather than forcing a process
+restart for each failed delivery. The worker binds its health port before starting
+consumers and fails startup if that port cannot be bound. Readiness dependency
+checks have a three-second deadline.
+
+Loop heartbeats establish that polling is running, not that every external
+delivery succeeds. Monitor `/api/v1/admin/ops/queue-health` and delivery failure
+logs for growing backlogs, dead letters or SMTP outages; additional worker
+replicas and operational alerts still require deployment configuration.
 
 Readiness verifies primary PostgreSQL, the optional read database, and required
 Redis. It also reports current database pool usage. Email, storage, and Google

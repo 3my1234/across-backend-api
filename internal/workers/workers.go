@@ -46,6 +46,7 @@ func runSettlementReconciliationLoop(ctx context.Context, db *pgxpool.Pool, cfg 
 }
 
 func runSettlementReconciliation(ctx context.Context, db *pgxpool.Pool, cfg config.Config, client *http.Client) {
+	defer heartbeat(ctx, "settlements")
 	count, err := controllers.ReconcileFlutterwaveSettlements(ctx, db, cfg, client)
 	if err != nil {
 		log.Printf("settlement reconciliation worker error: %v", err)
@@ -72,6 +73,7 @@ func runEmailLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 }
 
 func runEmail(ctx context.Context, db *pgxpool.Pool, sender *services.EmailService) {
+	defer heartbeat(ctx, "email")
 	count, err := services.RunEmailDeliveryBatch(ctx, db, sender)
 	if err != nil {
 		log.Printf("email delivery worker error: %v", err)
@@ -98,6 +100,7 @@ func runPushLoop(ctx context.Context, db *pgxpool.Pool) {
 }
 
 func runPush(ctx context.Context, db *pgxpool.Pool, client *http.Client) {
+	defer heartbeat(ctx, "push")
 	count, err := services.RunPushDeliveryBatch(ctx, db, client)
 	if err != nil {
 		log.Printf("push notification worker error: %v", err)
@@ -119,6 +122,7 @@ func runPushReceiptLoop(ctx context.Context, db *pgxpool.Pool) {
 			if _, err := services.RunPushReceiptBatch(ctx, db, client); err != nil {
 				log.Printf("push receipt worker error: %v", err)
 			}
+			heartbeat(ctx, "push_receipts")
 		case <-ctx.Done():
 			return
 		}
@@ -140,6 +144,7 @@ func runAutoConfirmLoop(ctx context.Context, db *pgxpool.Pool) {
 }
 
 func runAutoConfirm(ctx context.Context, db *pgxpool.Pool) {
+	defer heartbeat(ctx, "auto_confirm")
 	count, err := controllers.AutoConfirmExpiredDeliveries(ctx, db)
 	if err != nil {
 		log.Printf("auto-confirm worker error: %v", err)
@@ -165,6 +170,7 @@ func runBatchClosureLoop(ctx context.Context, db *pgxpool.Pool) {
 }
 
 func runBatchClosure(ctx context.Context, db *pgxpool.Pool) {
+	defer heartbeat(ctx, "batch_closure")
 	count, err := controllers.CloseExpiredBatches(ctx, db)
 	if err != nil {
 		log.Printf("batch closure worker error: %v", err)
