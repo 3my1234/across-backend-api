@@ -2069,10 +2069,13 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 	}
 	for _, item := range items {
 		item["gateway_price_matches"] = false
-		if !item["is_active"].(bool) || item["flutterwave_plan_id"] == nil {
+		gatewayID, _ := item["flutterwave_plan_id"].(*int64)
+		// A typed nil pointer stored in an interface is not equal to nil.
+		// Transfer-only plans intentionally have no recurring gateway ID.
+		if !item["is_active"].(bool) || gatewayID == nil {
 			continue
 		}
-		gateway, err := m.paymentProvider.GetPaymentPlan(c.Context(), *item["flutterwave_plan_id"].(*int64))
+		gateway, err := m.paymentProvider.GetPaymentPlan(c.Context(), *gatewayID)
 		if err != nil {
 			item["gateway_plan_status"] = "unavailable"
 			continue
