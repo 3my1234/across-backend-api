@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -20,16 +21,17 @@ const (
 )
 
 type pushDelivery struct {
-	NotificationID string
-	OrderID        string
-	PushTokenID    string
-	Token          string
-	Title          string
-	Body           string
-	Data           json.RawMessage
-	SoundEnabled   bool
-	Attempts       int
-	TicketID       string
+	NotificationID      string
+	OrderID             string
+	PushTokenID         string
+	Token               string
+	Title               string
+	Body                string
+	Data                json.RawMessage
+	NotificationChannel string
+	SoundEnabled        bool
+	Attempts            int
+	TicketID            string
 }
 
 func RunPushReceiptBatch(ctx context.Context, db *pgxpool.Pool, client *http.Client) (int, error) {
@@ -105,14 +107,16 @@ func RunPushReceiptBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cli
 				WHERE notification_id = $1::uuid AND push_token_id = $2::uuid
 			`, item.NotificationID, item.PushTokenID)
 		} else if receipt.Details.Error == "DeviceNotRegistered" {
+			log.Printf("push receipt rejected: notification=%s code=%s", item.NotificationID, receipt.Details.Error)
 			err = disablePushToken(ctx, db, item, receipt.Message)
 		} else {
+			log.Printf("push receipt rejected: notification=%s code=%s", item.NotificationID, receipt.Details.Error)
 			_, err = db.Exec(ctx, `
 				UPDATE notification_push_deliveries
 				SET status = 'failed', receipt_checked_at = now(),
 					last_error = left($3::text, 500), updated_at = now()
 				WHERE notification_id = $1::uuid AND push_token_id = $2::uuid
-			`, item.NotificationID, item.PushTokenID, receipt.Message)
+			`, item.NotificationID, item.PushTokenID, receipt.Details.Error+": "+receipt.Message)
 		}
 		if err != nil {
 			return checked, err
@@ -168,7 +172,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		SELECT d.notification_id::text, COALESCE(n.order_id::text, ''), d.push_token_id::text, token.expo_push_token,
-			n.title, n.body, n.data, d.attempts, token.sound_enabled
+			n.title, n.body, n.data, d.attempts, token.sound_enabled, token.notification_channel
 		FROM notification_push_deliveries d
 		JOIN notifications n ON n.id = d.notification_id
 		JOIN user_push_tokens token ON token.id = d.push_token_id AND token.disabled_at IS NULL
@@ -183,7 +187,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	deliveries := make([]pushDelivery, 0, pushBatchLimit)
 	for rows.Next() {
 		var item pushDelivery
-		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled); err != nil {
+		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled, &item.NotificationChannel); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -215,6 +219,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		data := map[string]any{}
 		_ = json.Unmarshal(item.Data, &data)
 		data["notification_id"] = item.NotificationID
+		data["sound_enabled"] = item.SoundEnabled
 		if item.OrderID != "" {
 			data["order_id"] = item.OrderID
 		}
@@ -224,7 +229,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		}
 		if item.SoundEnabled {
 			message["sound"] = "default"
-			message["channelId"] = "orders"
+			message["channelId"] = item.NotificationChannel
 		}
 		messages = append(messages, message)
 	}
@@ -269,9 +274,11 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 				WHERE notification_id = $1::uuid AND push_token_id = $2::uuid
 			`, item.NotificationID, item.PushTokenID, ticket.ID)
 		} else if ticket.Details.Error == "DeviceNotRegistered" {
+			log.Printf("push delivery rejected: notification=%s code=%s", item.NotificationID, ticket.Details.Error)
 			err = disablePushToken(ctx, db, item, ticket.Message)
 		} else {
-			err = retryPushDelivery(ctx, db, item, ticket.Message)
+			log.Printf("push delivery rejected: notification=%s code=%s", item.NotificationID, ticket.Details.Error)
+			err = retryPushDelivery(ctx, db, item, ticket.Details.Error+": "+ticket.Message)
 		}
 		if err != nil {
 			return index, err

@@ -103,9 +103,10 @@ func (nc *NotificationsController) MarkAllRead(c *fiber.Ctx) error {
 func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	var req struct {
-		Token        string `json:"token"`
-		Platform     string `json:"platform"`
-		SoundEnabled *bool  `json:"sound_enabled"`
+		Token               string `json:"token"`
+		Platform            string `json:"platform"`
+		SoundEnabled        *bool  `json:"sound_enabled"`
+		NotificationChannel string `json:"notification_channel"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid push token payload")
@@ -114,6 +115,14 @@ func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 	req.Platform = strings.ToLower(strings.TrimSpace(req.Platform))
 	if !expoPushTokenPattern.MatchString(req.Token) || (req.Platform != "android" && req.Platform != "ios") {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid push token")
+	}
+
+	req.NotificationChannel = strings.TrimSpace(req.NotificationChannel)
+	if req.NotificationChannel == "" || req.Platform == "ios" {
+		req.NotificationChannel = "orders"
+	}
+	if req.NotificationChannel != "orders" && req.NotificationChannel != "atl-updates-v2" {
+		return fiber.NewError(fiber.StatusBadRequest, "unsupported notification channel")
 	}
 
 	soundEnabled := true
@@ -127,17 +136,18 @@ func (nc *NotificationsController) RegisterPushToken(c *fiber.Ctx) error {
 	defer tx.Rollback(c.Context())
 	var tokenID string
 	if err := tx.QueryRow(c.Context(), `
-		INSERT INTO user_push_tokens(user_id, expo_push_token, platform, sound_enabled)
-		VALUES ($1::uuid, $2::text, $3::text, $4::boolean)
+		INSERT INTO user_push_tokens(user_id, expo_push_token, platform, sound_enabled, notification_channel)
+		VALUES ($1::uuid, $2::text, $3::text, $4::boolean, $5::text)
 		ON CONFLICT (expo_push_token) DO UPDATE
 		SET user_id = EXCLUDED.user_id,
 			platform = EXCLUDED.platform,
 			sound_enabled = EXCLUDED.sound_enabled,
+ notification_channel = EXCLUDED.notification_channel,
 			disabled_at = NULL,
 			last_seen_at = now(),
 			updated_at = now()
 		RETURNING id::text
-	`, userID, req.Token, req.Platform, soundEnabled).Scan(&tokenID); err != nil {
+	`, userID, req.Token, req.Platform, soundEnabled, req.NotificationChannel).Scan(&tokenID); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "push registration failed")
 	}
 	// Backfill only recent unread notifications. This covers the race between
