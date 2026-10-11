@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,8 @@ type providerSubscriptionSnapshot struct {
 }
 
 type ProviderSubscriptionPolicy struct {
+	// Serialize refreshes and saves so an older database read cannot undo a saved choice.
+	mu       sync.Mutex
 	db       *pgxpool.Pool
 	fallback providerSubscriptionSnapshot
 	current  atomic.Pointer[providerSubscriptionSnapshot]
@@ -48,6 +51,8 @@ func (p *ProviderSubscriptionPolicy) Current(at time.Time) ProviderSubscriptionA
 }
 
 func (p *ProviderSubscriptionPolicy) Refresh(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var enforced *bool
 	var startAt, updatedAt *time.Time
 	if err := p.db.QueryRow(ctx, `SELECT enforced,start_at,updated_at FROM provider_subscription_access WHERE singleton=TRUE`).Scan(&enforced, &startAt, &updatedAt); err != nil {
@@ -62,6 +67,8 @@ func (p *ProviderSubscriptionPolicy) Refresh(ctx context.Context) error {
 }
 
 func (p *ProviderSubscriptionPolicy) Set(ctx context.Context, enforced bool, startAt *time.Time, adminID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	tx, err := p.db.Begin(ctx)
 	if err != nil {
 		return err
