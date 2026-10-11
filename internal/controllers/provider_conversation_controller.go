@@ -229,13 +229,6 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	if err != nil || !authorized {
 		return fiber.ErrNotFound
 	}
-	readColumn := "buyer_last_read_at"
-	if provider {
-		readColumn = "provider_last_read_at"
-	}
-	if _, err = m.db.Exec(c.Context(), "UPDATE provider_conversations SET "+readColumn+"=now() WHERE id=$1::uuid", c.Params("conversation_id")); err != nil {
-		return fiber.ErrInternalServerError
-	}
 	page, err := parseAdminPage(c)
 	if err != nil {
 		return err
@@ -272,6 +265,18 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 		last := items[len(items)-1]
 		cursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
 	}
+	rows.Close()
+	// Compatibility for earlier apps; new clients acknowledge after displaying.
+	if page.CursorTime == nil && c.QueryBool("mark_read", true) && len(items) > 0 {
+		column := "buyer_last_read_at"
+		if provider {
+			column = "provider_last_read_at"
+		}
+		if _, err = m.db.Exec(c.Context(), "UPDATE provider_conversations SET "+column+"=GREATEST(COALESCE("+column+",'epoch'::timestamptz),$2) WHERE id=$1::uuid", c.Params("conversation_id"), items[0]["created_at"]); err != nil {
+			return fiber.ErrInternalServerError
+		}
+	}
+
 	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
 		items[left], items[right] = items[right], items[left]
 	}
@@ -354,4 +359,43 @@ func (m *ProviderMarketplaceController) SendBuyerConversationMessage(c *fiber.Ct
 
 func (m *ProviderMarketplaceController) SendProviderConversationMessage(c *fiber.Ctx) error {
 	return m.sendConversationMessage(c, true)
+}
+
+func (m *ProviderMarketplaceController) BuyerMarkConversationRead(c *fiber.Ctx) error {
+	return m.markConversationRead(c, false)
+}
+func (m *ProviderMarketplaceController) ProviderMarkConversationRead(c *fiber.Ctx) error {
+	return m.markConversationRead(c, true)
+}
+func (m *ProviderMarketplaceController) markConversationRead(c *fiber.Ctx, provider bool) error {
+	var req struct {
+		MessageID string `json:"message_id"`
+	}
+	if c.BodyParser(&req) != nil {
+		return fiber.ErrBadRequest
+	}
+	if _, err := uuid.Parse(req.MessageID); err != nil {
+		return fiber.ErrBadRequest
+	}
+	actor, _ := c.Locals("user_id").(string)
+	column, owner, sender := "buyer_last_read_at", "user_id", "provider"
+	if provider {
+		var err error
+		actor, _, err = m.providerForUser(c.Context(), actor)
+		if err != nil {
+			return fiber.ErrForbidden
+		}
+		column, owner, sender = "provider_last_read_at", "provider_id", "buyer"
+	}
+	var cutoff time.Time
+	query := `UPDATE provider_conversations c SET ` + column + `=GREATEST(COALESCE(c.` + column + `,'epoch'::timestamptz),m.created_at)
+ FROM provider_conversation_messages m WHERE c.id=$1::uuid AND c.` + owner + `=$2::uuid AND m.conversation_id=c.id AND m.id=$3::uuid RETURNING c.` + column
+	if err := m.db.QueryRow(c.Context(), query, c.Params("conversation_id"), actor, req.MessageID).Scan(&cutoff); err != nil {
+		return fiber.ErrNotFound
+	}
+	var unread int
+	if err := m.db.QueryRow(c.Context(), `SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND sender_type=$2 AND created_at>$3`, c.Params("conversation_id"), sender, cutoff).Scan(&unread); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"unread_count": unread})
 }

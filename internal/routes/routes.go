@@ -196,6 +196,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Patch("/xp/withdrawals/:withdrawal_id", superOnly, xpController.AdminReviewWithdrawal)
 	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)
 	adminRoutes.Get("/support/tickets/:ticket_id/messages", catalogOnly, supportController.AdminGetTicketMessages)
+	adminRoutes.Post("/support/tickets/:ticket_id/read", catalogOnly, supportController.AdminMarkTicketRead)
 	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
 	adminRoutes.Post("/support/tickets/:ticket_id/close", catalogOnly, supportController.AdminCloseTicket)
 	adminRoutes.Get("/analytics/daily-sales", catalogOnly, analyticsController.GetDailySales)
@@ -267,6 +268,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Patch("/providers/me/notifications/read-all", marketplaceController.MarkProviderNotificationsRead)
 	authed.Get("/providers/me/conversations", marketplaceController.ListProviderConversations)
 	authed.Get("/providers/me/conversations/:conversation_id/messages", marketplaceController.ProviderConversationMessages)
+	authed.Post("/providers/me/conversations/:conversation_id/read", marketplaceController.ProviderMarkConversationRead)
 	authed.Post("/providers/me/conversations/:conversation_id/messages", marketplaceController.SendProviderConversationMessage)
 	authed.Post("/providers/me/subscription-checkout", marketplaceController.SubscriptionCheckout)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
@@ -280,6 +282,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/marketplace/chat-images/presign", marketplaceController.PresignChatImage)
 	authed.Get("/marketplace/conversations", marketplaceController.ListBuyerConversations)
 	authed.Get("/marketplace/conversations/:conversation_id/messages", marketplaceController.BuyerConversationMessages)
+	authed.Post("/marketplace/conversations/:conversation_id/read", marketplaceController.BuyerMarkConversationRead)
 	authed.Post("/marketplace/conversations/:conversation_id/messages", marketplaceController.SendBuyerConversationMessage)
 
 	// XP System
@@ -294,6 +297,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/support/tickets", supportController.CreateTicket)
 	authed.Get("/support/tickets", supportController.ListMyTickets)
 	authed.Get("/support/tickets/:ticket_id/messages", supportController.GetTicketMessages)
+	authed.Post("/support/tickets/:ticket_id/read", supportController.MarkTicketRead)
 	authed.Post("/support/tickets/:ticket_id/reply", supportController.UserReply)
 
 	// Admin Support Tickets

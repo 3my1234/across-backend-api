@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,6 +29,7 @@ type pushDelivery struct {
 	Title               string
 	Body                string
 	Data                json.RawMessage
+	ExpoProjectID       string
 	NotificationChannel string
 	SoundEnabled        bool
 	Attempts            int
@@ -165,6 +167,26 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		return 0, err
 	}
 
+	// An older worker can reject recovered jobs during a rolling deployment.
+	// Recover only its generic error, from a bounded recent unread set. New
+	// dispatch records the specific code, so a genuinely invalid token is not looped.
+	if _, err := db.Exec(ctx, `
+		WITH recent AS (
+			SELECT id FROM notifications
+			WHERE created_at >= now() - interval '48 hours' AND is_read = false
+			ORDER BY created_at DESC, id DESC LIMIT 500
+		)
+		UPDATE notification_push_deliveries d
+		SET status = 'retry', attempts = 0, next_attempt_at = now(), updated_at = now(),
+			last_error = 'requeued after push request isolation fix'
+		FROM recent, user_push_tokens token
+		WHERE recent.id = d.notification_id AND token.id = d.push_token_id
+		  AND token.disabled_at IS NULL AND d.status = 'failed'
+		  AND d.last_error = 'expo push HTTP 400'
+	`); err != nil {
+		return 0, err
+	}
+
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -172,7 +194,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		SELECT d.notification_id::text, COALESCE(n.order_id::text, ''), d.push_token_id::text, token.expo_push_token,
-			n.title, n.body, n.data, d.attempts, token.sound_enabled, token.notification_channel
+			n.title, n.body, n.data, d.attempts, token.sound_enabled, token.notification_channel, COALESCE(token.expo_project_id::text,'')
 		FROM notification_push_deliveries d
 		JOIN notifications n ON n.id = d.notification_id
 		JOIN user_push_tokens token ON token.id = d.push_token_id AND token.disabled_at IS NULL
@@ -187,7 +209,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	deliveries := make([]pushDelivery, 0, pushBatchLimit)
 	for rows.Next() {
 		var item pushDelivery
-		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled, &item.NotificationChannel); err != nil {
+		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled, &item.NotificationChannel, &item.ExpoProjectID); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -213,6 +235,26 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	if len(deliveries) == 0 {
 		return 0, nil
 	}
+
+	// Expo requires each request to contain tokens from one project only.
+	// Legacy registrations have no project metadata; rejected batches are split
+	// until incompatible or malformed tokens cannot block healthy devices.
+	groups := map[string][]pushDelivery{}
+	for _, item := range deliveries {
+		groups[item.ExpoProjectID] = append(groups[item.ExpoProjectID], item)
+	}
+	submitted := 0
+	for _, group := range groups {
+		count, err := sendPushDeliveries(ctx, db, client, group)
+		submitted += count
+		if err != nil {
+			return submitted, err
+		}
+	}
+	return submitted, nil
+}
+
+func sendPushDeliveries(ctx context.Context, db *pgxpool.Pool, client *http.Client, deliveries []pushDelivery) (int, error) {
 
 	messages := make([]map[string]any, 0, len(deliveries))
 	for _, item := range deliveries {
@@ -256,7 +298,19 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 		return 0, retryPushDeliveries(ctx, db, deliveries, fmt.Sprintf("expo push HTTP %d", resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, failPushDeliveries(ctx, db, deliveries, fmt.Sprintf("expo push HTTP %d", resp.StatusCode))
+		code := expoRequestErrorCode(body)
+		message := fmt.Sprintf("expo push HTTP %d: %s", resp.StatusCode, code)
+		log.Printf("push request rejected: http=%d code=%s deliveries=%d", resp.StatusCode, code, len(deliveries))
+		if resp.StatusCode == http.StatusBadRequest && len(deliveries) > 1 {
+			middle := len(deliveries) / 2
+			first, err := sendPushDeliveries(ctx, db, client, deliveries[:middle])
+			if err != nil {
+				return first, err
+			}
+			second, err := sendPushDeliveries(ctx, db, client, deliveries[middle:])
+			return first + second, err
+		}
+		return 0, failPushDeliveries(ctx, db, deliveries, message)
 	}
 	var decoded struct {
 		Data []expoTicket `json:"data"`
@@ -264,9 +318,11 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	if err := json.Unmarshal(body, &decoded); err != nil || len(decoded.Data) != len(deliveries) {
 		return 0, retryPushDeliveries(ctx, db, deliveries, "invalid Expo push response")
 	}
+	submitted := 0
 	for index, ticket := range decoded.Data {
 		item := deliveries[index]
 		if ticket.Status == "ok" && ticket.ID != "" {
+			submitted++
 			_, err = db.Exec(ctx, `
 				UPDATE notification_push_deliveries
 				SET status = 'sent', expo_ticket_id = $3::text, sent_at = now(),
@@ -281,10 +337,27 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 			err = retryPushDelivery(ctx, db, item, ticket.Details.Error+": "+ticket.Message)
 		}
 		if err != nil {
-			return index, err
+			return submitted, err
 		}
 	}
-	return len(deliveries), nil
+	return submitted, nil
+}
+
+// Keep only request error codes. Expo error details can contain device tokens.
+func expoRequestErrorCode(body []byte) string {
+	var payload struct {
+		Errors []struct {
+			Code string `json:"code"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &payload) != nil || len(payload.Errors) == 0 {
+		return "UNKNOWN_REQUEST_ERROR"
+	}
+	code := payload.Errors[0].Code
+	if len(code) == 0 || len(code) > 80 || strings.Trim(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789") != "" {
+		return "UNKNOWN_REQUEST_ERROR"
+	}
+	return code
 }
 
 func retryPushDeliveries(ctx context.Context, db *pgxpool.Pool, items []pushDelivery, message string) error {
