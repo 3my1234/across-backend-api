@@ -96,7 +96,8 @@ func (s *SupportController) ListMyTickets(c *fiber.Ctx) error {
 		beforeID = parts[1]
 	}
 	rows, err := s.db.Query(c.Context(), `
-		SELECT id, subject, message, status, created_at, updated_at
+		SELECT id, subject, message, status, created_at, updated_at,
+        (SELECT count(*)::int FROM support_messages m WHERE m.ticket_id=support_tickets.id AND m.sender_type='admin' AND m.created_at>COALESCE(user_last_read_at,'epoch'::timestamptz))
 		FROM support_tickets
 		WHERE user_id = $1 AND ($2::text='' OR (created_at,id)<($3::timestamptz,NULLIF($2,'')::uuid))
 		ORDER BY created_at DESC,id DESC
@@ -111,16 +112,18 @@ func (s *SupportController) ListMyTickets(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, subject, message, status string
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &subject, &message, &status, &createdAt, &updatedAt); err != nil {
+		var unread int
+		if err := rows.Scan(&id, &subject, &message, &status, &createdAt, &updatedAt, &unread); err != nil {
 			return fiber.NewError(500, "ticket history unavailable")
 		}
 		tickets = append(tickets, fiber.Map{
-			"id":         id,
-			"subject":    subject,
-			"message":    message,
-			"status":     status,
-			"created_at": createdAt,
-			"updated_at": updatedAt,
+			"id":           id,
+			"subject":      subject,
+			"message":      message,
+			"status":       status,
+			"created_at":   createdAt,
+			"updated_at":   updatedAt,
+			"unread_count": unread,
 		})
 	}
 	if rows.Err() != nil {
@@ -213,7 +216,8 @@ func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid ticket status")
 	}
 	rows, err := s.db.Query(c.Context(), `
-		SELECT st.id, st.subject, st.message, st.status, u.email, st.created_at, st.updated_at
+		SELECT st.id, st.subject, st.message, st.status, u.email, st.created_at, st.updated_at,
+        (SELECT count(*)::int FROM support_messages m WHERE m.ticket_id=st.id AND m.sender_type='user' AND m.created_at>COALESCE(st.admin_last_read_at,'epoch'::timestamptz))
 		FROM support_tickets st
 		JOIN users u ON u.id = st.user_id
 		WHERE ($1 = 'all' OR st.status = $1)
@@ -232,7 +236,8 @@ func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 	for rows.Next() {
 		var id, subject, message, status, email string
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &subject, &message, &status, &email, &createdAt, &updatedAt); err != nil {
+		var unread int
+		if err := rows.Scan(&id, &subject, &message, &status, &email, &createdAt, &updatedAt, &unread); err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "ticket history could not be read")
 		}
 		if len(tickets) == page.Limit {
@@ -240,13 +245,14 @@ func (s *SupportController) AdminListTickets(c *fiber.Ctx) error {
 			break
 		}
 		tickets = append(tickets, fiber.Map{
-			"id":         id,
-			"subject":    subject,
-			"message":    message,
-			"status":     status,
-			"user_email": email,
-			"created_at": createdAt,
-			"updated_at": updatedAt,
+			"id":           id,
+			"subject":      subject,
+			"message":      message,
+			"status":       status,
+			"user_email":   email,
+			"created_at":   createdAt,
+			"updated_at":   updatedAt,
+			"unread_count": unread,
 		})
 		nextCursor = encodeAdminCursor(updatedAt, id)
 	}
@@ -399,4 +405,35 @@ func (s *SupportController) messagePage(c *fiber.Ctx, ticketID string) error {
 	}
 	c.Set("Cache-Control", "private, no-store")
 	return c.JSON(fiber.Map{"messages": messages, "next_cursor": next, "has_more": next != "", "ticket_status": ticketStatus})
+}
+
+// Acknowledge only messages fetched by the visible chat. A later arrival stays unread.
+func (s *SupportController) MarkTicketRead(c *fiber.Ctx) error      { return s.markTicketRead(c, false) }
+func (s *SupportController) AdminMarkTicketRead(c *fiber.Ctx) error { return s.markTicketRead(c, true) }
+func (s *SupportController) markTicketRead(c *fiber.Ctx, admin bool) error {
+	var req struct {
+		MessageID string `json:"message_id"`
+	}
+	if c.BodyParser(&req) != nil {
+		return fiber.ErrBadRequest
+	}
+	if _, err := uuid.Parse(req.MessageID); err != nil {
+		return fiber.ErrBadRequest
+	}
+	userID, _ := c.Locals("user_id").(string)
+	column, sender := "user_last_read_at", "admin"
+	if admin {
+		column, sender = "admin_last_read_at", "user"
+	}
+	var cutoff time.Time
+	query := `UPDATE support_tickets t SET ` + column + `=GREATEST(COALESCE(t.` + column + `,'epoch'::timestamptz),m.created_at)
+ FROM support_messages m WHERE t.id=$1::uuid AND m.ticket_id=t.id AND m.id=$2::uuid AND ($3 OR t.user_id=NULLIF($4,'')::uuid) RETURNING t.` + column
+	if err := s.db.QueryRow(c.Context(), query, c.Params("ticket_id"), req.MessageID, admin, userID).Scan(&cutoff); err != nil {
+		return fiber.ErrNotFound
+	}
+	var unread int
+	if err := s.db.QueryRow(c.Context(), `SELECT count(*)::int FROM support_messages WHERE ticket_id=$1::uuid AND sender_type=$2 AND created_at>$3`, c.Params("ticket_id"), sender, cutoff).Scan(&unread); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"unread_count": unread})
 }

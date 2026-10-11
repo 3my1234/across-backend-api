@@ -26,7 +26,7 @@ func TestRegisteredDevicesReceiveRealSupportPush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"069_device_notification_channels.sql", "048_immediate_notification_push.sql"} {
+	for _, name := range []string{"069_device_notification_channels.sql", "070_push_project_isolation.sql", "048_immediate_notification_push.sql"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		if err != nil {
 			t.Fatal(err)

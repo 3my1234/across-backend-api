@@ -15,7 +15,7 @@ func TestAdminSupportIncludesOlderAnsweredTickets(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,email text);
- CREATE TABLE support_tickets(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,subject text,message text,status text,created_at timestamptz,updated_at timestamptz);`)
+ CREATE TABLE support_tickets(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,subject text,message text,status text,created_at timestamptz,updated_at timestamptz,user_last_read_at timestamptz,admin_last_read_at timestamptz); CREATE TABLE support_messages(ticket_id uuid,sender_type text,created_at timestamptz);`)
 	if err != nil {
 		t.Fatal(err)
 	}
