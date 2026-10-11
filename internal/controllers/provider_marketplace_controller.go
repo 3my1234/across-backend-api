@@ -1738,41 +1738,15 @@ func (m *ProviderMarketplaceController) AdminProviderSubscriptionAccess(c *fiber
 	return c.JSON(policy.Current(time.Now().UTC()))
 }
 
+// Access policy changes are local operations. Gateway plan validation remains
+// in plan linking and card checkout, so an outage cannot block ending a free period.
 func (m *ProviderMarketplaceController) validateActiveProviderPlans(ctx context.Context) error {
-	rows, err := m.db.Query(ctx, `SELECT amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE is_active=TRUE`)
-	if err != nil {
+	var available bool
+	if err := m.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscription_plans WHERE is_active=TRUE AND amount_ngn>0)`).Scan(&available); err != nil {
 		return fiber.ErrInternalServerError
 	}
-	type plan struct {
-		amount    float64
-		gatewayID *int64
-	}
-	plans := []plan{}
-	for rows.Next() {
-		var item plan
-		if err := rows.Scan(&item.amount, &item.gatewayID); err != nil {
-			rows.Close()
-			return fiber.ErrInternalServerError
-		}
-		plans = append(plans, item)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return fiber.ErrInternalServerError
-	}
-	if len(plans) == 0 {
+	if !available {
 		return fiber.NewError(fiber.StatusConflict, "create an active monthly subscription plan before enabling paid access")
-	}
-	for _, item := range plans {
-		if item.gatewayID == nil {
-			// Prepaid bank-transfer tiers do not use recurring payment plans.
-			// Card checkout stays disabled until a matching gateway ID is linked.
-			continue
-		}
-		if err := m.validateMonthlyPaymentPlan(ctx, *item.gatewayID, item.amount); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -2069,10 +2043,13 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 	}
 	for _, item := range items {
 		item["gateway_price_matches"] = false
-		if !item["is_active"].(bool) || item["flutterwave_plan_id"] == nil {
+		gatewayID, _ := item["flutterwave_plan_id"].(*int64)
+		// A typed nil pointer stored in an interface is not equal to nil.
+		// Transfer-only plans intentionally have no recurring gateway ID.
+		if !item["is_active"].(bool) || gatewayID == nil {
 			continue
 		}
-		gateway, err := m.paymentProvider.GetPaymentPlan(c.Context(), *item["flutterwave_plan_id"].(*int64))
+		gateway, err := m.paymentProvider.GetPaymentPlan(c.Context(), *gatewayID)
 		if err != nil {
 			item["gateway_plan_status"] = "unavailable"
 			continue
