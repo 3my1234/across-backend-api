@@ -49,6 +49,18 @@ func TestListingApprovedBaselineAndStaleModeration(t *testing.T) {
 		}
 	}
 	check("Old title", 0, "approved")
+	emptyID := uuid.NewString()
+	if _, err = db.Exec(ctx, `INSERT INTO provider_listings(id,provider_id,title,attributes,status) VALUES($1,$2,'No extra details','{}','approved')`, emptyID, provider); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_listings SET attributes='null',status='pending' WHERE id=$1`, emptyID); err != nil {
+		t.Fatal(err)
+	}
+	var emptyStatus string
+	var emptyRevision int64
+	if err = db.QueryRow(ctx, `SELECT status,content_revision FROM provider_listings WHERE id=$1`, emptyID).Scan(&emptyStatus, &emptyRevision); err != nil || emptyStatus != "approved" || emptyRevision != 0 {
+		t.Fatal("equivalent empty details must not withdraw approval", err, emptyStatus, emptyRevision)
+	}
 	if _, err = db.Exec(ctx, `UPDATE provider_listings SET status='pending',moderation_notes='' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}

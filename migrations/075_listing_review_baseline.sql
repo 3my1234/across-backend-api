@@ -4,7 +4,7 @@ ALTER TABLE provider_listings ADD COLUMN content_revision bigint NOT NULL DEFAUL
 
 CREATE FUNCTION listing_review_content(document jsonb) RETURNS jsonb
 LANGUAGE sql IMMUTABLE AS $$
- SELECT COALESCE(jsonb_object_agg(key,value),'{}'::jsonb) FROM jsonb_each(document)
+ SELECT COALESCE(jsonb_object_agg(key,CASE WHEN key='attributes' AND value='null'::jsonb THEN '{}'::jsonb ELSE value END),'{}'::jsonb) FROM jsonb_each(document)
  WHERE key=ANY(ARRAY['listing_type','title','description','category','contact_email','contact_phone',
  'address_line','city','state','country_code','price','currency_code','pricing_unit','capacity',
  'media_urls','attributes','latitude','longitude','service_radius_km','is_mobile_service','is_available_now']);
