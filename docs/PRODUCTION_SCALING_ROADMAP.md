@@ -42,6 +42,9 @@ not provide extra CPU, memory or disk throughput.
 
 ## 2. Launch preparation on the existing machine
 
+User confirmed no off-server backups/restore test on 12 October. Follow
+BACKUP_RESTORE_RUNBOOK.md before a database cutover or infrastructure split.
+
 - Deploy the bounded/indexed chat changes and run the synthetic staging test in
   CHAT_LAUNCH_CAPACITY.md. Start at 20/50/100 active chats, then increase in tested
   steps. Do not run stress tests against paying customers.

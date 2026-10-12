@@ -23,6 +23,7 @@ const (
 
 type pushDelivery struct {
 	NotificationID      string
+	NotificationType    string
 	OrderID             string
 	PushTokenID         string
 	Token               string
@@ -194,7 +195,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		SELECT d.notification_id::text, COALESCE(n.order_id::text, ''), d.push_token_id::text, token.expo_push_token,
-			n.title, n.body, n.data, d.attempts, token.sound_enabled, token.notification_channel, COALESCE(token.expo_project_id::text,'')
+			n.title, n.body, n.data, d.attempts, token.sound_enabled, token.notification_channel, COALESCE(token.expo_project_id::text,''),n.type
 		FROM notification_push_deliveries d
 		JOIN notifications n ON n.id = d.notification_id
 		JOIN user_push_tokens token ON token.id = d.push_token_id AND token.disabled_at IS NULL
@@ -209,7 +210,7 @@ func RunPushDeliveryBatch(ctx context.Context, db *pgxpool.Pool, client *http.Cl
 	deliveries := make([]pushDelivery, 0, pushBatchLimit)
 	for rows.Next() {
 		var item pushDelivery
-		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled, &item.NotificationChannel, &item.ExpoProjectID); err != nil {
+		if err := rows.Scan(&item.NotificationID, &item.OrderID, &item.PushTokenID, &item.Token, &item.Title, &item.Body, &item.Data, &item.Attempts, &item.SoundEnabled, &item.NotificationChannel, &item.ExpoProjectID, &item.NotificationType); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -261,6 +262,9 @@ func sendPushDeliveries(ctx context.Context, db *pgxpool.Pool, client *http.Clie
 		data := map[string]any{}
 		_ = json.Unmarshal(item.Data, &data)
 		data["notification_id"] = item.NotificationID
+		if item.NotificationType != "" {
+			data["notification_type"] = item.NotificationType
+		}
 		data["sound_enabled"] = item.SoundEnabled
 		if item.OrderID != "" {
 			data["order_id"] = item.OrderID
