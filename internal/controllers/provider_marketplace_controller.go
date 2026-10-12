@@ -919,7 +919,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
 	search := strings.TrimSpace(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating)
+	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum,CASE WHEN $3='admin' THEN to_jsonb(l)->'approved_snapshot' ELSE NULL END,CASE WHEN $3='admin' THEN to_jsonb(l) ELSE NULL END,COALESCE((to_jsonb(l)->>'content_revision')::bigint,0) FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN LATERAL (SELECT true AS active FROM provider_subscriptions ps WHERE ps.provider_id=p.id AND ps.status='active' AND ps.current_period_end>now() ORDER BY ps.current_period_end DESC LIMIT 1) s ON true WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (l.created_at,l.id)<($6,$7::uuid)) ORDER BY l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "listings unavailable")
 	}
@@ -931,6 +931,8 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	for rows.Next() {
 		var id, pid, business, lt, title, slug, desc, category, address, city, state, country, currency, unit, lstatus string
 		var moderationNotes *string
+		var reviewBaseline, reviewCurrent []byte
+		var contentRevision int64
 		var price *float64
 		var capacity int
 		var media []string
@@ -941,7 +943,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		var latitude, longitude, radius *float64
 		var mobile, available bool
 		var reviewCount, reviewRatingSum int
-		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &moderationNotes, &published, &created, &subscribed, &latitude, &longitude, &radius, &mobile, &available, &reviewCount, &reviewRatingSum); err != nil {
+		if err := rows.Scan(&id, &pid, &business, &lt, &title, &slug, &desc, &category, &address, &city, &state, &country, &price, &currency, &unit, &capacity, &media, &attrs, &lstatus, &moderationNotes, &published, &created, &subscribed, &latitude, &longitude, &radius, &mobile, &available, &reviewCount, &reviewRatingSum, &reviewBaseline, &reviewCurrent, &contentRevision); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
@@ -956,6 +958,12 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 			}
 			return ""
 		}()})
+		if scope == "admin" {
+			item := items[len(items)-1]
+			item["content_revision"] = contentRevision
+			item["has_approved_baseline"] = len(reviewBaseline) > 0 && string(reviewBaseline) != "null"
+			item["changes_since_approval"] = listingEdits(reviewBaseline, reviewCurrent)
+		}
 		lastCreated, lastID = created, id
 	}
 	return c.JSON(fiber.Map{"items": items, "next_cursor": next, "has_more": next != ""})
@@ -1281,6 +1289,25 @@ func (m *ProviderMarketplaceController) MarkProviderNotificationsRead(c *fiber.C
 	_, err = m.db.Exec(c.Context(), `UPDATE provider_marketplace_events SET read_at=COALESCE(read_at,now()) WHERE provider_id=$1::uuid AND read_at IS NULL`, providerID)
 	if err != nil {
 		return fiber.ErrInternalServerError
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (m *ProviderMarketplaceController) MarkProviderNotificationRead(c *fiber.Ctx) error {
+	if _, err := uuid.Parse(c.Params("notification_id")); err != nil {
+		return fiber.ErrBadRequest
+	}
+	userID, _ := c.Locals("user_id").(string)
+	providerID, _, err := m.providerForUser(c.Context(), userID)
+	if err != nil {
+		return fiber.ErrForbidden
+	}
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_marketplace_events SET read_at=COALESCE(read_at,now()) WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("notification_id"), providerID)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if tag.RowsAffected() == 0 {
+		return fiber.ErrNotFound
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -1718,7 +1745,11 @@ func (m *ProviderMarketplaceController) AdminListListings(c *fiber.Ctx) error {
 
 func (m *ProviderMarketplaceController) AdminModerateListing(c *fiber.Ctx) error {
 	adminID, _ := c.Locals("admin_id").(string)
-	var req struct{ Status, Notes string }
+	var req struct {
+		Status                  string `json:"status"`
+		Notes                   string `json:"notes"`
+		ExpectedContentRevision *int64 `json:"expected_content_revision"`
+	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.ErrBadRequest
 	}
@@ -1728,8 +1759,12 @@ func (m *ProviderMarketplaceController) AdminModerateListing(c *fiber.Ctx) error
 	}
 	var providerID, title, persistedStatus string
 	var updatedAt time.Time
-	err := m.db.QueryRow(c.Context(), `UPDATE provider_listings SET status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1::uuid AND status<>'archived' RETURNING provider_id::text,title,status::text,updated_at`, c.Params("listing_id"), status, strings.TrimSpace(req.Notes), adminID).Scan(&providerID, &title, &persistedStatus, &updatedAt)
+	err := m.db.QueryRow(c.Context(), `UPDATE provider_listings SET status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$1::uuid AND status<>'archived' AND ($5::bigint IS NULL OR COALESCE((to_jsonb(provider_listings)->>'content_revision')::bigint,0)=$5) RETURNING provider_id::text,title,status::text,updated_at`, c.Params("listing_id"), status, strings.TrimSpace(req.Notes), adminID, req.ExpectedContentRevision).Scan(&providerID, &title, &persistedStatus, &updatedAt)
 	if err == pgx.ErrNoRows {
+		var exists bool
+		if e := m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_listings WHERE id=$1::uuid AND status<>'archived')`, c.Params("listing_id")).Scan(&exists); e == nil && exists {
+			return fiber.NewError(fiber.StatusConflict, "This listing changed after you opened it. Reload listings and review the latest changes before approving.")
+		}
 		return fiber.ErrNotFound
 	}
 	if err != nil {

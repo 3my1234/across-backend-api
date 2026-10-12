@@ -16,7 +16,7 @@ import (
 func TestPush400IsolationAndRecovery(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE notifications(id uuid PRIMARY KEY,user_id uuid,order_id uuid,title text,body text,data jsonb,is_read boolean DEFAULT false,created_at timestamptz DEFAULT now());
+	_, err := db.Exec(ctx, `CREATE TABLE notifications(id uuid PRIMARY KEY,user_id uuid,order_id uuid,title text,body text,data jsonb,is_read boolean DEFAULT false,created_at timestamptz DEFAULT now(),type text DEFAULT 'ticket_reply');
  CREATE TABLE user_push_tokens(id uuid PRIMARY KEY,user_id uuid,expo_push_token text,disabled_at timestamptz,sound_enabled boolean DEFAULT true,notification_channel text DEFAULT 'orders',expo_project_id uuid);
  CREATE TABLE notification_push_deliveries(notification_id uuid,push_token_id uuid,status text DEFAULT 'pending',attempts int DEFAULT 0,next_attempt_at timestamptz DEFAULT now(),expo_ticket_id text,last_error text DEFAULT '',sent_at timestamptz,receipt_checked_at timestamptz,updated_at timestamptz DEFAULT now(),PRIMARY KEY(notification_id,push_token_id));`)
 	if err != nil {
@@ -58,6 +58,10 @@ func TestPush400IsolationAndRecovery(t *testing.T) {
 		projects := map[string]bool{}
 		bad := false
 		for _, m := range messages {
+			data, _ := m["data"].(map[string]any)
+			if data["notification_type"] != "ticket_reply" {
+				t.Fatal("push type must be included even when notification data omits it", data)
+			}
 			token := m["to"].(string)
 			project := "old"
 			if strings.Contains(token, "new-") {

@@ -30,7 +30,7 @@ func TestBrowserPushDurabilityRetryOwnershipAndEncryption(t *testing.T) {
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active bool);
  CREATE TABLE provider_marketplace_events(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),provider_id uuid,event_type text,metadata jsonb);
- CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,type text);`)
+ CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,type text,data jsonb DEFAULT '{}');`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,13 @@ func TestBrowserPushDurabilityRetryOwnershipAndEncryption(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(ctx, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := os.ReadFile(filepath.Join("..", "..", "migrations", "076_web_push_destinations.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(routing)); err != nil {
 		t.Fatal(err)
 	}
 	private, public, err := webpush.GenerateVAPIDKeys()
@@ -96,8 +103,13 @@ func TestBrowserPushDurabilityRetryOwnershipAndEncryption(t *testing.T) {
 	}
 	// Notifications and their push jobs commit/roll back together.
 	tx, _ := db.Begin(ctx)
-	if _, err = tx.Exec(ctx, `INSERT INTO notifications(user_id,type) VALUES($1,'ticket_reply')`, actor); err != nil {
+	ticketID := uuid.NewString()
+	if _, err = tx.Exec(ctx, `INSERT INTO notifications(user_id,type,data) VALUES($1,'ticket_reply',jsonb_build_object('ticket_id',$2::text))`, actor, ticketID); err != nil {
 		t.Fatal(err)
+	}
+	var linkedTicket string
+	if err = tx.QueryRow(ctx, `SELECT payload->>'ticket_id' FROM web_push_deliveries WHERE source_key LIKE 'notification:%' LIMIT 1`).Scan(&linkedTicket); err != nil || linkedTicket != ticketID {
+		t.Fatal("support browser push must carry exact destination", err, linkedTicket)
 	}
 	tx.Rollback(ctx)
 	var count int

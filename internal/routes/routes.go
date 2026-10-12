@@ -270,6 +270,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Patch("/providers/me/requests/:request_id", marketplaceController.UpdateProviderRequest)
 	authed.Get("/providers/me/notifications", marketplaceController.ListProviderNotifications)
 	authed.Patch("/providers/me/notifications/read-all", marketplaceController.MarkProviderNotificationsRead)
+	authed.Patch("/providers/me/notifications/:notification_id/read", marketplaceController.MarkProviderNotificationRead)
 	authed.Get("/providers/me/conversations", marketplaceController.ListProviderConversations)
 	authed.Get("/providers/me/conversations/:conversation_id/messages", marketplaceController.ProviderConversationMessages)
 	authed.Post("/providers/me/conversations/:conversation_id/read", marketplaceController.ProviderMarkConversationRead)

@@ -167,6 +167,12 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 		}
 	}
 	listingID := strings.TrimSpace(c.Query("listing_id"))
+	lookup := strings.TrimSpace(c.Query("conversation_id"))
+	if lookup != "" {
+		if _, e := uuid.Parse(lookup); e != nil {
+			return fiber.ErrBadRequest
+		}
+	}
 	if listingID != "" {
 		if _, err := uuid.Parse(listingID); err != nil {
 			return fiber.NewError(400, "invalid listing_id")
@@ -179,7 +185,7 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='provider' AND created_at>COALESCE(c.buyer_last_read_at,'epoch'::timestamptz)),
 		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,'')
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN provider_organizations p ON p.id=c.provider_id
-		WHERE c.user_id=$1::uuid AND ($7='' OR c.product_id=NULLIF($7,'')::uuid) AND ($3='' OR l.id=NULLIF($3,'')::uuid) AND ($4::timestamptz IS NULL OR (c.last_message_at,c.id)<($4::timestamptz,NULLIF($5,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $6`, userID, !m.subscriptionsRequired(), listingID, page.CursorTime, page.CursorID, page.Limit+1, productID)
+		WHERE c.user_id=$1::uuid AND ($8='' OR c.id=NULLIF($8,'')::uuid) AND ($7='' OR c.product_id=NULLIF($7,'')::uuid) AND ($3='' OR l.id=NULLIF($3,'')::uuid) AND ($4::timestamptz IS NULL OR (c.last_message_at,c.id)<($4::timestamptz,NULLIF($5,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $6`, userID, !m.subscriptionsRequired(), listingID, page.CursorTime, page.CursorID, page.Limit+1, productID, lookup)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
