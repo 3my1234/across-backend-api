@@ -59,9 +59,10 @@ func main() {
 		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${locals:requestid} error=${error}\n",
 	}))
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: cfg.AllowedOrigins,
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code, Cache-Control",
-		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowOrigins:  cfg.AllowedOrigins,
+		AllowHeaders:  "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code, Cache-Control, If-None-Match",
+		ExposeHeaders: "ETag",
+		AllowMethods:  "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg)
 

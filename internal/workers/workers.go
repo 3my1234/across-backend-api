@@ -18,7 +18,8 @@ import (
 // and idempotent database keys, so multiple worker replicas can run safely.
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 	var group sync.WaitGroup
-	group.Add(6)
+	group.Add(7)
+	go func() { defer group.Done(); runWebPushLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runPushLoop(ctx, db) }()
 	go func() { defer group.Done(); runPushReceiptLoop(ctx, db) }()
@@ -178,5 +179,25 @@ func runBatchClosure(ctx context.Context, db *pgxpool.Pool) {
 	}
 	if count > 0 {
 		log.Printf("batch closure worker: closed %d operational-day batches", count)
+	}
+}
+
+func runWebPushLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		count, err := services.RunWebPushBatch(ctx, db, cfg, nil)
+		heartbeat(ctx, "web_push")
+		if err != nil {
+			log.Printf("browser push worker error: %v", err)
+		}
+		if count > 0 {
+			log.Printf("browser push worker: submitted %d deliveries", count)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }

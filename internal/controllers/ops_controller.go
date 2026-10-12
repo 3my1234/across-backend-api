@@ -54,11 +54,19 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "seller settlement queue health unavailable")
 	}
 	pool := o.db.Stat()
+	var webPending, webFailed int64
+	var webOldest float64
+	if err := o.db.QueryRow(c.Context(), `SELECT count(*) FILTER(WHERE d.status IN ('pending','retry','sending')), count(*) FILTER(WHERE d.status='failed'),
+ COALESCE(EXTRACT(EPOCH FROM now()-MIN(d.created_at) FILTER(WHERE d.status IN ('pending','retry','sending'))),0)
+ FROM web_push_deliveries d JOIN web_push_subscriptions s ON s.id=d.subscription_id AND s.disabled_at IS NULL`).Scan(&webPending, &webFailed, &webOldest); err != nil {
+		return fiber.NewError(503, "browser push queue health unavailable")
+	}
 	return c.JSON(fiber.Map{
 		"email":              fiber.Map{"pending": emailPending, "oldest_seconds": emailOldestSeconds},
 		"push":               fiber.Map{"pending": pushPending, "oldest_seconds": pushOldestSeconds},
+		"web_push":           fiber.Map{"pending": webPending, "failed": webFailed, "oldest_seconds": webOldest},
 		"seller_settlements": fiber.Map{"due": settlementDue, "leased": settlementLeased, "failed": settlementFailed, "overdue_seconds": settlementOverdueSeconds},
-		"database_pool":      fiber.Map{"acquired": pool.AcquiredConns(), "idle": pool.IdleConns(), "max": pool.MaxConns()},
+		"database_pool":      fiber.Map{"acquired": pool.AcquiredConns(), "idle": pool.IdleConns(), "max": pool.MaxConns(), "acquire_count": pool.AcquireCount(), "acquire_wait_ms": pool.AcquireDuration().Milliseconds(), "empty_acquire_count": pool.EmptyAcquireCount(), "cancelled_acquire_count": pool.CanceledAcquireCount()},
 	})
 }
 

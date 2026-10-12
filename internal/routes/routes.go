@@ -30,6 +30,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	uploads := controllers.NewUploadController(cfg)
 	reviews := controllers.NewReviewController(db)
 	notifications := controllers.NewNotificationsController(db)
+	webPush := controllers.NewWebPushController(db, cfg)
 	ops := controllers.NewOpsController(db)
 	dev := controllers.NewDevController(db, cfg)
 	authController := controllers.NewAuthController(db, cfg)
@@ -230,6 +231,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Patch("/notifications/read-all", notifications.MarkAllRead)
 	authed.Patch("/notifications/:notification_id/read", notifications.MarkRead)
 	authed.Post("/notifications/push-token", notifications.RegisterPushToken)
+	authed.Get("/notifications/web-push/key", webPush.PublicKey)
+	authed.Post("/notifications/web-push", webPush.Register)
+	authed.Delete("/notifications/web-push", webPush.Unregister)
 	authed.Post("/notifications/test-push", notifications.TestPush)
 	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
 

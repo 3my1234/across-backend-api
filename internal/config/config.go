@@ -18,6 +18,10 @@ const (
 )
 
 type Config struct {
+	WebPushPublicKey  string
+	WebPushPrivateKey string
+	WebPushSubject    string
+
 	AppEnv                        string
 	HTTPAddr                      string
 	WorkerHealthAddr              string
@@ -103,6 +107,9 @@ func Load() Config {
 	}
 
 	return Config{
+		WebPushPublicKey:              env("WEB_PUSH_VAPID_PUBLIC_KEY", ""),
+		WebPushPrivateKey:             env("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
+		WebPushSubject:                env("WEB_PUSH_SUBJECT", "mailto:support@atlxpres.com"),
 		AppEnv:                        env("APP_ENV", "development"),
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),
