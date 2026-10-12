@@ -25,11 +25,11 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active boolean DEFAULT true,role text,created_at timestamptz DEFAULT now());
  CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text DEFAULT 'approved');
  CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved');
- CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);`)
+ CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz); CREATE TABLE provider_marketplace_events(id uuid DEFAULT gen_random_uuid(),provider_id uuid,listing_id uuid,event_type text,metadata jsonb);`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql"} {
+	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", file))
 		if err != nil {
 			t.Fatal(err)

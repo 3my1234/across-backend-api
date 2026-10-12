@@ -53,6 +53,19 @@ func (m *ProviderMarketplaceController) queueProviderActivity(ctx context.Contex
 	encoded, _ := json.Marshal(metadata)
 	_, _ = m.db.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,listing_id,event_type,metadata)
 		VALUES($1::uuid,NULLIF($2::text,'')::uuid,$3,$4::jsonb)`, providerID, listingID, eventType, encoded)
+	m.queueProviderActivityEmail(ctx, providerID, title, body, dedupeKey)
+}
+
+func queueProviderActivityTx(ctx context.Context, tx pgx.Tx, providerID, listingID, eventType string, metadata map[string]any) error {
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO provider_marketplace_events(provider_id,listing_id,event_type,metadata) VALUES($1::uuid,NULLIF($2::text,'')::uuid,$3,$4::jsonb)`, providerID, listingID, eventType, encoded)
+	return err
+}
+
+func (m *ProviderMarketplaceController) queueProviderActivityEmail(ctx context.Context, providerID, title, body, dedupeKey string) {
 	var userID, email, name string
 	if err := m.db.QueryRow(ctx, `SELECT pm.user_id::text,u.email,u.full_name
 		FROM provider_members pm JOIN users u ON u.id=pm.user_id

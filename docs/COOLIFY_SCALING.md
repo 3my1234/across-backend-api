@@ -73,10 +73,10 @@ A safe initial value is 20 connections per API replica and 10 per worker.
 The previous hard-coded 80 connections per process would exhaust PostgreSQL as
 replicas were added; connection budgets are now configurable.
 
-When a managed read replica is available, set `DATABASE_READ_URL`. Public
-catalogue product reads use it; payments, checkout, inventory, accounts, and all
-writes continue to use the primary database. Replication lag is therefore never
-used as proof of payment.
+`DATABASE_READ_URL` can create a separate pool, but the current catalogue routes
+deliberately use the primary to preserve freshness. Do not assume setting this
+variable offloads chat or catalogue queries. Payments, checkout, inventory and
+chat continue to use the primary; replication lag is never proof of payment.
 
 ## Health checks and scaling signals
 
@@ -119,6 +119,7 @@ catalogue responses. Redis supplies a five-second shared origin cache so every
 API replica sees the same short-lived entry. Mobile foreground polling is only
 a fallback; push notifications are the immediate update mechanism.
 
-No EAS build is needed for API/worker scaling alone. The currently unbuilt
-mobile changes from commit `74fdb22` still require one new EAS build after
-the backend and provider portal are deployed and smoke-tested.
+No EAS build is needed for API/worker scaling alone. Mobile photo zoom and chat
+cache/conditional-read changes require a new build. See CHAT_LAUNCH_CAPACITY.md
+for measured local checks, staging tests and connection budgets, and the portal
+repository's PROVIDER_PWA_SETUP.md for browser push and standalone deployment.
