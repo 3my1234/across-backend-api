@@ -46,8 +46,10 @@ the capacity of an already saturated DB or a single physical host.
 If adopting PgBouncer transaction pooling, follow COOLIFY_SCALING.md: migrations
 must connect directly because their lock is session-scoped. The API's pgx
 configuration also needs a tested transaction-pool-compatible query mode;
-do not switch production URLs without testing your PgBouncer prepared-statement
-configuration. Keep chat/order reads on the primary for immediate consistency.
+do not switch production URLs without testing the driver and PgBouncer
+prepared-statement configuration. Keep chat/order reads on the primary for
+immediate consistency. See PRODUCTION_SCALING_ROADMAP.md for the actual 4-vCPU/8-GB server
+budget, operational thresholds and staged infrastructure split.
 
 ## Repeatable checks before launch
 
