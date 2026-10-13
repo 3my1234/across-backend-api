@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"across/backend/internal/storage"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // A booking/enquiry is also a contact. Link its chat atomically so older apps
@@ -116,14 +118,14 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 func scanConversationRows(rows pgx.Rows) ([]fiber.Map, error) {
 	items := make([]fiber.Map, 0)
 	for rows.Next() {
-		var id, listingID, title, counterpart, status, lastMessage, productID string
+		var id, listingID, title, counterpart, status, lastMessage, productID, providerID string
 		var lastMessageAt time.Time
 		var unread int
 		var subscriptionActive bool
-		if err := rows.Scan(&id, &listingID, &title, &counterpart, &status, &lastMessage, &lastMessageAt, &unread, &subscriptionActive, &productID); err != nil {
+		if err := rows.Scan(&id, &listingID, &title, &counterpart, &status, &lastMessage, &lastMessageAt, &unread, &subscriptionActive, &productID, &providerID); err != nil {
 			return nil, err
 		}
-		items = append(items, fiber.Map{"id": id, "listing_id": listingID, "product_id": productID, "listing_title": title, "counterpart_name": counterpart, "status": status, "last_message": lastMessage, "last_message_at": lastMessageAt, "unread_count": unread, "subscription_active": subscriptionActive})
+		items = append(items, fiber.Map{"id": id, "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": title, "counterpart_name": counterpart, "status": status, "last_message": lastMessage, "last_message_at": lastMessageAt, "unread_count": unread, "subscription_active": subscriptionActive})
 	}
 	return items, rows.Err()
 }
@@ -141,7 +143,7 @@ func conversationListPage(c *fiber.Ctx) (adminPageRequest, error) {
 	return page, err
 }
 
-func conversationListResponse(c *fiber.Ctx, items []fiber.Map, page adminPageRequest) error {
+func conversationListResponse(c *fiber.Ctx, db *pgxpool.Pool, items []fiber.Map, page adminPageRequest, assets ...*storage.S3) error {
 	next := ""
 	if len(items) > page.Limit {
 		items = items[:page.Limit]
@@ -149,7 +151,7 @@ func conversationListResponse(c *fiber.Ctx, items []fiber.Map, page adminPageReq
 		next = encodeAdminCursor(last["last_message_at"].(time.Time), last["id"].(string))
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"items": items, "next_cursor": next, "has_more": next != ""})
+	return providerIdentityJSON(c, db, fiber.Map{"items": items, "next_cursor": next, "has_more": next != ""}, assets...)
 }
 
 func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) error {
@@ -183,7 +185,7 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='provider' AND created_at>COALESCE(c.buyer_last_read_at,'epoch'::timestamptz)),
-		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,'')
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN provider_organizations p ON p.id=c.provider_id
 		WHERE c.user_id=$1::uuid AND ($8='' OR c.id=NULLIF($8,'')::uuid) AND ($7='' OR c.product_id=NULLIF($7,'')::uuid) AND ($3='' OR l.id=NULLIF($3,'')::uuid) AND ($4::timestamptz IS NULL OR (c.last_message_at,c.id)<($4::timestamptz,NULLIF($5,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $6`, userID, !m.subscriptionsRequired(), listingID, page.CursorTime, page.CursorID, page.Limit+1, productID, lookup)
 	if err != nil {
@@ -194,7 +196,8 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return conversationListResponse(c, items, page)
+	rows.Close()
+	return conversationListResponse(c, m.db, items, page, m.s3)
 }
 
 func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) error {
@@ -219,7 +222,7 @@ func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) 
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='buyer' AND created_at>COALESCE(c.provider_last_read_at,'epoch'::timestamptz)),
-		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,'')
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN users u ON u.id=c.user_id
 		WHERE c.provider_id=$1::uuid AND ($6='' OR c.id=NULLIF($6,'')::uuid) AND ($3::timestamptz IS NULL OR (c.last_message_at,c.id)<($3::timestamptz,NULLIF($4,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $5`, providerID, !m.subscriptionsRequired(), page.CursorTime, page.CursorID, page.Limit+1, lookup)
 	if err != nil {
@@ -230,7 +233,8 @@ func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) 
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return conversationListResponse(c, items, page)
+	rows.Close()
+	return conversationListResponse(c, m.db, items, page, m.s3)
 }
 
 func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provider bool) error {
@@ -389,7 +393,7 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	notifyCtx, cancelNotify := context.WithTimeout(c.Context(), 2*time.Second)
 	defer cancelNotify()
 	if fresh && provider {
-		_ = CreateNotificationOnce(notifyCtx, m.db, buyerID, "", nil, "marketplace_message", "New provider message", body, map[string]any{"conversation_id": c.Params("conversation_id"), "listing_id": listingID, "product_id": productID, "listing_title": listingTitle}, "buyer-provider-message:"+messageID.String())
+		_ = CreateNotificationOnce(notifyCtx, m.db, buyerID, "", nil, "marketplace_message", "New provider message", body, map[string]any{"conversation_id": c.Params("conversation_id"), "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": listingTitle}, "buyer-provider-message:"+messageID.String())
 	} else if fresh {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}

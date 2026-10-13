@@ -67,7 +67,10 @@ func (o *OrderController) BootstrapProfile(c *fiber.Ctx) error {
 	})
 }
 
-func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error {
+func (o *OrderController) QuoteCheckout(c *fiber.Ctx) error { return productContactRequired() }
+
+// Retained for isolated legacy financial regression coverage; never registered as a route.
+func (o *OrderController) legacyQuoteCheckout(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req struct {
 		UseXP       bool   `json:"use_xp"`

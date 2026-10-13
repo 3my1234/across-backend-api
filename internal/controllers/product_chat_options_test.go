@@ -56,6 +56,7 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 		}
 	}
 	controller := &ProviderMarketplaceController{db: db, s3: storage.NewS3(config.Config{AWSRegion: "eu-north-1", AWSAccessKeyID: "test", AWSSecretAccessKey: "test", S3BucketName: "test"})}
+	installPublicIdentityFixture(t,db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Post("/products/:product_id/chat", controller.StartProductConversation)

@@ -166,18 +166,9 @@ func Load() Config {
 	}
 }
 
-// ProviderSubscriptionsRequired reports whether paid provider access should be
-// enforced at the supplied time. A future start date keeps launch access free
-// until that instant without requiring a redeploy.
-func (c Config) ProviderSubscriptionsRequired(at time.Time) bool {
-	if c.ProviderSubscriptionPolicy != nil {
-		return c.ProviderSubscriptionPolicy.Required(at)
-	}
-	if !c.ProviderSubscriptionsEnforced {
-		return false
-	}
-	return c.ProviderSubscriptionsStartAt == nil || !at.Before(*c.ProviderSubscriptionsStartAt)
-}
+// ProviderSubscriptionsRequired preserves compatibility with callers. Permanent
+// Free access replaces the launch switch; paid capacity is enforced separately.
+func (c Config) ProviderSubscriptionsRequired(at time.Time) bool { return false }
 
 func loadDotEnv(path string) {
 	file, err := os.Open(path)

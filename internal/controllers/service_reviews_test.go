@@ -68,6 +68,7 @@ func TestServiceReviewsOwnershipDiscoveryAndConcurrentTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := &ProviderMarketplaceController{db: db}
+	installPublicIdentityFixture(t,db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-Test-User")); return c.Next() })
 	app.Put("/listings/:listing_id/review", controller.UpsertListingReview)

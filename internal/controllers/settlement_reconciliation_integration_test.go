@@ -506,7 +506,7 @@ func TestSettlementPostgresSavedTokenPreservesSellerSplit(t *testing.T) {
 	controller := &PaymentController{db: db, cfg: config.Config{FlutterwaveSecretKey: "FLWSECK-not-a-real-test-key"}, httpClient: client, provider: newFlutterwaveProvider("test", client)}
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", userID); return c.Next() })
-	app.Post("/charge", controller.TokenizedCharge)
+	app.Post("/charge", controller.legacyTokenizedCharge)
 	req := httptest.NewRequest(http.MethodPost, "/charge", strings.NewReader(fmt.Sprintf(`{"order_id":"%s"}`, orderID)))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)

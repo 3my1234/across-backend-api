@@ -86,6 +86,7 @@ func TestListingApprovedBaselineAndStaleModeration(t *testing.T) {
 		t.Fatal("cannot reconstruct old pending content", err, string(legacyBaseline))
 	}
 	controller := &ProviderMarketplaceController{db: db}
+	installPublicIdentityFixture(t,db)
 	app := fiber.New()
 	app.Patch("/listing/:listing_id", func(c *fiber.Ctx) error { c.Locals("admin_id", admin); return controller.AdminModerateListing(c) })
 	for _, tc := range []struct {
