@@ -110,6 +110,39 @@ func TestProviderIdentityEligibilityAndLifecycle(t *testing.T) {
 		_, _ = db.Exec(ctx, `UPDATE provider_subscriptions SET starts_at=now()-interval '1 day' WHERE id=$1`, sub)
 		read(true, true, providerPlanTier(code))
 	}
+	// An effective server-side upgrade/downgrade changes identity without any client tier input.
+	var changedProvider, changedSubscription string
+	if err = db.QueryRow(ctx, `SELECT sub.provider_id::text,sub.id::text FROM provider_subscriptions sub JOIN provider_subscription_plans plan ON plan.id=sub.plan_id WHERE plan.code='provider-monthly'`).Scan(&changedProvider, &changedSubscription); err != nil {
+		t.Fatal(err)
+	}
+	for _, nextCode := range []string{"provider-diamond", "provider-growth", "provider-monthly"} {
+		if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET plan_id=(SELECT id FROM provider_subscription_plans WHERE code=$2) WHERE id=$1`, changedSubscription, nextCode); err != nil {
+			t.Fatal(err)
+		}
+		var tier string
+		if err = db.QueryRow(ctx, `SELECT badge_tier FROM provider_public_identity WHERE provider_id=$1`, changedProvider).Scan(&tier); err != nil || tier != providerPlanTier(nextCode) {
+			t.Fatal("effective plan change", tier, err)
+		}
+	}
+	// A paid provider's already-published posts survive expiry; Free blocks additional creation.
+	for i := 0; i < 2; i++ {
+		if _, err = db.Exec(ctx, `INSERT INTO products(id,provider_id,payment_mode,moderation_status,is_active,published_at) VALUES($1,$2,'contact','approved',true,now())`, uuid.NewString(), changedProvider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET current_period_end=now()-interval '1 second' WHERE id=$1`, changedSubscription); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO provider_listings(id,provider_id,status) VALUES($1,$2,'draft')`, uuid.NewString(), changedProvider); err == nil {
+		t.Fatal("expired provider created over Free capacity")
+	}
+	if _, err = db.Exec(ctx, `UPDATE products SET published_at=published_at WHERE provider_id=$1`, changedProvider); err != nil {
+		t.Fatal("grandfathered publication blocked", err)
+	}
+	var preserved int
+	if err = db.QueryRow(ctx, `SELECT count(*) FROM products WHERE provider_id=$1 AND moderation_status='approved' AND is_active`, changedProvider).Scan(&preserved); err != nil || preserved != 2 {
+		t.Fatal("existing published listings changed", preserved, err)
+	}
 	// Direct SQL cannot restore provider checkout options after the migration.
 	provider := uuid.NewString()
 	if _, err = db.Exec(ctx, `INSERT INTO provider_organizations(id,business_name,verification_status) VALUES($1,'Free provider','approved')`, provider); err != nil {
