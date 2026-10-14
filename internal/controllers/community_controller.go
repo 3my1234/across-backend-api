@@ -33,6 +33,11 @@ func NewCommunityController(db *pgxpool.Pool, cfg config.Config, cache ...*redis
 	return controller
 }
 func communityActor(c *fiber.Ctx) string { id, _ := c.Locals("user_id").(string); return id }
+func ProviderNativeNotificationsReady(ctx context.Context, db *pgxpool.Pool) bool {
+	var ready bool
+	err := db.QueryRow(ctx, `SELECT to_regprocedure('enqueue_provider_native_notification()') IS NOT NULL`).Scan(&ready)
+	return err == nil && ready
+}
 
 // Verify the database used by API requests, not only a migration connection.
 func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {

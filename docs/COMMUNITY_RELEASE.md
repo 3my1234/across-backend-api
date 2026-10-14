@@ -1,4 +1,9 @@
-# Username friends, updates, promotions and Town Hall
+# Historical username friends, updates, promotions and Town Hall rollout
+
+**Superseded for launch:** the user removed Friends, personal Statuses and connection
+promotions. See [the current launch release](LAUNCH_SIMPLIFICATION.md) for active scope,
+migration 085, the provider mobile workspace and deployment checks. The account/contact
+discovery and advertising flow below is historical, not a current launch instruction.
 
 Implementation: 14 October 2026. The previous contact-only marketplace release
 remains the production baseline until this release is migrated and deployed.

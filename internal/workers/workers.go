@@ -19,12 +19,7 @@ import (
 // and idempotent database keys, so multiple worker replicas can run safely.
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*redis.Client) {
 	var group sync.WaitGroup
-	var cache *redis.Client
-	if len(caches) > 0 {
-		cache = caches[0]
-	}
-	group.Add(1)
-	go func() { defer group.Done(); runSocialPromotionLoop(ctx, db, cache) }()
+	// Connection-based promotions are retired from launch. Retain stored records.
 	group.Add(7)
 	go func() { defer group.Done(); runWebPushLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()

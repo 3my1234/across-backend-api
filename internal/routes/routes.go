@@ -48,7 +48,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
 	v1 := app.Group("/api/v1")
-	v1.Get("/community/invite/:handle", middleware.DistributedRateLimit(cache, "community-invites", 30, time.Minute), communityController.InvitePage)
+	// Friend invitations and connection advertising are retired from launch.
 	v1.Use(func(c *fiber.Ctx) error {
 		err := c.Next()
 		if c.GetRespHeader("Cache-Control") != "" {
@@ -76,6 +76,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		databaseReady := db.Ping(c.Context()) == nil
 		readDatabaseReady := readDB.Ping(c.Context()) == nil
 		communitySchemaReady := databaseReady && controllers.CommunitySchemaReady(c.Context(), db)
+		providerNotificationsReady := databaseReady && controllers.ProviderNativeNotificationsReady(c.Context(), db)
 		redisReady := cache != nil
 		if redisReady {
 			redisReady = cache.Ping(c.Context()).Err() == nil
@@ -87,7 +88,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		privyReady := strings.TrimSpace(cfg.PrivyAppID) != "" && strings.TrimSpace(cfg.PrivyAppSecret) != ""
 		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
 		emailReady := strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "" && strings.TrimSpace(cfg.SMTPFromEmail) != ""
-		ready := databaseReady && readDatabaseReady && redisReady && communitySchemaReady
+		ready := databaseReady && readDatabaseReady && redisReady && communitySchemaReady && providerNotificationsReady
 		pool := db.Stat()
 		status := fiber.StatusOK
 		if !ready {
@@ -96,13 +97,14 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		return c.Status(status).JSON(fiber.Map{
 			"ok": ready,
 			"checks": fiber.Map{
-				"database":         databaseReady,
-				"community_schema": communitySchemaReady,
-				"read_database":    readDatabaseReady,
-				"redis":            redisReady,
-				"email_delivery":   emailReady,
-				"google_auth":      privyReady,
-				"profile_uploads":  storageReady,
+				"provider_notifications": providerNotificationsReady,
+				"database":               databaseReady,
+				"community_schema":       communitySchemaReady,
+				"read_database":          readDatabaseReady,
+				"redis":                  redisReady,
+				"email_delivery":         emailReady,
+				"google_auth":            privyReady,
+				"profile_uploads":        storageReady,
 			},
 			"database_pool": fiber.Map{
 				"acquired": pool.AcquiredConns(),
@@ -218,7 +220,6 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed := v1.Group("", middleware.RequireAuth(cfg, db))
 	authed.Use("/chat", privateCommunity)
 	communityWrite := middleware.DistributedRateLimit(cache, "community-write", 60, time.Minute)
-	communityLookup := middleware.DistributedRateLimit(cache, "community-lookup", 30, time.Minute)
 	authed.Get("/chat/profile", communityController.Profile)
 	authed.Get("/chat/town-hall", communityController.HallList)
 	authed.Get("/chat/town-hall/activity", communityController.HallActivity)
@@ -229,21 +230,10 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/chat/town-hall/:room_id/offers", communityWrite, communityController.HallOffer)
 	authed.Post("/chat/town-hall/:room_id/choose", communityWrite, communityController.HallChoose)
 	authed.Post("/chat/town-hall/:room_id/close", communityWrite, communityController.HallClose)
-	authed.Get("/chat/statuses", communityController.Statuses)
-	authed.Get("/chat/promotions", communityController.Promotions)
-	authed.Post("/chat/statuses", communityWrite, communityController.CreateStatus)
-	authed.Delete("/chat/statuses/:status_id", communityWrite, communityController.DeleteStatus)
-	authed.Patch("/chat/profile", communityWrite, communityController.UpdateProfile)
-	authed.Get("/chat/users", communityLookup, communityController.FindUser)
-	authed.Get("/chat/friends", communityController.Friends)
-	authed.Post("/chat/friends", communityWrite, communityController.RequestFriend)
-	authed.Delete("/chat/friends/:connection_id", communityWrite, communityController.RemoveFriend)
-	authed.Post("/chat/friends/:connection_id/reply", communityWrite, communityController.ReplyFriend)
 	authed.Post("/chat/blocks/:user_id", communityWrite, communityController.Block)
 	authed.Get("/chat/blocks", communityController.Blocked)
 	authed.Delete("/chat/blocks/:user_id", communityWrite, communityController.Block)
 	authed.Get("/chat/inbox", communityController.Inbox)
-	authed.Post("/chat/conversations", communityWrite, communityController.StartDirect)
 	authed.Get("/chat/conversations/:conversation_id/messages", communityController.Messages)
 	authed.Post("/chat/conversations/:conversation_id/messages", communityWrite, communityController.Send)
 	authed.Post("/chat/conversations/:conversation_id/read", communityWrite, communityController.MarkRead)
