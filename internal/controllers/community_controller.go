@@ -493,7 +493,7 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
  jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'title',COALESCE(l.title,pr.title))
  FROM provider_conversations c JOIN provider_organizations p ON p.id=c.provider_id JOIN users u ON u.id=c.user_id LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
  WHERE c.user_id=$1::uuid OR c.provider_id=NULLIF($2,'')::uuid
- ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
+ ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context,COALESCE((SELECT u.avatar_url FROM users u WHERE u.id=NULLIF(inbox.peer_id,'')::uuid),''),COALESCE(CASE WHEN source='shared' THEN (SELECT NULLIF(msg.body,'') FROM chat_messages msg WHERE msg.room_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) ELSE (SELECT to_jsonb(msg)->>'body' FROM provider_conversation_messages msg WHERE msg.conversation_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) END,'') FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
 	if err != nil {
 		return communityError(err)
 	}
@@ -503,11 +503,11 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
 	var last time.Time
 	var lastID string
 	for rows.Next() {
-		var id, kind, source, title, peer, provider, role, state string
+		var id, kind, source, title, peer, provider, role, state, avatar, preview string
 		var at time.Time
 		var unread int
 		var raw []byte
-		if err = rows.Scan(&id, &kind, &source, &at, &title, &peer, &provider, &role, &state, &unread, &raw); err != nil {
+		if err = rows.Scan(&id, &kind, &source, &at, &title, &peer, &provider, &role, &state, &unread, &raw, &avatar, &preview); err != nil {
 			return communityError(err)
 		}
 		if len(items) == page.Limit {
@@ -516,7 +516,7 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
 		}
 		var data any
 		_ = json.Unmarshal(raw, &data)
-		items = append(items, fiber.Map{"id": id, "kind": kind, "source": source, "title": title, "peer_user_id": peer, "provider_id": provider, "actor_role": role, "state": state, "unread_count": unread, "context": data, "last_message_at": at})
+		items = append(items, fiber.Map{"id": id, "kind": kind, "source": source, "title": title, "peer_user_id": peer, "provider_id": provider, "actor_role": role, "state": state, "unread_count": unread, "context": data, "last_message_at": at, "avatar_url": avatar, "last_message": preview})
 		last, lastID = at, id
 	}
 	if err = rows.Err(); err != nil {
