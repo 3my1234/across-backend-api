@@ -44,7 +44,7 @@ func normalizeMerchantProduct(req *merchantProductPayload) {
 	// Marketplace sellers always retain fulfilment responsibility. Ignore the
 	// retired Atlantic last-mile flag from older cached portal builds.
 	req.AtlanticLastMile = false
-	req.PaymentMode = strings.ToLower(strings.TrimSpace(req.PaymentMode))
+	req.PaymentMode = "contact"
 	req.FulfillmentMode = strings.ToLower(strings.TrimSpace(req.FulfillmentMode))
 	if req.FulfillmentMode == "" {
 		req.FulfillmentMode = "merchant_local"
@@ -222,6 +222,9 @@ func (m *ProviderMarketplaceController) CreateMerchantProduct(c *fiber.Ctx) erro
 	defer tx.Rollback(c.Context())
 	err = tx.QueryRow(c.Context(), `INSERT INTO products(id,provider_id,fulfillment_mode,moderation_status,sku,title,description,category_path,variants,image_urls,cost_price_rmb,local_selling_price,compare_at_price,exchange_rate_snapshot,inventory_count,factory_details,is_active,is_flash_sale,flash_sale_price,inventory_country_code,inventory_city,inventory_location,stock_state,handling_time_hours,delivery_min_days,delivery_max_days,delivery_methods,return_policy,atlantic_last_mile,inventory_latitude,inventory_longitude,local_currency_code,payment_mode) VALUES($1,$2::uuid,$3,'draft',$4,$5,$6,$7,'[]'::jsonb,$8,0,$9,$10,1,$11,$12::jsonb,false,$13,CASE WHEN $13 THEN $14::numeric ELSE NULL END,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,COALESCE(NULLIF($28,''),'flutterwave')) RETURNING id`, id, providerID, req.FulfillmentMode, sku, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, factory, req.IsFlashSale, req.FlashSalePrice, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode, req.PaymentMode).Scan(&id)
 	if err != nil {
+		if capacityErr := providerCapacityError(err); capacityErr != nil {
+			return capacityErr
+		}
 		return fiber.NewError(fiber.StatusConflict, "could not create product; check that the SKU is unique")
 	}
 	if err := replaceProductDeliveryAreas(c.Context(), tx, id.String(), req.DeliveryAreas); err != nil {
@@ -298,10 +301,8 @@ func (m *ProviderMarketplaceController) SubmitMerchantProduct(c *fiber.Ctx) erro
 	if err != nil {
 		return fiber.ErrForbidden
 	}
-	var eligible bool
-	err = m.db.QueryRow(c.Context(), `SELECT p.verification_status='approved' AND p.is_active AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now())) AND (EXISTS(SELECT 1 FROM products pr WHERE pr.id=$3::uuid AND pr.provider_id=p.id AND pr.payment_mode='contact') OR EXISTS(SELECT 1 FROM provider_payout_accounts payout WHERE payout.provider_id=p.id AND payout.payment_provider='flutterwave' AND payout.status='active')) FROM provider_organizations p WHERE p.id=$1::uuid`, providerID, !m.subscriptionsRequired(), c.Params("product_id")).Scan(&eligible)
-	if err != nil || !eligible {
-		return fiber.NewError(fiber.StatusPaymentRequired, "Your business must be verified and your subscription active. Products with Flutterwave checkout also need an active settlement account.")
+	if err := m.requirePublishingEligibility(c.Context(), providerID); err != nil {
+		return err
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE products SET moderation_status='pending',is_active=false,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status IN ('draft','rejected') AND (fulfillment_mode<>'merchant_local' OR (inventory_latitude IS NOT NULL AND inventory_longitude IS NOT NULL))`, c.Params("product_id"), providerID)
 	if err != nil {
@@ -405,13 +406,25 @@ func (m *ProviderMarketplaceController) AdminModerateMerchantProduct(c *fiber.Ct
 	if req.Status != "approved" && req.Status != "rejected" && req.Status != "suspended" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "invalid moderation status")
 	}
+	if req.Status == "approved" {
+		var owner string
+		if err := m.db.QueryRow(c.Context(), `SELECT provider_id::text FROM products WHERE id=$1::uuid AND provider_id IS NOT NULL`, c.Params("product_id")).Scan(&owner); err != nil {
+			return fiber.ErrNotFound
+		}
+		if err := m.requirePublishingEligibility(c.Context(), owner); err != nil {
+			return err
+		}
+	}
 	var providerID, title, persistedStatus string
 	var updatedAt time.Time
-	err := m.db.QueryRow(c.Context(), `UPDATE products SET moderation_status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,is_active=($2='approved' AND inventory_count>0),catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id IS NOT NULL AND moderation_status<>'archived' RETURNING provider_id::text,title,moderation_status::text,updated_at`, c.Params("product_id"), req.Status, strings.TrimSpace(req.Notes), adminID).Scan(&providerID, &title, &persistedStatus, &updatedAt)
+	err := m.db.QueryRow(c.Context(), `UPDATE products SET moderation_status=$2,moderation_notes=$3,moderated_by=$4::uuid,moderated_at=now(),published_at=CASE WHEN $2='approved' THEN COALESCE(published_at,now()) ELSE published_at END,is_active=($2='approved' AND inventory_count>0),catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id IS NOT NULL AND moderation_status<>'archived' AND ($2<>'approved' OR EXISTS(SELECT 1 FROM provider_public_identity identity WHERE identity.provider_id=products.provider_id AND identity.verified AND ($5::boolean OR identity.paid_active))) RETURNING provider_id::text,title,moderation_status::text,updated_at`, c.Params("product_id"), req.Status, strings.TrimSpace(req.Notes), adminID, !m.subscriptionsRequired()).Scan(&providerID, &title, &persistedStatus, &updatedAt)
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
 	}
 	if err != nil {
+		if capacityErr := providerCapacityError(err); capacityErr != nil {
+			return capacityErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	message := title + " was " + persistedStatus + " by Atlantic Express."

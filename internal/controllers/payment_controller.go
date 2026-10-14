@@ -63,7 +63,10 @@ type flutterwaveVerifyRequest struct {
 	TxRef         string `json:"tx_ref"`
 }
 
-func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
+func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error { return productContactRequired() }
+
+// Retained for isolated legacy financial regression coverage; never registered as a route.
+func (p *PaymentController) legacyTokenizedCharge(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req tokenizedChargeRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -157,7 +160,10 @@ func (p *PaymentController) TokenizedCharge(c *fiber.Ctx) error {
 	})
 }
 
-func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error {
+func (p *PaymentController) FlutterwaveCheckout(c *fiber.Ctx) error { return productContactRequired() }
+
+// Retained for isolated legacy financial regression coverage; never registered as a route.
+func (p *PaymentController) legacyFlutterwaveCheckout(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var req flutterwaveCheckoutRequest
 	if err := c.BodyParser(&req); err != nil {

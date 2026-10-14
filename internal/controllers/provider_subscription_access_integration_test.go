@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/gofiber/fiber/v2"
 	"net/http/httptest"
 	"os"
@@ -74,84 +73,14 @@ func TestProviderSubscriptionAccessMigrationAndAudit(t *testing.T) {
 	}
 }
 
-func TestAdminFreePaidFreeTransitions(t *testing.T) {
-	db := settlementTestDB(t)
-	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE provider_subscription_plans(amount_ngn numeric,is_active boolean);
- INSERT INTO provider_subscription_plans VALUES(500,true),(1000,true),(2000,true);
- CREATE TABLE provider_subscription_access(singleton boolean PRIMARY KEY,enforced boolean,start_at timestamptz,updated_at timestamptz DEFAULT now(),updated_by uuid);
- INSERT INTO provider_subscription_access(singleton,enforced) VALUES(true,false);
- CREATE TABLE provider_subscription_access_events(admin_id uuid,old_enforced boolean,old_start_at timestamptz,new_enforced boolean,new_start_at timestamptz);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{ProviderSubscriptionsEnforced: true}
-	policy := config.NewProviderSubscriptionPolicy(db, cfg)
-	cfg.ProviderSubscriptionPolicy = policy
-	replica := config.NewProviderSubscriptionPolicy(db, cfg)
-	controller := &ProviderMarketplaceController{db: db, cfg: cfg}
+func TestRetiredLaunchToggleReturnsGone(t *testing.T) {
 	app := fiber.New()
-	app.Put("/access", func(c *fiber.Ctx) error {
-		c.Locals("admin_id", uuid.New().String())
-		return controller.AdminSetProviderSubscriptionAccess(c)
-	})
-	set := func(body string, status int) config.ProviderSubscriptionAccess {
-		t.Helper()
-		req := httptest.NewRequest("PUT", "/access", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		res, err := app.Test(req)
-		if err != nil {
-			t.Fatal(err)
+	controller := &ProviderMarketplaceController{}
+	app.Put("/access", controller.AdminSetProviderSubscriptionAccess)
+	for _, body := range []string{`{"enforced":false}`, `{"enforced":true}`} {
+		response, err := app.Test(httptest.NewRequest("PUT", "/access", strings.NewReader(body)))
+		if err != nil || response.StatusCode != 410 {
+			t.Fatalf("retired launch setting changed Free entitlement: %v", err)
 		}
-		defer res.Body.Close()
-		if res.StatusCode != status {
-			t.Fatalf("%s: status %d, expected %d", body, res.StatusCode, status)
-		}
-		var access config.ProviderSubscriptionAccess
-		if status == 200 {
-			if err := json.NewDecoder(res.Body).Decode(&access); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return access
-	}
-	for _, enforced := range []bool{false, true, false, true, false} {
-		body := `{"enforced":false}`
-		if enforced {
-			body = `{"enforced":true}`
-		}
-		access := set(body, 200)
-		if access.Enforced != enforced || access.Required != enforced || access.Source != "admin" || access.StartAt != nil {
-			t.Fatalf("wrong saved access: %+v", access)
-		}
-		if err := replica.Refresh(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if replica.Required(time.Now()) != enforced {
-			t.Fatal("second API instance did not read saved policy")
-		}
-	}
-	future := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
-	access := set(`{"enforced":true,"start_at":"`+future.Format(time.RFC3339)+`"}`, 200)
-	if access.Required || !policy.Required(future) {
-		t.Fatal("scheduled paid access boundary incorrect")
-	}
-	access = set(`{"enforced":false}`, 200)
-	if access.StartAt != nil || policy.Required(future) {
-		t.Fatal("free access must cancel scheduled paid access")
-	}
-	set(`{"enforced":true,"start_at":"invalid"}`, 400)
-	if _, err := db.Exec(ctx, `UPDATE provider_subscription_plans SET is_active=false`); err != nil {
-		t.Fatal(err)
-	}
-	set(`{"enforced":true}`, 409)
-	// Restoring free access remains possible even with no plans or gateway available.
-	access = set(`{"enforced":false}`, 200)
-	if access.Required {
-		t.Fatal("failed to restore free access")
-	}
-	var count int
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM provider_subscription_access_events`).Scan(&count); err != nil || count != 8 {
-		t.Fatalf("audit count %d: %v", count, err)
 	}
 }

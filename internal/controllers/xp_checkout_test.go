@@ -87,7 +87,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	controller := NewOrderController(db, true, func() bool { return false })
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", user); return c.Next() })
-	app.Post("/quote", controller.QuoteCheckout)
+	app.Post("/quote", controller.legacyQuoteCheckout)
 	quote := func(use bool) map[string]any {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"country_code": "NG", "use_xp": use, "items": []map[string]any{{"product_id": product, "sku": "WATCH", "quantity": 1}}})
@@ -230,6 +230,10 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0;`); err != nil {
 		t.Fatal(err)
 	}
+	installPublicIdentityFixture(t, db)
+	if _, err = db.Exec(ctx, `CREATE OR REPLACE VIEW provider_public_identity AS SELECT p.id AS provider_id,p.business_name AS name,''::text AS avatar_url,true AS verified,false AS paid_active,''::text AS badge_tier,1000 AS listing_limit FROM provider_organizations p`); err != nil {
+		t.Fatal(err)
+	}
 	catalog := NewCatalogController(db, config.Config{})
 	app.Get("/products/:product_id", catalog.GetProduct)
 	response, e := app.Test(httptest.NewRequest("GET", "/products/"+product+"?country_code=NG", nil))
@@ -334,10 +338,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 			t.Fatal("create choice", choice, code, created)
 		}
 		id := created["id"].(string)
-		expected := choice
-		if expected == "" {
-			expected = "flutterwave"
-		}
+		expected := "contact"
 		var savedMode, sku string
 		if err = db.QueryRow(ctx, `SELECT payment_mode,sku FROM products WHERE id=$1`, id).Scan(&savedMode, &sku); err != nil || savedMode != expected || sku == "" {
 			t.Fatal(savedMode, sku, err)
@@ -359,8 +360,12 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 		}
 	}
 	code, invalid := sellerCall("POST", "/seller/products", "unexpected")
-	if code != 422 {
-		t.Fatal("invalid mode accepted", code, invalid)
+	if code != 201 {
+		t.Fatal("contact-only normalization failed", code, invalid)
+	}
+	var forcedMode string
+	if err = db.QueryRow(ctx, `SELECT payment_mode FROM products WHERE id=$1`, invalid["id"]).Scan(&forcedMode); err != nil || forcedMode != "contact" {
+		t.Fatal("client mode bypassed contact-only policy", forcedMode, err)
 	}
 
 }

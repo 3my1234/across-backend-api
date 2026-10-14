@@ -54,7 +54,7 @@ func TestProviderPayoutConcurrentAndDuplicate(t *testing.T) {
 	gateway := &payoutTestGateway{started: make(chan struct{}), release: make(chan struct{})}
 	controller := &ProviderMarketplaceController{db: db, paymentProvider: gateway}
 	app := fiber.New()
-	app.Post("/bank", func(c *fiber.Ctx) error { c.Locals("user_id", userID); return controller.ConfigurePayoutAccount(c) })
+	app.Post("/bank", func(c *fiber.Ctx) error { c.Locals("user_id", userID); return controller.legacyConfigurePayoutAccount(c) })
 	request := func() int {
 		req := httptest.NewRequest("POST", "/bank", strings.NewReader(`{"country_code":"NG","account_bank":"044","account_number":"0123456789"}`))
 		req.Header.Set("Content-Type", "application/json")

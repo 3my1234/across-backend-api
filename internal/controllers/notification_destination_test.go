@@ -39,6 +39,7 @@ func TestNotificationConversationLookupAndProviderReadOwnership(t *testing.T) {
 		}
 	}
 	controller := &ProviderMarketplaceController{db: db}
+	installPublicIdentityFixture(t,db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Get("/chats", controller.ListBuyerConversations)
