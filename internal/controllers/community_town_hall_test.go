@@ -124,7 +124,21 @@ func TestCommunityTownHallAdmissionExpiryAndHandoff(t *testing.T) {
 		communityCall(t, app, "POST", "/hall/"+room+"/providers/"+providers[i], buyer, `{"action":"approve"}`, 204)
 	}
 	communityCall(t, app, "POST", "/hall/"+room+"/providers/"+providers[10], buyer, `{"action":"approve"}`, 409)
-	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], `{"unit_price":48800,"terms":"Pickup tomorrow"}`, 204)
+	offerBody := `{"unit_price":48800,"terms":"Pickup tomorrow","client_message_id":"` + uuid.NewString() + `"}`
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], offerBody, 204)
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], offerBody, 204)
+	var offerMessages int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM chat_messages WHERE room_id=$1`, room).Scan(&offerMessages)
+	if offerMessages != 1 {
+		t.Fatal("offer retry duplicated the chat message")
+	}
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], `{"unit_price":48900,"client_message_id":"`+uuid.NewString()+`"}`, 204)
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], offerBody, 204)
+	var latestPrice float64
+	_ = db.QueryRow(ctx, `SELECT unit_price::float8 FROM town_hall_offers WHERE room_id=$1 AND provider_id=$2`, room, providers[0]).Scan(&latestPrice)
+	if latestPrice != 48900 {
+		t.Fatal("late retry reverted a newer offer")
+	}
 	detail := communityCall(t, app, "GET", "/hall/"+room, users[11], "", 200)
 	offer := detail["offers"].([]any)[0].(map[string]any)["id"].(string)
 	if detail["applications"] != nil {
@@ -134,7 +148,7 @@ func TestCommunityTownHallAdmissionExpiryAndHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], `{"unit_price":48700}`, 402)
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", users[0], `{"unit_price":48700,"client_message_id":"`+uuid.NewString()+`"}`, 402)
 	communityCall(t, app, "POST", "/rooms/"+room+"/messages", users[0], `{"message":"Expired","client_message_id":"`+uuid.NewString()+`"}`, 402)
 	communityCall(t, app, "POST", "/hall/"+room+"/providers/"+providers[1], buyer, `{"action":"remove"}`, 204)
 	communityCall(t, app, "GET", "/rooms/"+room+"/messages", users[1], "", 403)
@@ -143,6 +157,11 @@ func TestCommunityTownHallAdmissionExpiryAndHandoff(t *testing.T) {
 	retried := communityCall(t, app, "POST", "/hall/"+room+"/choose", buyer, `{"offer_id":"`+offer+`","close_room":true}`, 200)
 	if retried["id"] != handed["id"] {
 		t.Fatal("handoff retry changed the chat")
+	}
+	var receipts int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM chat_messages WHERE room_id=$1`, handed["id"]).Scan(&receipts)
+	if receipts != 1 {
+		t.Fatal("selected offer was not recorded exactly once")
 	}
 	communityCall(t, app, "GET", "/hall/"+room, users[11], "", 404)
 	retained := communityCall(t, app, "GET", "/hall/"+room, buyer, "", 200)

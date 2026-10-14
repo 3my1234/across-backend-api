@@ -33,6 +33,11 @@ remains the production baseline until this release is migrated and deployed.
    chat and offer records. Private DMs remain independent. One applicant user
    represents each provider organisation; other staff do not silently inherit a
    Town Hall seat. Providers may join multiple independent rooms.
+   Structured offers also create retry-safe room messages; choosing an offer
+   records its selected summary once in the private DM. Foreground notifications
+   refresh open chats immediately, with polling retained as a fallback. Social
+   notification previews use generic text, keeping bargaining bodies inside the
+   authenticated chat.
 
 ## Database and rollout
 

@@ -42,6 +42,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	profileController := controllers.NewProfileController(db)
 	marketplaceController := controllers.NewProviderMarketplaceController(db, cfg)
 	communityController := controllers.NewCommunityController(db, cfg, cache)
+	privateCommunity := func(c *fiber.Ctx) error { c.Set("Cache-Control", "private, no-store"); return c.Next() }
 	authRateLimit := middleware.DistributedRateLimit(cache, "auth", 20, time.Minute)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
@@ -198,9 +199,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/xp/withdrawals", superOnly, xpController.AdminListWithdrawals)
 	adminRoutes.Patch("/xp/withdrawals/:withdrawal_id", superOnly, xpController.AdminReviewWithdrawal)
 	adminRoutes.Get("/support/tickets", catalogOnly, supportController.AdminListTickets)
-	adminRoutes.Get("/community/reports", catalogOnly, communityController.Reports)
-	adminRoutes.Get("/community/reports/:report_id/messages", catalogOnly, communityController.ReportMessages)
-	adminRoutes.Post("/community/reports/:report_id/resolve", catalogOnly, communityController.ResolveReport)
+	adminRoutes.Get("/community/reports", catalogOnly, privateCommunity, communityController.Reports)
+	adminRoutes.Get("/community/reports/:report_id/messages", catalogOnly, privateCommunity, communityController.ReportMessages)
+	adminRoutes.Post("/community/reports/:report_id/resolve", catalogOnly, privateCommunity, communityController.ResolveReport)
 	adminRoutes.Get("/support/tickets/:ticket_id/messages", catalogOnly, supportController.AdminGetTicketMessages)
 	adminRoutes.Post("/support/tickets/:ticket_id/read", catalogOnly, supportController.AdminMarkTicketRead)
 	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
@@ -213,6 +214,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 
 	// Register every admin endpoint before the broad customer auth group.
 	authed := v1.Group("", middleware.RequireAuth(cfg, db))
+	authed.Use("/chat", privateCommunity)
 	communityWrite := middleware.DistributedRateLimit(cache, "community-write", 60, time.Minute)
 	communityLookup := middleware.DistributedRateLimit(cache, "community-lookup", 30, time.Minute)
 	authed.Get("/chat/profile", communityController.Profile)

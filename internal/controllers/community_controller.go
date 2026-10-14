@@ -668,7 +668,7 @@ func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, a
 		body = string([]rune(body)[:180]) + "..."
 	}
 	for _, id := range ids {
-		if err = insertNotification(ctx, tx, id, "", nil, "social_message", title, body, map[string]any{"view": "messages", "chat_room_id": room}, "shared-chat:"+message+":"+id); err != nil {
+		if err = insertNotification(ctx, tx, id, "", nil, "social_message", title, "Open your chat to read the message.", map[string]any{"view": "messages", "chat_room_id": room}, "shared-chat:"+message+":"+id); err != nil {
 			return err
 		}
 	}

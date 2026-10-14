@@ -3,9 +3,11 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"math"
 	"strings"
 	"time"
 )
@@ -31,6 +33,8 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	in.Description = strings.TrimSpace(in.Description)
 	in.Location = strings.TrimSpace(in.Location)
 	in.Unit = strings.TrimSpace(in.Unit)
+	in.Quantity = math.Round(in.Quantity*1000) / 1000
+	in.Price = math.Round(in.Price*100) / 100
 	if len([]rune(in.Title)) < 3 || len([]rune(in.Title)) > 160 || len([]rune(in.Description)) < 1 || len([]rune(in.Description)) > 2000 || in.Location == "" || len(in.Location) > 200 || in.Unit == "" || len(in.Unit) > 40 || len(in.Category) > 100 || in.Quantity <= 0 || in.Quantity > 1e9 || in.Price <= 0 || in.Price > 1e10 {
 		return fiber.NewError(422, "Enter a title, description, location, quantity, unit and target price")
 	}
@@ -326,11 +330,19 @@ func (s *CommunityController) HallOffer(c *fiber.Ctx) error {
 		return err
 	}
 	var in struct {
-		Price float64 `json:"unit_price"`
-		Terms string  `json:"terms"`
+		Price    float64 `json:"unit_price"`
+		Terms    string  `json:"terms"`
+		ClientID string  `json:"client_message_id"`
 	}
 	if c.BodyParser(&in) != nil || in.Price <= 0 || in.Price > 1e10 || len([]rune(in.Terms)) > 1000 {
 		return fiber.NewError(422, "Enter a positive unit price and terms up to 1000 characters")
+	}
+	if _, err = uuid.Parse(in.ClientID); err != nil {
+		return fiber.NewError(422, "An offer reference is required")
+	}
+	in.Price = math.Round(in.Price*100) / 100
+	if in.Price <= 0 {
+		return fiber.NewError(422, "Enter a positive price with up to two decimal places")
 	}
 	tx, err := s.db.Begin(c.Context())
 	if err != nil {
@@ -344,13 +356,36 @@ func (s *CommunityController) HallOffer(c *fiber.Ctx) error {
 	if kind != "town_hall" || role != "provider" {
 		return fiber.ErrForbidden
 	}
+	var unit string
+	err = tx.QueryRow(c.Context(), `SELECT unit FROM town_hall_requests WHERE room_id=$1::uuid`, id).Scan(&unit)
+	if err != nil {
+		return communityError(err)
+	}
+	actor := communityActor(c)
+	body := fmt.Sprintf("Offer: NGN %.2f per %s. %s", in.Price, unit, strings.TrimSpace(in.Terms))
+	var previousRoom, previousBody string
+	err = tx.QueryRow(c.Context(), `SELECT room_id::text,body FROM chat_messages WHERE sender_user_id=$1::uuid AND client_message_id=$2::uuid`, actor, in.ClientID).Scan(&previousRoom, &previousBody)
+	if err == nil {
+		if previousRoom != id || previousBody != body {
+			return fiber.NewError(409, "Offer reference already used")
+		}
+		return c.SendStatus(204)
+	}
+	if err != pgx.ErrNoRows {
+		return communityError(err)
+	}
 	_, err = tx.Exec(c.Context(), `INSERT INTO town_hall_offers(room_id,provider_id,sender_user_id,unit_price,terms) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5) ON CONFLICT(room_id,provider_id) DO UPDATE SET unit_price=EXCLUDED.unit_price,terms=EXCLUDED.terms,updated_at=now()`, id, provider, communityActor(c), in.Price, strings.TrimSpace(in.Terms))
 	if err != nil {
 		return communityError(err)
 	}
-	_, err = tx.Exec(c.Context(), `UPDATE chat_rooms SET revision=revision+1,last_message_at=now() WHERE id=$1::uuid`, id)
+	message, _, fresh, err := insertSharedMessage(c.Context(), tx, id, actor, conversationMessageInput{Body: body, MediaKeys: []string{}, ClientID: in.ClientID})
 	if err != nil {
 		return communityError(err)
+	}
+	if fresh {
+		if err = s.notifyRoom(c.Context(), tx, id, actor, message, "New Town Hall offer", body); err != nil {
+			return communityError(err)
+		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
 		return communityError(err)
@@ -453,6 +488,20 @@ func (s *CommunityController) HallChoose(c *fiber.Ctx) error {
 	direct, err := ensureDirectTx(c.Context(), tx, actor, peer, data)
 	if err != nil {
 		return communityError(err)
+	}
+	summary := fmt.Sprintf("Selected Town Hall offer: %s. %v %v at NGN %v per unit. %v", data["title"], data["quantity"], data["unit"], data["unit_price"], data["terms"])
+	if len([]rune(summary)) > 2000 {
+		summary = string([]rune(summary)[:2000])
+	}
+	ref := uuid.NewSHA1(uuid.NameSpaceOID, []byte("hall-handoff:"+id+":"+in.Offer+":"+string(raw))).String()
+	mid, _, fresh, err := insertSharedMessage(c.Context(), tx, direct, actor, conversationMessageInput{Body: summary, MediaKeys: []string{}, ClientID: ref})
+	if err != nil {
+		return communityError(err)
+	}
+	if fresh {
+		if err = s.notifyRoom(c.Context(), tx, direct, actor, mid, "A buyer selected your offer", summary); err != nil {
+			return communityError(err)
+		}
 	}
 	_, err = tx.Exec(c.Context(), `UPDATE chat_rooms SET context=context||jsonb_build_object('selected_offer_id',$2::text,'selected_dm_id',$3::text) WHERE id=$1::uuid`, id, in.Offer, direct)
 	if err != nil {
