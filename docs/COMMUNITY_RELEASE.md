@@ -81,6 +81,9 @@ has no /api/v1/chat requests. Backend now logs database error codes/table/column
 constraint names without message contents or SQL parameters. Request matching
 logs before claiming the root failure fixed. Paginated/indexed reads and bounded
 caches control request size; capacity still needs representative load measurement.
+API readiness also checks community_schema on its serving database, including the
+message-only column and promotion jobs. Database ping alone must not declare
+community ready when schema is absent or a migration URL targets another database.
 
 Local PostgreSQL integration tests use isolated schemas on loopback only. Checks
 cover identity privacy, acceptance, outsiders, idempotent sends/statuses, read

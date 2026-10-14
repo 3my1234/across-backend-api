@@ -101,6 +101,30 @@ func TestCommunityMessageOnlyHallRequest(t *testing.T) {
 	}
 	communityCall(t, app, "POST", "/hall", actor, fmt.Sprintf(`{"client_request_id":%q,"message":"  "}`, uuid.NewString()), 422)
 }
+func TestCommunityReadinessDetectsMissingSchema(t *testing.T) {
+	db := communityTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	if CommunitySchemaReady(ctx, db) {
+		t.Fatal("must detect missing promotion jobs")
+	}
+	raw, err := os.ReadFile("../../migrations/082_social_promotion_jobs.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if !CommunitySchemaReady(ctx, db) {
+		t.Fatal("complete community schema should be ready")
+	}
+	if _, err = db.Exec(ctx, "ALTER TABLE town_hall_requests DROP COLUMN message_only"); err != nil {
+		t.Fatal(err)
+	}
+	if CommunitySchemaReady(ctx, db) {
+		t.Fatal("must detect missing request-form migration")
+	}
+}
 func communityCall(t *testing.T, app *fiber.App, method, path, actor, body string, want int) map[string]any {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))

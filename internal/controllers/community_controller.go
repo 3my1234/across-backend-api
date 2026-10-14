@@ -33,6 +33,16 @@ func NewCommunityController(db *pgxpool.Pool, cfg config.Config, cache ...*redis
 	return controller
 }
 func communityActor(c *fiber.Ctx) string { id, _ := c.Locals("user_id").(string); return id }
+
+// Verify the database used by API requests, not only a migration connection.
+func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {
+	var ready bool
+	err := db.QueryRow(ctx, `SELECT to_regclass('social_profiles') IS NOT NULL
+	 AND to_regclass('chat_rooms') IS NOT NULL AND to_regclass('chat_messages') IS NOT NULL
+	 AND to_regclass('social_statuses') IS NOT NULL AND to_regclass('social_promotion_jobs') IS NOT NULL
+	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)`).Scan(&ready)
+	return err == nil && ready
+}
 func (s *CommunityController) InvitePage(c *fiber.Ctx) error {
 	handle := strings.ToLower(c.Params("handle"))
 	if !socialHandle.MatchString(handle) {
