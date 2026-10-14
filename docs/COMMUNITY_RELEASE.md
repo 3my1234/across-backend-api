@@ -60,6 +60,28 @@ remains the production baseline until this release is migrated and deployed.
 
 ## Validation and remaining release checks
 
+### Town Hall lobby and support follow-up (14 October)
+
+Migration084 adds a message_only flag and permits absent quantity/target price.
+New clients create requests with one message (3-2000 characters); the server
+derives a short title and stores no guessed quantities or prices. Existing
+structured requests and offer/approval/seat/privacy rules remain intact. Apply084
+before deploying the new portal/mobile request forms. Free-form offer amounts are
+displayed without invented per-unit totals.
+
+Provider home now has a draggable Town Hall entry point with bounded activity
+refresh, hidden while typing. The lobby uses responsive request cards, buyer
+names, offer counts and occupancy. A failed inbox ends its loading state; Hall
+loading does not depend on profile/inbox loading. Support list and selected-thread
+refreshes run concurrently, keep private cached history and avoid repeated read
+acknowledgements for the same message. PWA shell is v7, activated by Refresh app.
+
+Reported production community503 remains under diagnosis: supplied log sample
+has no /api/v1/chat requests. Backend now logs database error codes/table/column/
+constraint names without message contents or SQL parameters. Request matching
+logs before claiming the root failure fixed. Paginated/indexed reads and bounded
+caches control request size; capacity still needs representative load measurement.
+
 Local PostgreSQL integration tests use isolated schemas on loopback only. Checks
 cover identity privacy, acceptance, outsiders, idempotent sends/statuses, read
 cutoffs, blocks, selected audiences, removed-friend privacy, expired subscriptions,

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -33,7 +34,7 @@ func communityTestDB(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql"} {
+	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql", "084_town_hall_message_requests.sql"} {
 		raw, err := os.ReadFile("../../migrations/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -76,6 +77,29 @@ func communityApp(db *pgxpool.Pool) *fiber.App {
 	app.Post("/rooms/:conversation_id/read", s.MarkRead)
 	app.Post("/rooms/:conversation_id/reports", s.Report)
 	return app
+}
+func TestCommunityMessageOnlyHallRequest(t *testing.T) {
+	db := communityTestDB(t)
+	defer db.Close()
+	actor := uuid.NewString()
+	if _, err := db.Exec(context.Background(), `INSERT INTO users(id,full_name) VALUES($1,'Buyer')`, actor); err != nil {
+		t.Fatal(err)
+	}
+	app := communityApp(db)
+	body := fmt.Sprintf(`{"client_request_id":%q,"message":"I need 50 bags of rice at 48,500 naira in Abuja."}`, uuid.NewString())
+	created := communityCall(t, app, "POST", "/hall", actor, body, 201)
+	retry := communityCall(t, app, "POST", "/hall", actor, body, 201)
+	if created["id"] != retry["id"] {
+		t.Fatal("retry created another room")
+	}
+	detail := communityCall(t, app, "GET", "/hall/"+created["id"].(string), actor, "", 200)
+	if detail["message_only"] != true || detail["quantity"] != nil || detail["target_unit_price"] != nil {
+		t.Fatalf("invented structured values: %#v", detail)
+	}
+	if detail["description"] != "I need 50 bags of rice at 48,500 naira in Abuja." {
+		t.Fatal("request text changed")
+	}
+	communityCall(t, app, "POST", "/hall", actor, fmt.Sprintf(`{"client_request_id":%q,"message":"  "}`, uuid.NewString()), 422)
 }
 func communityCall(t *testing.T, app *fiber.App, method, path, actor, body string, want int) map[string]any {
 	t.Helper()

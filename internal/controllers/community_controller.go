@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -65,6 +66,12 @@ func communityError(err error) error {
 	}
 	if asPG(err, &p) && p.Code == "23505" {
 		return fiber.NewError(409, "That name or request is already in use")
+	}
+	// Log diagnostics without SQL arguments, tokens, message bodies or contact data.
+	if asPG(err, &p) {
+		log.Printf("community database failure code=%s table=%s column=%s constraint=%s", p.Code, p.TableName, p.ColumnName, p.ConstraintName)
+	} else {
+		log.Printf("community failure type=%T", err)
 	}
 	return fiber.NewError(503, "Community is temporarily unavailable. Please retry")
 }
