@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -32,6 +33,16 @@ func NewCommunityController(db *pgxpool.Pool, cfg config.Config, cache ...*redis
 	return controller
 }
 func communityActor(c *fiber.Ctx) string { id, _ := c.Locals("user_id").(string); return id }
+
+// Verify the database used by API requests, not only a migration connection.
+func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {
+	var ready bool
+	err := db.QueryRow(ctx, `SELECT to_regclass('social_profiles') IS NOT NULL
+	 AND to_regclass('chat_rooms') IS NOT NULL AND to_regclass('chat_messages') IS NOT NULL
+	 AND to_regclass('social_statuses') IS NOT NULL AND to_regclass('social_promotion_jobs') IS NOT NULL
+	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)`).Scan(&ready)
+	return err == nil && ready
+}
 func (s *CommunityController) InvitePage(c *fiber.Ctx) error {
 	handle := strings.ToLower(c.Params("handle"))
 	if !socialHandle.MatchString(handle) {
@@ -65,6 +76,12 @@ func communityError(err error) error {
 	}
 	if asPG(err, &p) && p.Code == "23505" {
 		return fiber.NewError(409, "That name or request is already in use")
+	}
+	// Log diagnostics without SQL arguments, tokens, message bodies or contact data.
+	if asPG(err, &p) {
+		log.Printf("community database failure code=%s table=%s column=%s constraint=%s", p.Code, p.TableName, p.ColumnName, p.ConstraintName)
+	} else {
+		log.Printf("community failure type=%T", err)
 	}
 	return fiber.NewError(503, "Community is temporarily unavailable. Please retry")
 }

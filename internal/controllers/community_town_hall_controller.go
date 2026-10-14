@@ -14,6 +14,7 @@ import (
 
 func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	var in struct {
+		Message     string  `json:"message"`
 		ClientID    string  `json:"client_request_id"`
 		Title       string  `json:"title"`
 		Description string  `json:"description"`
@@ -30,12 +31,23 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 		return fiber.NewError(422, "A request reference is required")
 	}
 	in.Title = strings.TrimSpace(in.Title)
+	messageOnly := strings.TrimSpace(in.Message) != ""
+	if messageOnly {
+		in.Description = strings.TrimSpace(in.Message)
+		title := []rune(strings.Join(strings.Fields(in.Description), " "))
+		if len(title) > 80 {
+			title = title[:80]
+		}
+		in.Title = string(title)
+		in.Location, in.Unit, in.Category = "", "", ""
+		in.Quantity, in.Price = 0, 0
+	}
 	in.Description = strings.TrimSpace(in.Description)
 	in.Location = strings.TrimSpace(in.Location)
 	in.Unit = strings.TrimSpace(in.Unit)
 	in.Quantity = math.Round(in.Quantity*1000) / 1000
 	in.Price = math.Round(in.Price*100) / 100
-	if len([]rune(in.Title)) < 3 || len([]rune(in.Title)) > 160 || len([]rune(in.Description)) < 1 || len([]rune(in.Description)) > 2000 || in.Location == "" || len(in.Location) > 200 || in.Unit == "" || len(in.Unit) > 40 || len(in.Category) > 100 || in.Quantity <= 0 || in.Quantity > 1e9 || in.Price <= 0 || in.Price > 1e10 {
+	if len([]rune(in.Title)) < 3 || len([]rune(in.Title)) > 160 || len([]rune(in.Description)) < 1 || len([]rune(in.Description)) > 2000 || (!messageOnly && (in.Location == "" || len(in.Location) > 200 || in.Unit == "" || len(in.Unit) > 40 || len(in.Category) > 100 || in.Quantity <= 0 || in.Quantity > 1e9 || in.Price <= 0 || in.Price > 1e10)) {
 		return fiber.NewError(422, "Enter a title, description, location, quantity, unit and target price")
 	}
 	tx, err := s.db.Begin(c.Context())
@@ -55,7 +67,7 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	}
 	if id != requested {
 		var same bool
-		err = tx.QueryRow(c.Context(), `SELECT description=$2 AND location=$3 AND quantity=$4 AND unit=$5 AND target_unit_price=$6 AND category=$7 FROM town_hall_requests WHERE room_id=$1::uuid`, id, in.Description, in.Location, in.Quantity, in.Unit, in.Price, in.Category).Scan(&same)
+		err = tx.QueryRow(c.Context(), `SELECT description=$2 AND location=$3 AND COALESCE(quantity,0)=$4 AND unit=$5 AND COALESCE(target_unit_price,0)=$6 AND category=$7 AND message_only=$8 FROM town_hall_requests WHERE room_id=$1::uuid`, id, in.Description, in.Location, in.Quantity, in.Unit, in.Price, in.Category, messageOnly).Scan(&same)
 		if err != nil {
 			return communityError(err)
 		}
@@ -64,7 +76,7 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 		}
 		return c.Status(201).JSON(fiber.Map{"id": id})
 	}
-	_, err = tx.Exec(c.Context(), `INSERT INTO town_hall_requests(room_id,description,category,location,quantity,unit,target_unit_price) VALUES($1::uuid,$2,$3,$4,$5,$6,$7)`, id, in.Description, in.Category, in.Location, in.Quantity, in.Unit, in.Price)
+	_, err = tx.Exec(c.Context(), `INSERT INTO town_hall_requests(room_id,description,category,location,quantity,unit,target_unit_price,message_only) VALUES($1::uuid,$2,$3,$4,NULLIF($5::numeric,0),$6,NULLIF($7::numeric,0),$8)`, id, in.Description, in.Category, in.Location, in.Quantity, in.Unit, in.Price, messageOnly)
 	if err != nil {
 		return communityError(err)
 	}
@@ -79,7 +91,8 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 }
 
 const hallPreviewSQL = `SELECT jsonb_build_object('id',r.id,'title',r.title,'state',r.state,'created_at',r.created_at,'is_owner',r.owner_user_id=$1::uuid,
- 'description',h.description,'category',h.category,'location',h.location,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'target_unit_price',h.target_unit_price,
+ 'buyer_name',(SELECT u.full_name FROM users u WHERE u.id=r.owner_user_id),
+ 'description',h.description,'message_only',h.message_only,'category',h.category,'location',h.location,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'target_unit_price',h.target_unit_price,
  'seats',(SELECT count(*) FROM chat_participants p WHERE p.room_id=r.id AND p.role='provider' AND p.state='active'),
  'admitted',EXISTS(SELECT 1 FROM chat_participants p WHERE p.room_id=r.id AND p.user_id=$1::uuid AND p.state='active'),
  'offers',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',o.id,'provider_id',o.provider_id,'provider_name',i.name,'badge_tier',i.badge_tier,'unit_price',o.unit_price,'terms',o.terms,'updated_at',o.updated_at) ORDER BY o.unit_price,o.id) FROM town_hall_offers o JOIN provider_public_identity i ON i.provider_id=o.provider_id WHERE o.room_id=r.id AND (r.owner_user_id=$1::uuid OR EXISTS(SELECT 1 FROM chat_participants p WHERE p.room_id=o.room_id AND p.provider_id=o.provider_id AND p.state='active'))),'[]'::jsonb))
@@ -363,6 +376,9 @@ func (s *CommunityController) HallOffer(c *fiber.Ctx) error {
 	}
 	actor := communityActor(c)
 	body := fmt.Sprintf("Offer: NGN %.2f per %s. %s", in.Price, unit, strings.TrimSpace(in.Terms))
+	if unit == "" {
+		body = fmt.Sprintf("Offer: NGN %.2f. %s", in.Price, strings.TrimSpace(in.Terms))
+	}
 	var previousRoom, previousBody string
 	err = tx.QueryRow(c.Context(), `SELECT room_id::text,body FROM chat_messages WHERE sender_user_id=$1::uuid AND client_message_id=$2::uuid`, actor, in.ClientID).Scan(&previousRoom, &previousBody)
 	if err == nil {
@@ -490,6 +506,9 @@ func (s *CommunityController) HallChoose(c *fiber.Ctx) error {
 		return communityError(err)
 	}
 	summary := fmt.Sprintf("Selected Town Hall offer: %s. %v %v at NGN %v per unit. %v", data["title"], data["quantity"], data["unit"], data["unit_price"], data["terms"])
+	if data["quantity"] == nil {
+		summary = fmt.Sprintf("Selected Town Hall offer: %s. NGN %v. %v", data["title"], data["unit_price"], data["terms"])
+	}
 	if len([]rune(summary)) > 2000 {
 		summary = string([]rune(summary)[:2000])
 	}

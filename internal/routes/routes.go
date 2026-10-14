@@ -75,6 +75,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Get("/ready", func(c *fiber.Ctx) error {
 		databaseReady := db.Ping(c.Context()) == nil
 		readDatabaseReady := readDB.Ping(c.Context()) == nil
+		communitySchemaReady := databaseReady && controllers.CommunitySchemaReady(c.Context(), db)
 		redisReady := cache != nil
 		if redisReady {
 			redisReady = cache.Ping(c.Context()).Err() == nil
@@ -86,7 +87,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		privyReady := strings.TrimSpace(cfg.PrivyAppID) != "" && strings.TrimSpace(cfg.PrivyAppSecret) != ""
 		storageReady := strings.TrimSpace(cfg.AWSRegion) != "" && strings.TrimSpace(cfg.S3BucketName) != "" && strings.TrimSpace(cfg.AWSAccessKeyID) != "" && strings.TrimSpace(cfg.AWSSecretAccessKey) != ""
 		emailReady := strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "" && strings.TrimSpace(cfg.SMTPFromEmail) != ""
-		ready := databaseReady && readDatabaseReady && redisReady
+		ready := databaseReady && readDatabaseReady && redisReady && communitySchemaReady
 		pool := db.Stat()
 		status := fiber.StatusOK
 		if !ready {
@@ -95,12 +96,13 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		return c.Status(status).JSON(fiber.Map{
 			"ok": ready,
 			"checks": fiber.Map{
-				"database":        databaseReady,
-				"read_database":   readDatabaseReady,
-				"redis":           redisReady,
-				"email_delivery":  emailReady,
-				"google_auth":     privyReady,
-				"profile_uploads": storageReady,
+				"database":         databaseReady,
+				"community_schema": communitySchemaReady,
+				"read_database":    readDatabaseReady,
+				"redis":            redisReady,
+				"email_delivery":   emailReady,
+				"google_auth":      privyReady,
+				"profile_uploads":  storageReady,
 			},
 			"database_pool": fiber.Map{
 				"acquired": pool.AcquiredConns(),
