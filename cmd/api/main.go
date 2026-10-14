@@ -62,7 +62,7 @@ func main() {
 	// Backward-compatible single-resource mode. At scale, set this false and
 	// run one or more /app/across-worker services independently.
 	if cfg.RunInlineWorkers {
-		go workers.Run(ctx, store.PG, cfg)
+		go workers.Run(ctx, store.PG, cfg, store.Redis)
 	}
 
 	log.Printf("service configuration: privy_app_id_set=%t privy_app_secret_set=%t s3_region_set=%t s3_bucket_set=%t smtp_set=%t ses_feedback_set=%t",

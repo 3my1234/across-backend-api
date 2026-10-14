@@ -67,6 +67,6 @@ func main() {
 		}
 	}()
 	log.Println("Atlantic Express background worker started")
-	workers.Run(ctx, store.PG, cfg)
+	workers.Run(ctx, store.PG, cfg, store.Redis)
 	log.Println("Atlantic Express background worker stopped")
 }
