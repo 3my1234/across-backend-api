@@ -58,10 +58,10 @@ func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountConte
 	}
 	name := html.EscapeString(plainName)
 	destination := strings.TrimSpace(e.cfg.WebsiteURL)
-	introduction := "Explore products and trusted services, pay securely in your supported currency, and follow each order from payment to delivery."
+	introduction := "Discover products and trusted services, contact providers directly, and agree on the details in chat."
 	featureOneTitle, featureOneCopy := "Discover", "Products and services"
-	featureTwoTitle, featureTwoCopy := "Pay", "Secure checkout"
-	featureThreeTitle, featureThreeCopy := "Track", "Order progress"
+	featureTwoTitle, featureTwoCopy := "Chat", "Contact providers"
+	featureThreeTitle, featureThreeCopy := "Connect", "Find what you need"
 	actionLabel := "Explore Atlantic Express"
 	plainAction := "Explore Atlantic Express"
 	if accountContext == "provider" {
