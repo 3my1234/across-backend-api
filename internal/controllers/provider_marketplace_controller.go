@@ -275,8 +275,8 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 	}
 	mime := strings.ToLower(strings.TrimSpace(req.MimeType))
 	purpose := strings.ToLower(strings.TrimSpace(req.Purpose))
-	if purpose != "listing" && purpose != "verification" && purpose != "logo" {
-		return fiber.NewError(fiber.StatusBadRequest, "purpose must be listing, verification, or logo")
+	if purpose != "listing" && purpose != "verification" && purpose != "logo" && purpose != "banner" {
+		return fiber.NewError(fiber.StatusBadRequest, "purpose must be listing, verification, logo, or banner")
 	}
 	allowed := supportedPortableImageMime(mime)
 	if purpose == "verification" && mime == "application/pdf" {
@@ -862,7 +862,7 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 	}
 	lonDelta := radius / (111.32 * lonScale)
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
-	search := strings.TrimSpace(c.Query("search"))
+	search := serviceSearchTerm(c.Query("search"))
 	availableOnly := strings.EqualFold(c.Query("available_now"), "true")
 	minRating, err := serviceMinimumRating(c.Query("min_rating"))
 	if err != nil {
@@ -881,7 +881,7 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 		  AND l.latitude BETWEEN $3 AND $4 AND l.longitude BETWEEN $5 AND $6
 		  AND ($7='' OR l.listing_type=$7) AND (NOT $8 OR l.is_available_now=true)
 		  AND ($13::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $13))
-		  AND ($9='' OR (l.title||' '||l.description||' '||l.category||' '||p.business_name||' '||l.city||' '||l.state) ILIKE '%%'||$9||'%%')
+		  AND ($9='' OR (l.title||' '||l.description||' '||l.category||' '||p.business_name||' '||l.city||' '||l.state) ILIKE '%%'||$9||'%%' OR ($9='driver' AND (lower(l.category) LIKE '%driver%' OR lower(l.category) LIKE '%chauffeur%' OR lower(l.category) LIKE '%taxi%')))
 	)
 	SELECT * FROM candidates WHERE distance_km <= $10 AND (NOT is_mobile_service OR service_radius_km IS NULL OR distance_km <= service_radius_km)
 	ORDER BY COALESCE((SELECT i.verified AND i.paid_active FROM provider_public_identity i WHERE i.provider_id=(SELECT l.provider_id FROM provider_listings l WHERE l.id=candidates.id::uuid)),false) DESC,distance_km ASC,id ASC LIMIT $11`, latitude, longitude, latitude-latDelta, latitude+latDelta, longitude-lonDelta, longitude+lonDelta, listingType, availableOnly, search, radius, limit+1, !m.subscriptionsRequired(), minRating)
@@ -930,9 +930,9 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cursor")
 	}
 	listingType := strings.ToLower(strings.TrimSpace(c.Query("type")))
-	search := strings.TrimSpace(c.Query("search"))
+	search := serviceSearchTerm(c.Query("search"))
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.paid_active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum,CASE WHEN $3='admin' THEN to_jsonb(l)->'approved_snapshot' ELSE NULL END,CASE WHEN $3='admin' THEN to_jsonb(l) ELSE NULL END,COALESCE((to_jsonb(l)->>'content_revision')::bigint,0),CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN provider_public_identity s ON s.provider_id=p.id WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.category||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%') AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.paid_active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END,l.created_at,l.id)<($11::boolean,$6,$7::uuid)) ORDER BY CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END DESC,l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating, promotedCursorPriority(c.Query("cursor")))
+	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.paid_active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum,CASE WHEN $3='admin' THEN to_jsonb(l)->'approved_snapshot' ELSE NULL END,CASE WHEN $3='admin' THEN to_jsonb(l) ELSE NULL END,COALESCE((to_jsonb(l)->>'content_revision')::bigint,0),CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN provider_public_identity s ON s.provider_id=p.id WHERE ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.category||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%' OR ($2='driver' AND (lower(l.category) LIKE '%driver%' OR lower(l.category) LIKE '%chauffeur%' OR lower(l.category) LIKE '%taxi%'))) AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.paid_active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END,l.created_at,l.id)<($11::boolean,$6,$7::uuid)) ORDER BY CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END DESC,l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating, promotedCursorPriority(c.Query("cursor")))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "listings unavailable")
 	}

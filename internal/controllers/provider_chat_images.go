@@ -14,9 +14,10 @@ import (
 )
 
 type conversationMessageInput struct {
-	Body      string   `json:"message"`
-	MediaKeys []string `json:"media_keys"`
-	ClientID  string   `json:"client_message_id"`
+	Location  *chatLocation `json:"location"`
+	Body      string        `json:"message"`
+	MediaKeys []string      `json:"media_keys"`
+	ClientID  string        `json:"client_message_id"`
 }
 
 func (m *ProviderMarketplaceController) PresignChatImage(c *fiber.Ctx) error {
@@ -50,8 +51,11 @@ func (m *ProviderMarketplaceController) parseConversationMessage(c *fiber.Ctx) (
 	if c.BodyParser(&req) != nil {
 		return req, fiber.NewError(400, "invalid message")
 	}
+	if err := validateChatLocation(req.Location); err != nil {
+		return req, err
+	}
 	req.Body = strings.TrimSpace(req.Body)
-	if len([]rune(req.Body)) > 2000 || (req.Body == "" && len(req.MediaKeys) == 0) || len(req.MediaKeys) > 4 {
+	if len([]rune(req.Body)) > 2000 || (req.Body == "" && len(req.MediaKeys) == 0 && req.Location == nil) || len(req.MediaKeys) > 4 {
 		return req, fiber.NewError(422, "Send a message of up to 2000 characters or up to four images")
 	}
 	if req.ClientID != "" {
@@ -88,6 +92,9 @@ func (m *ProviderMarketplaceController) parseConversationMessage(c *fiber.Ctx) (
 			return req, fiber.NewError(422, "Image upload is incomplete or exceeds 5 MB")
 		}
 	}
+	if req.Body == "" && req.Location != nil {
+		req.Body = "Location pin"
+	}
 	if req.Body == "" {
 		req.Body = "Photo"
 	}
@@ -118,12 +125,12 @@ func insertConversationMessage(ctx context.Context, tx pgx.Tx, conversationID, s
 	requestedID := uuid.New()
 	var id uuid.UUID
 	var createdAt time.Time
-	err := tx.QueryRow(ctx, `INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,sender_user_id,body,media_keys,client_message_id)
- VALUES($1,$2::uuid,$3,$4::uuid,$5,$6,NULLIF($7,'')::uuid)
+	err := tx.QueryRow(ctx, `INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,sender_user_id,body,media_keys,client_message_id,location)
+ VALUES($1,$2::uuid,$3,$4::uuid,$5,$6,NULLIF($7,'')::uuid,$8::jsonb)
  ON CONFLICT(sender_user_id,client_message_id) WHERE client_message_id IS NOT NULL
  DO UPDATE SET id=provider_conversation_messages.id
- WHERE provider_conversation_messages.conversation_id=EXCLUDED.conversation_id AND provider_conversation_messages.body=EXCLUDED.body AND provider_conversation_messages.media_keys=EXCLUDED.media_keys
- RETURNING id,created_at`, requestedID, conversationID, senderType, userID, input.Body, input.MediaKeys, input.ClientID).Scan(&id, &createdAt)
+ WHERE provider_conversation_messages.conversation_id=EXCLUDED.conversation_id AND provider_conversation_messages.body=EXCLUDED.body AND provider_conversation_messages.media_keys=EXCLUDED.media_keys AND provider_conversation_messages.location IS NOT DISTINCT FROM EXCLUDED.location
+ RETURNING id,created_at`, requestedID, conversationID, senderType, userID, input.Body, input.MediaKeys, input.ClientID, chatLocationJSON(input.Location)).Scan(&id, &createdAt)
 	if err == pgx.ErrNoRows {
 		return id, createdAt, false, fiber.NewError(409, "This message reference was already used for another message")
 	}

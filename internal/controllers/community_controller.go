@@ -46,7 +46,8 @@ func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {
 	 AND to_regclass('chat_rooms') IS NOT NULL AND to_regclass('chat_messages') IS NOT NULL
 	 AND to_regclass('social_statuses') IS NOT NULL AND to_regclass('social_promotion_jobs') IS NOT NULL
 	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)
- AND to_regprocedure('expire_unengaged_town_hall_requests(integer)') IS NOT NULL`).Scan(&ready)
+ AND to_regprocedure('expire_unengaged_town_hall_requests(integer)') IS NOT NULL
+ AND to_regclass('provider_driver_presence') IS NOT NULL AND to_regprocedure('valid_chat_location(jsonb)') IS NOT NULL`).Scan(&ready)
 	return err == nil && ready
 }
 func (s *CommunityController) InvitePage(c *fiber.Ctx) error {
@@ -576,7 +577,7 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	if c.Get("If-None-Match") == etag && page.CursorTime == nil {
 		return c.SendStatus(304)
 	}
-	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,u.full_name,m.body,m.media_keys,m.created_at FROM chat_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
+	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,u.full_name,m.body,m.media_keys,m.created_at,to_jsonb(m)->'location' FROM chat_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
 	if err != nil {
 		return communityError(err)
 	}
@@ -588,15 +589,16 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	for rows.Next() {
 		var mid, sender, name, body string
 		var keys []string
+		var location json.RawMessage
 		var at time.Time
-		if err = rows.Scan(&mid, &sender, &name, &body, &keys, &at); err != nil {
+		if err = rows.Scan(&mid, &sender, &name, &body, &keys, &at, &location); err != nil {
 			return communityError(err)
 		}
 		if len(items) == page.Limit {
 			next = encodeAdminCursor(last, lastID)
 			break
 		}
-		items = append(items, fiber.Map{"id": mid, "sender_user_id": sender, "sender_name": name, "body": body, "media_urls": s.market.chatMediaURLs(keys), "created_at": at, "is_mine": sender == actor, "sender_type": "member"})
+		items = append(items, fiber.Map{"id": mid, "sender_user_id": sender, "sender_name": name, "body": body, "media_urls": s.market.chatMediaURLs(keys), "location": location, "created_at": at, "is_mine": sender == actor, "sender_type": "member"})
 		last, lastID = at, mid
 	}
 	if err = rows.Err(); err != nil {
@@ -649,13 +651,13 @@ func (s *CommunityController) Send(c *fiber.Ctx) error {
 	if err = tx.Commit(c.Context()); err != nil {
 		return communityError(err)
 	}
-	return c.Status(201).JSON(fiber.Map{"id": mid, "body": input.Body, "created_at": at, "is_mine": true, "media_urls": s.market.chatMediaURLs(input.MediaKeys)})
+	return c.Status(201).JSON(fiber.Map{"id": mid, "body": input.Body, "created_at": at, "is_mine": true, "media_urls": s.market.chatMediaURLs(input.MediaKeys), "location": input.Location})
 }
 func insertSharedMessage(ctx context.Context, tx pgx.Tx, room, actor string, input conversationMessageInput) (string, time.Time, bool, error) {
 	requested := uuid.NewString()
 	var id string
 	var at time.Time
-	err := tx.QueryRow(ctx, `INSERT INTO chat_messages(id,room_id,sender_user_id,body,media_keys,client_message_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::uuid) ON CONFLICT(sender_user_id,client_message_id) DO UPDATE SET id=chat_messages.id WHERE chat_messages.room_id=EXCLUDED.room_id AND chat_messages.body=EXCLUDED.body AND chat_messages.media_keys=EXCLUDED.media_keys RETURNING id::text,created_at`, requested, room, actor, input.Body, input.MediaKeys, input.ClientID).Scan(&id, &at)
+	err := tx.QueryRow(ctx, `INSERT INTO chat_messages(id,room_id,sender_user_id,body,media_keys,client_message_id,location) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6::uuid,$7::jsonb) ON CONFLICT(sender_user_id,client_message_id) DO UPDATE SET id=chat_messages.id WHERE chat_messages.room_id=EXCLUDED.room_id AND chat_messages.body=EXCLUDED.body AND chat_messages.media_keys=EXCLUDED.media_keys AND chat_messages.location IS NOT DISTINCT FROM EXCLUDED.location RETURNING id::text,created_at`, requested, room, actor, input.Body, input.MediaKeys, input.ClientID, chatLocationJSON(input.Location)).Scan(&id, &at)
 	if err == pgx.ErrNoRows {
 		return "", at, false, fiber.NewError(409, "Message reference already used")
 	}

@@ -29,7 +29,10 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql"} {
+	if _, err = db.Exec(ctx, `CREATE TABLE chat_messages(id uuid PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", file))
 		if err != nil {
 			t.Fatal(err)
@@ -56,7 +59,7 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 		}
 	}
 	controller := &ProviderMarketplaceController{db: db, s3: storage.NewS3(config.Config{AWSRegion: "eu-north-1", AWSAccessKeyID: "test", AWSSecretAccessKey: "test", S3BucketName: "test"})}
-	installPublicIdentityFixture(t,db)
+	installPublicIdentityFixture(t, db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Post("/products/:product_id/chat", controller.StartProductConversation)
@@ -132,6 +135,33 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	if status != 422 {
 		t.Fatal("oversized upload accepted", status)
 	}
+	pinReference := uuid.NewString()
+	pinBody := `{"location":{"latitude":9.08,"longitude":7.45},"client_message_id":"` + pinReference + `"}`
+	status, pin := call("POST", "/seller/chats/"+thread+"/messages", owner, pinBody)
+	if status != 201 || pin["location"] == nil {
+		t.Fatal("provider pin", status, pin)
+	}
+	status, pinRetry := call("POST", "/seller/chats/"+thread+"/messages", owner, pinBody)
+	if status != 201 || pinRetry["id"] != pin["id"] {
+		t.Fatal("pin retry", status, pinRetry)
+	}
+	status, _ = call("POST", "/seller/chats/"+thread+"/messages", owner, strings.Replace(pinBody, "9.08", "9.09", 1))
+	if status != 409 {
+		t.Fatal("pin reference mismatch", status)
+	}
+	status, pinHistory := call("GET", "/chats/"+thread+"/messages", buyer, "")
+	if status != 200 {
+		t.Fatal("pin history", status)
+	}
+	foundPin := false
+	for _, item := range pinHistory["items"].([]any) {
+		if item.(map[string]any)["location"] != nil {
+			foundPin = true
+		}
+	}
+	if !foundPin {
+		t.Fatal("legacy history lost pin")
+	}
 	oldClient := http.DefaultClient
 	defer func() { http.DefaultClient = oldClient }()
 	http.DefaultClient = &http.Client{Transport: paymentRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -155,7 +185,7 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	}
 	var count int
 	_ = db.QueryRow(ctx, `SELECT count(*) FROM provider_conversation_messages WHERE conversation_id=$1`, thread).Scan(&count)
-	if count != 3 {
+	if count != 4 {
 		t.Fatal("messages duplicated or missing", count)
 	}
 	if _, err = db.Exec(ctx, `UPDATE provider_conversations SET status='blocked' WHERE id=$1`, thread); err != nil {
