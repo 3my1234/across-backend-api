@@ -30,7 +30,8 @@ func communityTestDB(t *testing.T, skipExpiry ...bool) *pgxpool.Pool {
  CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text,published_at timestamptz,media_urls text[] DEFAULT '{}',country_code text DEFAULT 'NG',city text DEFAULT 'Abuja',category text DEFAULT 'food');
  CREATE TABLE provider_conversations(id uuid PRIMARY KEY,provider_id uuid,user_id uuid,listing_id uuid,product_id uuid,status text,last_message_at timestamptz,buyer_last_read_at timestamptz,provider_last_read_at timestamptz);
  CREATE TABLE provider_conversation_messages(id uuid PRIMARY KEY,conversation_id uuid,sender_type text,created_at timestamptz);
- CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text UNIQUE);`)
+ CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text);
+ CREATE UNIQUE INDEX notifications_event_key_unique ON notifications(event_key) WHERE event_key IS NOT NULL;`)
 	if err != nil {
 		t.Fatal(err)
 	}

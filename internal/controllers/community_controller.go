@@ -113,7 +113,7 @@ func (s *CommunityController) Profile(c *fiber.Ctx) error {
 	}
 	var handle, name, avatar string
 	var discovery, promotions, verified bool
-	err := s.db.QueryRow(c.Context(), `SELECT p.handle,u.full_name,u.avatar_url,p.discoverable,p.connection_promotions,p.phone_verified_at IS NOT NULL FROM social_profiles p JOIN users u ON u.id=p.user_id WHERE p.user_id=$1::uuid`, actor).Scan(&handle, &name, &avatar, &discovery, &promotions, &verified)
+	err := s.db.QueryRow(c.Context(), `SELECT p.handle,COALESCE(u.full_name,''),COALESCE(u.avatar_url,''),p.discoverable,p.connection_promotions,p.phone_verified_at IS NOT NULL FROM social_profiles p JOIN users u ON u.id=p.user_id WHERE p.user_id=$1::uuid`, actor).Scan(&handle, &name, &avatar, &discovery, &promotions, &verified)
 	if err != nil {
 		return communityError(err)
 	}

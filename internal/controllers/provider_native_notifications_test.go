@@ -30,6 +30,13 @@ func TestCommunityProviderNativeNotificationRecipients(t *testing.T) {
 	if _, err = db.Exec(ctx, string(raw)); err != nil {
 		t.Fatal(err)
 	}
+	repairSQL, err := os.ReadFile("../../migrations/090_provider_notification_conflict_target.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(repairSQL)); err != nil {
+		t.Fatal(err)
+	}
 	pushSQL, err := os.ReadFile("../../migrations/048_immediate_notification_push.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +66,11 @@ func TestCommunityProviderNativeNotificationRecipients(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(ctx, `INSERT INTO provider_marketplace_events(id,provider_id,event_type,metadata)VALUES($1,$2,'conversation_message',jsonb_build_object('conversation_id',$3::text,'message','Private text'))`, event, provider, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	// Replay the trigger for the same event: the production partial index must
+	// suppress duplicate native notifications without failing the transaction.
+	if _, err = db.Exec(ctx, `CREATE TRIGGER replay_provider_native AFTER UPDATE ON provider_marketplace_events FOR EACH ROW EXECUTE FUNCTION enqueue_provider_native_notification(); UPDATE provider_marketplace_events SET event_type=event_type`); err != nil {
 		t.Fatal(err)
 	}
 	var count, web, native int

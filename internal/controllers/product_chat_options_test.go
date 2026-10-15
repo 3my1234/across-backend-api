@@ -20,7 +20,7 @@ import (
 func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,full_name text,email text);
+	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,full_name text,email text,is_active boolean DEFAULT true);
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active boolean DEFAULT true,role text,created_at timestamptz DEFAULT now());
  CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text DEFAULT 'approved');
@@ -29,10 +29,14 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(ctx, `CREATE TABLE chat_messages(id uuid PRIMARY KEY)`); err != nil {
+	if _, err = db.Exec(ctx, `CREATE TABLE chat_messages(id uuid PRIMARY KEY); CREATE TABLE chat_rooms(id uuid PRIMARY KEY);
+ CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text);
+ CREATE UNIQUE INDEX notifications_event_key_unique ON notifications(event_key) WHERE event_key IS NOT NULL;
+ CREATE TABLE user_push_tokens(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,disabled_at timestamptz);
+ CREATE TABLE notification_push_deliveries(notification_id uuid,push_token_id uuid,UNIQUE(notification_id,push_token_id));`); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql"} {
+	for _, file := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql", "073_provider_web_push.sql", "076_web_push_destinations.sql", "085_provider_native_notifications.sql", "090_provider_notification_conflict_target.sql", "048_immediate_notification_push.sql"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", file))
 		if err != nil {
 			t.Fatal(err)
@@ -58,6 +62,9 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err = db.Exec(ctx, `WITH token AS (INSERT INTO user_push_tokens(user_id) VALUES($1) RETURNING id) INSERT INTO web_push_subscriptions(user_id,endpoint,p256dh,auth,vapid_public_key) VALUES($1,'https://push.example.test','test','test','test')`, owner); err != nil {
+		t.Fatal(err)
+	}
 	controller := &ProviderMarketplaceController{db: db, s3: storage.NewS3(config.Config{AWSRegion: "eu-north-1", AWSAccessKeyID: "test", AWSSecretAccessKey: "test", S3BucketName: "test"})}
 	installPublicIdentityFixture(t, db)
 	app := fiber.New()
@@ -69,6 +76,9 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	app.Get("/chats/:conversation_id/messages", controller.BuyerConversationMessages)
 	app.Post("/chats/:conversation_id/messages", controller.SendBuyerConversationMessage)
 	app.Post("/seller/chats/:conversation_id/messages", controller.SendProviderConversationMessage)
+	community := &CommunityController{db: db, market: controller}
+	app.Post("/unified/:conversation_id/messages", community.Send)
+	app.Get("/unified/:conversation_id/messages", community.Messages)
 	app.Post("/images", controller.PresignChatImage)
 	call := func(method, url, user, body string) (int, map[string]any) {
 		t.Helper()
@@ -99,9 +109,28 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	if status != 402 {
 		t.Fatal("card-only product opened chat", status)
 	}
-	status, _ = call("POST", "/services/"+service+"/chat", buyer, `{"message":"Repair please"}`)
+	status, serviceChat := call("POST", "/services/"+service+"/chat", buyer, `{"message":"Repair please"}`)
 	if status != 201 {
 		t.Fatal("service compatibility", status)
+	}
+	serviceThread := serviceChat["id"].(string)
+	serviceReference := uuid.NewString()
+	servicePayload := `{"message":"When are you available?","client_message_id":"` + serviceReference + `","media_keys":[]}`
+	status, serviceSent := call("POST", "/unified/"+serviceThread+"/messages", buyer, servicePayload)
+	if status != 201 {
+		t.Fatal("unified customer service send", status, serviceSent)
+	}
+	status, serviceRetry := call("POST", "/unified/"+serviceThread+"/messages", buyer, servicePayload)
+	if status != 201 || serviceRetry["id"] != serviceSent["id"] {
+		t.Fatal("unified service retry", status, serviceRetry)
+	}
+	status, serviceHistory := call("GET", "/unified/"+serviceThread+"/messages?mark_read=false", owner, "")
+	if status != 200 || len(serviceHistory["items"].([]any)) != 2 {
+		t.Fatal("provider receives unified service message", status, serviceHistory)
+	}
+	status, serviceReply := call("POST", "/unified/"+serviceThread+"/messages", owner, `{"message":"Tomorrow","client_message_id":"`+uuid.NewString()+`","media_keys":[]}`)
+	if status != 201 {
+		t.Fatal("unified provider service reply", status, serviceReply)
 	}
 	status, list := call("GET", "/chats?product_id="+product, buyer, "")
 	if status != 200 || len(list["items"].([]any)) != 1 {
@@ -187,6 +216,13 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	_ = db.QueryRow(ctx, `SELECT count(*) FROM provider_conversation_messages WHERE conversation_id=$1`, thread).Scan(&count)
 	if count != 4 {
 		t.Fatal("messages duplicated or missing", count)
+	}
+	var providerEvents, nativeDeliveries, webDeliveries int
+	if err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM provider_marketplace_events),(SELECT count(*) FROM notification_push_deliveries),(SELECT count(*) FROM web_push_deliveries WHERE source_key LIKE 'provider-event:%')`).Scan(&providerEvents, &nativeDeliveries, &webDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if providerEvents < 3 || nativeDeliveries != providerEvents || webDeliveries != providerEvents {
+		t.Fatalf("provider events=%d native=%d web=%d", providerEvents, nativeDeliveries, webDeliveries)
 	}
 	if _, err = db.Exec(ctx, `UPDATE provider_conversations SET status='blocked' WHERE id=$1`, thread); err != nil {
 		t.Fatal(err)
