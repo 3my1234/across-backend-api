@@ -346,27 +346,8 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 				AND p.inventory_count > 0
 				AND cardinality($2::text[]) > 0
 				AND p.category_path && $2::text[]
-			ORDER BY COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC
+			ORDER BY (p.category_path[array_length(p.category_path,1)] = ($2::text[])[array_length($2::text[],1)]) DESC, COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC
 			LIMIT $3
-		), fallback AS MATERIALIZED (
-			SELECT p.id
-			FROM products p
-        LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
-			WHERE p.id <> $1
-				AND p.is_active = true
-				AND p.moderation_status='approved'
-				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
-				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
-				AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))
-				AND EXISTS(SELECT 1 FROM product_delivery_areas area WHERE area.product_id=p.id AND area.country_code=$5 AND (area.state_key='' OR area.state_key=$6) AND (area.city_key='' OR area.city_key=$7))
-				AND p.inventory_count > 0
-				AND NOT EXISTS (SELECT 1 FROM related r WHERE r.id = p.id)
-			ORDER BY COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC
-			LIMIT $3
-		), candidates AS (
-			SELECT id, 0 AS recommendation_rank FROM related
-			UNION ALL
-			SELECT id, 1 AS recommendation_rank FROM fallback
 		)
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			offer.currency_code,
@@ -377,12 +358,12 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
 			(p.is_flash_sale AND offer.currency_code=p.local_currency_code AND offer.delivered_price-offer.delivery_fee=p.local_selling_price), COALESCE(p.flash_sale_price+offer.delivery_fee, 0), p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
 			p.provider_id::text,p.fulfillment_mode
-		FROM candidates candidate
+		FROM related candidate
 		JOIN products p ON p.id = candidate.id
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
-		ORDER BY candidate.recommendation_rank, COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC
+		ORDER BY (p.category_path[array_length(p.category_path,1)] = ($2::text[])[array_length($2::text[],1)]) DESC, COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC
 		LIMIT $3
 	`
 	rows, err := cc.db.Query(c.Context(), query, productID, sourceCategories, limit, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity)

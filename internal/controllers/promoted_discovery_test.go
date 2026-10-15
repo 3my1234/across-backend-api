@@ -78,4 +78,25 @@ func TestPaidDiscoveryCursorDoesNotSkipNewerFreeListings(t *testing.T) {
 	if len(seen) != 4 || cursor != "" {
 		t.Fatal("pagination did not terminate after all listings")
 	}
+	// Related services must filter the actual category, not match unrelated
+	// descriptions or merely share the generic artisan type.
+	if _, err = db.Exec(ctx, `UPDATE provider_listings SET category=CASE WHEN id=ANY($1::uuid[]) THEN 'Independent driver' ELSE 'Hotel events' END,description='Hotels and plumbing also mentioned'`, ids[:2]); err != nil {
+		t.Fatal(err)
+	}
+	response, err := app.Test(httptest.NewRequest("GET", "/listings?category="+url.QueryEscape(" independent DRIVER ")+"&exclude="+ids[0]+"&type=artisan", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var related struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&related); err != nil || response.StatusCode != 200 || len(related.Items) != 1 || related.Items[0].ID != ids[1] {
+		t.Fatalf("related service filtering: status %d body %+v err %v", response.StatusCode, related, err)
+	}
+	bad, err := app.Test(httptest.NewRequest("GET", "/listings?exclude=not-a-uuid", nil))
+	if err != nil || bad.StatusCode != 400 {
+		t.Fatal("malformed related service exclusion was accepted", err)
+	}
 }
