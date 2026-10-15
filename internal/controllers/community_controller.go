@@ -45,7 +45,8 @@ func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {
 	err := db.QueryRow(ctx, `SELECT to_regclass('social_profiles') IS NOT NULL
 	 AND to_regclass('chat_rooms') IS NOT NULL AND to_regclass('chat_messages') IS NOT NULL
 	 AND to_regclass('social_statuses') IS NOT NULL AND to_regclass('social_promotion_jobs') IS NOT NULL
-	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)`).Scan(&ready)
+	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)
+ AND to_regprocedure('expire_unengaged_town_hall_requests(integer)') IS NOT NULL`).Scan(&ready)
 	return err == nil && ready
 }
 func (s *CommunityController) InvitePage(c *fiber.Ctx) error {
@@ -78,6 +79,9 @@ func communityError(err error) error {
 	}
 	if e, ok := err.(*fiber.Error); ok {
 		return e
+	}
+	if asPG(err, &p) && p.Code == "P0409" {
+		return fiber.NewError(409, "This request has closed or expired. Ask the buyer to repost it.")
 	}
 	if asPG(err, &p) && p.Code == "23505" {
 		return fiber.NewError(409, "That name or request is already in use")
@@ -418,7 +422,7 @@ func (s *CommunityController) StartDirect(c *fiber.Ctx) error {
 // same room lock, so a delayed sender cannot rely on stale admission state.
 func (s *CommunityController) lockMember(ctx context.Context, tx pgx.Tx, room, actor string) (string, string, string, error) {
 	var kind, state, role, provider string
-	err := tx.QueryRow(ctx, `SELECT kind,state FROM chat_rooms WHERE id=$1::uuid FOR UPDATE`, room).Scan(&kind, &state)
+	err := tx.QueryRow(ctx, `SELECT kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid FOR UPDATE`, room).Scan(&kind, &state)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -549,7 +553,7 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	var revision int64
 	var kind, state, role string
 	var owner string
-	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,r.state,p.role,r.owner_user_id::text FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid AND p.state='active' WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner)
+	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE r.state END,p.role,r.owner_user_id::text FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid AND p.state='active' WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner)
 	if err != nil {
 		return fiber.ErrForbidden
 	}

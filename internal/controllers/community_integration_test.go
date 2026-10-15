@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func communityTestDB(t *testing.T) *pgxpool.Pool {
+func communityTestDB(t *testing.T, skipExpiry ...bool) *pgxpool.Pool {
 	t.Helper()
 	db := settlementTestDB(t)
 	ctx := context.Background()
@@ -34,7 +34,10 @@ func communityTestDB(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql", "084_town_hall_message_requests.sql"} {
+	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql", "084_town_hall_message_requests.sql", "086_town_hall_idle_expiry.sql"} {
+		if file == "086_town_hall_idle_expiry.sql" && len(skipExpiry) > 0 && skipExpiry[0] {
+			continue
+		}
 		raw, err := os.ReadFile("../../migrations/" + file)
 		if err != nil {
 			t.Fatal(err)
