@@ -1267,7 +1267,7 @@ func (m *ProviderMarketplaceController) UpdateProviderRequest(c *fiber.Ctx) erro
 		message += fmt.Sprintf(" Please rate the provider to help other customers. Your first review earns %d XP.", reviewRewardXP) + xpUsage
 	}
 	data, _ := json.Marshal(map[string]string{"request_id": c.Params("request_id"), "listing_id": listingID, "status": req.Status})
-	_, _ = m.db.Exec(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,event_key) VALUES($1::uuid,'marketplace_request','Provider request updated',$2,$3::jsonb,$4) ON CONFLICT(event_key) DO NOTHING`, buyerID, message, data, "provider-request-status:"+c.Params("request_id")+":"+req.Status)
+	_, _ = m.db.Exec(c.Context(), `INSERT INTO notifications(user_id,type,title,body,data,event_key) VALUES($1::uuid,'marketplace_request','Provider request updated',$2,$3::jsonb,$4) ON CONFLICT(event_key) WHERE event_key IS NOT NULL DO NOTHING`, buyerID, message, data, "provider-request-status:"+c.Params("request_id")+":"+req.Status)
 	_ = services.QueueMarketplaceEmail(c.Context(), m.db, buyerID, "provider-request-email:"+c.Params("request_id")+":"+req.Status, map[string]string{"title": "Provider request updated", "body": message})
 	return c.SendStatus(fiber.StatusNoContent)
 }
