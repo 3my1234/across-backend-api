@@ -19,6 +19,11 @@ Only outgoing messages show receipts. An Expo/FCM accepted push ticket is never
 treated as proof of device delivery. Closed/backgrounded devices may remain at
 one tick until their app next synchronizes; older client versions do not emit
 these acknowledgements. This release does not add native background execution.
+When the app is foregrounded on another page, a message notification can trigger
+a bounded authenticated history fetch and delivery-only ACK. Fetches coalesce
+per conversation with at most four concurrent jobs. The PWA service worker
+forwards validated routing IDs only, never bodies/coordinates; authenticated
+clients fetch the actual messages before acknowledging delivery.
 
 Unread-count watermarks remain private and independent. Disabling read receipts
 does not stop clearing the reader's unread counts or hide delivery. The server
