@@ -492,13 +492,13 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
  (SELECT count(*)::int FROM chat_messages msg WHERE msg.room_id=r.id AND msg.sender_user_id<>$1::uuid AND msg.created_at>COALESCE(member.last_read_at,'epoch'::timestamptz)) AS unread_count,r.context
  FROM chat_rooms r JOIN chat_participants member ON member.room_id=r.id AND member.user_id=$1::uuid AND member.state='active'
  UNION ALL
- SELECT c.id,'business','legacy',c.last_message_at,CASE WHEN c.user_id=$1::uuid THEN p.business_name ELSE u.full_name END,CASE WHEN c.user_id=$1::uuid THEN p.owner_user_id::text ELSE c.user_id::text END,c.provider_id::text,
+ SELECT c.id,'business','legacy',c.last_message_at,CASE WHEN c.user_id=$1::uuid THEN p.business_name ELSE COALESCE(u.full_name,'Customer') END,CASE WHEN c.user_id=$1::uuid THEN p.owner_user_id::text ELSE c.user_id::text END,c.provider_id::text,
  CASE WHEN c.user_id=$1::uuid THEN 'buyer' ELSE 'provider' END,c.status,
  (SELECT count(*)::int FROM provider_conversation_messages msg WHERE msg.conversation_id=c.id AND msg.sender_type=CASE WHEN c.user_id=$1::uuid THEN 'provider' ELSE 'buyer' END AND msg.created_at>COALESCE(CASE WHEN c.user_id=$1::uuid THEN c.buyer_last_read_at ELSE c.provider_last_read_at END,'epoch'::timestamptz)),
  jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'title',COALESCE(l.title,pr.title))
  FROM provider_conversations c JOIN provider_organizations p ON p.id=c.provider_id JOIN users u ON u.id=c.user_id LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
  WHERE c.user_id=$1::uuid OR c.provider_id=NULLIF($2,'')::uuid
- ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context,COALESCE((SELECT u.avatar_url FROM users u WHERE u.id=NULLIF(inbox.peer_id,'')::uuid),''),COALESCE(CASE WHEN source='shared' THEN (SELECT NULLIF(msg.body,'') FROM chat_messages msg WHERE msg.room_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) ELSE (SELECT to_jsonb(msg)->>'body' FROM provider_conversation_messages msg WHERE msg.conversation_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) END,'') FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
+ ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context,COALESCE((SELECT u.avatar_url FROM users u WHERE u.id=NULLIF(inbox.peer_id,'')::uuid),''),COALESCE(CASE WHEN source='shared' THEN (SELECT jsonb_build_object('id',msg.id,'body',msg.body,'is_mine',msg.sender_user_id=$1::uuid) FROM chat_messages msg WHERE msg.room_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) ELSE (SELECT jsonb_build_object('id',msg.id,'body',to_jsonb(msg)->>'body','is_mine',msg.sender_type=inbox.actor_role) FROM provider_conversation_messages msg WHERE msg.conversation_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) END,'{}'::jsonb) FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
 	if err != nil {
 		return communityError(err)
 	}
@@ -508,7 +508,8 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
 	var last time.Time
 	var lastID string
 	for rows.Next() {
-		var id, kind, source, title, peer, provider, role, state, avatar, preview string
+		var id, kind, source, title, peer, provider, role, state, avatar string
+		var preview json.RawMessage
 		var at time.Time
 		var unread int
 		var raw []byte
@@ -521,7 +522,15 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
 		}
 		var data any
 		_ = json.Unmarshal(raw, &data)
-		items = append(items, fiber.Map{"id": id, "kind": kind, "source": source, "title": title, "peer_user_id": peer, "provider_id": provider, "actor_role": role, "state": state, "unread_count": unread, "context": data, "last_message_at": at, "avatar_url": avatar, "last_message": preview})
+		var latest struct {
+			ID   string `json:"id"`
+			Body string `json:"body"`
+			Mine bool   `json:"is_mine"`
+		}
+		if err = json.Unmarshal(preview, &latest); err != nil {
+			return communityError(err)
+		}
+		items = append(items, fiber.Map{"id": id, "kind": kind, "source": source, "title": title, "peer_user_id": peer, "provider_id": provider, "actor_role": role, "state": state, "unread_count": unread, "context": data, "last_message_at": at, "avatar_url": avatar, "last_message": latest.Body, "last_message_id": latest.ID, "last_message_is_mine": latest.Mine})
 		last, lastID = at, id
 	}
 	if err = rows.Err(); err != nil {
@@ -577,7 +586,7 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	if c.Get("If-None-Match") == etag && page.CursorTime == nil {
 		return c.SendStatus(304)
 	}
-	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,u.full_name,m.body,m.media_keys,m.created_at,to_jsonb(m)->'location' FROM chat_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
+	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,COALESCE(u.full_name,'Member'),m.body,m.media_keys,m.created_at,to_jsonb(m)->'location' FROM chat_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
 	if err != nil {
 		return communityError(err)
 	}

@@ -35,6 +35,9 @@ func TestCommunityInboxPreviewIsPrivate(t *testing.T) {
 	if item["last_message"] != "Private latest reply" || item["avatar_url"] != "https://example.test/avatar.jpg" {
 		t.Fatalf("missing preview/avatar %v", item)
 	}
+	if item["last_message_id"] == "" || item["last_message_is_mine"] != false {
+		t.Fatal("inbox preview cannot acknowledge delivery", item)
+	}
 	other := communityCall(t, app, "GET", "/inbox?conversation_id="+room, outsider, "", 200)
 	if len(other["items"].([]any)) != 0 {
 		t.Fatal("outsider received private preview")
