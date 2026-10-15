@@ -20,7 +20,7 @@ import (
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*redis.Client) {
 	var group sync.WaitGroup
 	// Connection-based promotions are retired from launch. Retain stored records.
-	group.Add(8)
+	group.Add(9)
 	go func() { defer group.Done(); runWebPushLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runPushLoop(ctx, db) }()
@@ -29,6 +29,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 	go func() { defer group.Done(); runBatchClosureLoop(ctx, db) }()
 	go func() { defer group.Done(); runSettlementReconciliationLoop(ctx, db, cfg) }()
 	go func() { defer group.Done(); runTownHallExpiryLoop(ctx, db) }()
+	go func() { defer group.Done(); runDriverExpiryLoop(ctx, db) }()
 	group.Wait()
 }
 

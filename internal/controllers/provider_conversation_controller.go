@@ -4,6 +4,7 @@ import (
 	"across/backend/internal/storage"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -112,7 +113,7 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 	if fresh {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": conversationID, "message_id": messageID, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys)})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": conversationID, "message_id": messageID, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys), "location": message.Location})
 }
 
 func scanConversationRows(rows pgx.Rows) ([]fiber.Map, error) {
@@ -283,7 +284,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	if changed >= 0 && !c.QueryBool("mark_read", true) && c.Get("If-None-Match") == etag {
 		return c.SendStatus(fiber.StatusNotModified)
 	}
-	rows, err := m.db.Query(ctx, `SELECT id::text,sender_type,body,created_at,media_keys FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`, c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(ctx, `SELECT id::text,sender_type,body,created_at,media_keys,to_jsonb(provider_conversation_messages)->'location' FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`, c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -293,10 +294,11 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 		var id, senderType, body string
 		var createdAt time.Time
 		var mediaKeys []string
-		if rows.Scan(&id, &senderType, &body, &createdAt, &mediaKeys) != nil {
+		var location json.RawMessage
+		if rows.Scan(&id, &senderType, &body, &createdAt, &mediaKeys, &location) != nil {
 			return fiber.ErrInternalServerError
 		}
-		items = append(items, fiber.Map{"id": id, "sender_type": senderType, "body": body, "created_at": createdAt, "media_urls": m.chatMediaURLs(mediaKeys)})
+		items = append(items, fiber.Map{"id": id, "sender_type": senderType, "body": body, "created_at": createdAt, "media_urls": m.chatMediaURLs(mediaKeys), "location": location})
 	}
 	if rows.Err() != nil {
 		return fiber.ErrInternalServerError
@@ -397,7 +399,7 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	} else if fresh {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": messageID, "sender_type": senderType, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys)})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": messageID, "sender_type": senderType, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys), "location": message.Location})
 }
 
 func (m *ProviderMarketplaceController) SendBuyerConversationMessage(c *fiber.Ctx) error {

@@ -29,7 +29,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci-provider-tests@127.0.0.1:5432/provider_tests?sslmode=disable
           SETTLEMENT_TEST_LOCAL: 'true'
-        run: go test ./internal/controllers -count=1 -run 'Test(ProductCheckoutDisabled|ProviderIdentity|PaidDiscovery|Community|TownHall)'
+        run: go test ./internal/controllers -count=1 -run 'Test(ProductCheckoutDisabled|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall)'
   docker-build:
     runs-on: ubuntu-latest
     strategy:

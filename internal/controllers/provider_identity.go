@@ -52,16 +52,16 @@ func providerIdentityJSON(c *fiber.Ctx, db *pgxpool.Pool, payload fiber.Map, ass
 	for id := range targets {
 		ids = append(ids, id)
 	}
-	rows, err := db.Query(c.Context(), `SELECT provider_id::text,name,avatar_url,verified,paid_active,badge_tier,listing_limit FROM provider_public_identity WHERE provider_id=ANY($1::uuid[])`, ids)
+	rows, err := db.Query(c.Context(), `SELECT i.provider_id::text,i.name,i.avatar_url,i.verified,i.paid_active,i.badge_tier,i.listing_limit,COALESCE(to_jsonb(p)->>'banner_url','') FROM provider_public_identity i JOIN provider_organizations p ON p.id=i.provider_id WHERE i.provider_id=ANY($1::uuid[])`, ids)
 	if err != nil {
 		return fiber.NewError(503, "Provider information is temporarily unavailable. Please refresh.")
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, name, avatar, tier string
+		var id, name, avatar, tier, banner string
 		var verified, paid bool
 		var limit int
-		if err := rows.Scan(&id, &name, &avatar, &verified, &paid, &tier, &limit); err != nil {
+		if err := rows.Scan(&id, &name, &avatar, &verified, &paid, &tier, &limit, &banner); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if avatar != "" && len(assets) > 0 && assets[0] != nil {
@@ -69,6 +69,12 @@ func providerIdentityJSON(c *fiber.Ctx, db *pgxpool.Pool, payload fiber.Map, ass
 			urls := normalizer.normalizeImageURLs([]string{avatar})
 			if len(urls) > 0 {
 				avatar = urls[0]
+			}
+		}
+		if banner != "" && len(assets) > 0 && assets[0] != nil {
+			urls := (&CatalogController{s3: assets[0]}).normalizeImageURLs([]string{banner})
+			if len(urls) > 0 {
+				banner = urls[0]
 			}
 		}
 		label := "Provider"
@@ -81,11 +87,12 @@ func providerIdentityJSON(c *fiber.Ctx, db *pgxpool.Pool, payload fiber.Map, ass
 		if tier != "" {
 			label += " · " + strings.ToUpper(tier[:1]) + tier[1:] + " subscription"
 		}
-		identity := fiber.Map{"id": id, "name": name, "avatar_url": avatar, "verified": verified, "paid_active": paid, "tier": tier, "label": label, "listing_limit": limit, "combined_limit": !paid}
+		identity := fiber.Map{"id": id, "name": name, "avatar_url": avatar, "banner_url": banner, "verified": verified, "paid_active": paid, "tier": tier, "label": label, "listing_limit": limit, "combined_limit": !paid}
 		for _, target := range targets[id] {
 			target["provider_identity"] = identity
 			target["provider_name"] = name
 			target["provider_logo_url"] = avatar
+			target["provider_banner_url"] = banner
 			target["provider_verified"] = verified
 			target["provider_badge_tier"] = tier
 			if target["sku"] != nil {
