@@ -1,0 +1,81 @@
+# Disposable CI lab only. No production env files, volumes, ports or networks.
+name: atlxpres-capacity-lab
+x-api: &api
+  build: {context: ../.., dockerfile: deploy/capacity-lab/Dockerfile}
+  image: atlxpres-capacity-lab:local
+  command: [/app/api]
+  environment:
+    APP_ENV: staging
+    DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=disable
+    DATABASE_READ_URL: ""
+    REDIS_ADDR: redis:6379
+    REDIS_OPTIONAL: "false"
+    JWT_SECRET: capacity-lab-not-a-production-secret
+    RUN_MIGRATIONS: "false"
+    RUN_INLINE_WORKERS: "false"
+    DB_MAX_CONNS: "8"
+    DB_MIN_CONNS: "1"
+    HTTP_MAX_IN_FLIGHT: "64"
+    RATE_LIMIT_PER_MINUTE: "600"
+  depends_on: {seed: {condition: service_completed_successfully}}
+  networks: [lab]
+  cpus: 0.75
+  mem_limit: 512m
+  healthcheck:
+    test: [CMD, curl, -fsS, http://localhost:8080/api/v1/health]
+    interval: 2s
+    timeout: 2s
+    retries: 40
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: {POSTGRES_USER: lab, POSTGRES_PASSWORD: lab-disposable-only, POSTGRES_DB: capacity_lab}
+    networks: [lab]
+    cpus: 1
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U lab -d capacity_lab]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7.2-alpine
+    command: [redis-server, --save, "", --appendonly, "no"]
+    networks: [lab]
+    cpus: 0.25
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  seed:
+    build: {context: ../.., dockerfile: deploy/capacity-lab/Dockerfile}
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, seed]
+    environment: {CAPACITY_LAB: disposable-compose-only}
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    networks: [lab]
+    cpus: 1
+    mem_limit: 512m
+  api1: *api
+  api2: *api
+  gateway:
+    image: haproxy:3.0-alpine
+    volumes: [./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro]
+    depends_on: {api1: {condition: service_healthy}, api2: {condition: service_healthy}}
+    networks: [lab]
+    cpus: 0.25
+    mem_limit: 128m
+  runner:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, run]
+    environment:
+      CAPACITY_LAB: disposable-compose-only
+      LAB_PROFILE: ${LAB_PROFILE:-smoke}
+    depends_on: {gateway: {condition: service_started}}
+    networks: [lab]
+    cpus: 1
+    mem_limit: 512m
+networks:
+  lab: {internal: true}

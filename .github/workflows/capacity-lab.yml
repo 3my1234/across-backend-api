@@ -1,0 +1,49 @@
+name: Isolated capacity lab
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Smoke or longer baseline; never targets production
+        type: choice
+        options: [smoke, baseline]
+        default: smoke
+  pull_request:
+    branches: [main]
+    paths: ['cmd/capacity-lab/**', 'deploy/capacity-lab/**', '.github/workflows/capacity-lab.yml']
+permissions:
+  contents: read
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LAB_PROFILE: ${{ inputs.profile || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.22.x'}
+      - name: Check load runner safety and accounting
+        run: go test ./cmd/capacity-lab
+      - name: Start disposable database, Redis and real API replicas
+        run: docker compose -f deploy/capacity-lab/compose.yml up -d --build --wait --wait-timeout 240 gateway
+      - name: Run bounded workload on the internal network
+        run: |
+          mkdir -p capacity-artifacts
+          docker compose -f deploy/capacity-lab/compose.yml run --rm runner > capacity-artifacts/results.jsonl
+      - name: Collect lab evidence
+        if: always()
+        run: |
+          mkdir -p capacity-artifacts
+          docker compose -f deploy/capacity-lab/compose.yml logs --no-color > capacity-artifacts/lab.log
+          docker stats --no-stream --format '{{json .}}' > capacity-artifacts/container-stats.jsonl
+          lscpu > capacity-artifacts/runner-cpu.txt
+          free -h > capacity-artifacts/runner-memory.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: isolated-capacity-${{ github.run_id }}
+          path: capacity-artifacts/
+          retention-days: 14
+      - name: Remove disposable lab containers and data
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml down --volumes --remove-orphans
