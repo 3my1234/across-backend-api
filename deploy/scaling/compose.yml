@@ -23,7 +23,10 @@ services:
     cpus: 0.75
     mem_limit: 512m
     pids_limit: 128
-    networks: [default, shared]
+    networks:
+      default:
+        aliases: [atlxpres-pilot-api]
+      shared: {}
     healthcheck:
       test: [CMD, curl, -fsS, --max-time, "3", "http://localhost:8080/api/v1/ready"]
       interval: 10s
@@ -40,10 +43,7 @@ services:
     volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
     cpus: 0.25
     mem_limit: 128m
-    networks:
-      default:
-        aliases: [atlxpres-pilot-api]
-      shared: {}
+    networks: [default, shared]
     pids_limit: 64
     logging:
       driver: json-file
