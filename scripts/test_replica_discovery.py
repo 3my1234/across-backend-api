@@ -57,8 +57,9 @@ class ReplicaDiscovery(unittest.TestCase):
                         except Exception as error:
                             errors.append(type(error).__name__)
                         time.sleep(0.2)
-                    logs = subprocess.run(base + ['logs', '--tail', '35', 'gateway'], env=env, capture_output=True, text=True, timeout=15)
-                    self.fail('Two synthetic backends not observed: ' + repr(errors[-3:]) + '\n' + logs.stdout + logs.stderr)
+                    logs = subprocess.run(base + ['logs', '--tail', '120', 'gateway', 'api'], env=env, capture_output=True, text=True, timeout=15)
+                    dns = subprocess.run(base + ['exec', '-T', 'gateway', 'getent', 'hosts', 'atlxpres-pilot-api'], env=env, capture_output=True, text=True, timeout=10)
+                    self.fail('Two synthetic backends not observed: ' + repr(errors[-3:]) + '\nDNS: ' + dns.stdout + dns.stderr + '\n' + logs.stdout + logs.stderr)
                 verify_two()
                 # Same gateway-only update performed by the route activation tool.
                 command(base + ['up', '-d', '--no-deps', 'gateway', '--wait', '--wait-timeout', '60'], env)
