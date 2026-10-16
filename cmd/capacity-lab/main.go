@@ -212,19 +212,16 @@ func validPayload(op operation, raw []byte) bool {
 	case "support_history":
 		key = "messages"
 	}
-	var result map[string][]json.RawMessage
 	// Other envelope fields need not be arrays.
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(raw, &envelope) != nil {
 		return false
 	}
-	result = map[string][]json.RawMessage{}
 	var items []json.RawMessage
 	if json.Unmarshal(envelope[key], &items) != nil {
 		return false
 	}
-	result[key] = items
-	return len(result[key]) > 0 && len(result[key]) <= limit
+	return len(items) > 0 && len(items) <= limit
 }
 func request(c *http.Client, op operation, index int) sample {
 	method := "GET"
@@ -232,7 +229,9 @@ func request(c *http.Client, op operation, index int) sample {
 		method = "POST"
 	}
 	req, _ := http.NewRequest(method, origin+op.Path, bytes.NewBufferString(op.Body))
-	req.Header.Set("Authorization", "Bearer "+op.Token)
+	if op.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+op.Token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	// Synthetic distinct clients through the lab-only proxy; real Redis rate
 	// limits remain enabled. Production proxy trust is not modified here.

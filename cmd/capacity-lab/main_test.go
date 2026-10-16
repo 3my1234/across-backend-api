@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -112,5 +113,20 @@ func TestSeededReadsMustContainBoundedHistory(t *testing.T) {
 	}
 	if validPayload(op, []byte(`{"messages":[`+strings.Repeat(`{},`, 40)+`{}]}`)) {
 		t.Fatal("unbounded page accepted")
+	}
+}
+
+type transportFunc func(*http.Request) (*http.Response, error)
+
+func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestPublicBrowsingDoesNotBypassSharedCacheWithEmptyBearer(t *testing.T) {
+	c := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		if _, exists := r.Header["Authorization"]; exists {
+			t.Error("public browse unexpectedly includes authorization")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"products":[{}]}`))}, nil
+	})}
+	if !request(c, operation{Name: "catalogue", Path: "/api/v1/products", Want: 200}, 0).Valid {
+		t.Fatal("public request failed")
 	}
 }
