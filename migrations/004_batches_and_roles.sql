@@ -1,3 +1,5 @@
+-- schema.sql also contains this foundation on a fresh installation.
+DO $$ BEGIN
 CREATE TYPE batch_status AS ENUM (
   'collecting_funds',
   'settled',
@@ -8,6 +10,8 @@ CREATE TYPE batch_status AS ENUM (
   'sorted',
   'completed'
 );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS order_batches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,8 +44,11 @@ ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS batch_id UUID,
   ADD COLUMN IF NOT EXISTS package_label TEXT;
 
-ALTER TABLE orders
-  ADD CONSTRAINT orders_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES order_batches(id);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='orders'::regclass AND conname='orders_batch_id_fkey') THEN
+    ALTER TABLE orders ADD CONSTRAINT orders_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES order_batches(id);
+  END IF;
+END $$;
 
 ALTER TABLE admins
   DROP CONSTRAINT IF EXISTS admins_role_check;
