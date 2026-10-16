@@ -82,12 +82,14 @@ as investigation/expansion triggers. These are initial operating thresholds,
 not measured capacity guarantees. Investigate SQL/DB waits before adding API
 copies; replicas cannot fix a saturated shared database.
 
-The existing loopback HAProxy/Compose pilot under `deploy/scaling` can test
-multiple API copies. It is not connected to production routing. Before routing
-production to replicas: verify identical immutable images, shared Redis/session
-secrets, private DB connectivity, no inline workers/migrations in replicas,
-health checks, rolling-update surge and the total DB connection budget using
-`scripts/scale-budget.mjs`. Test one replica's failure and rollback first.
+As verified on16 October2026, the two API copies under `deploy/scaling` are
+connected to production HTTPS through HAProxy/Traefik, with the original API
+retained as fallback. Operator readiness distribution, stop-one/recovery and
+customer/provider device checks passed. The current connection budget is84/100
+including reserves and one surge copy. This is operational evidence, not a
+throughput certification. See [managed replica releases](../deploy/scaling/RELEASES.md)
+for the separate installation needed to automate updates safely. Until installed
+and verified, roll back replica routing before changing the original API release.
 More copies on the same four-core host do not add physical compute or survive
 that host failing. Additional hosts or managed compute remain a separate
 deployment and spending decision. There is no automatic capacity creation today.
