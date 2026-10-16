@@ -12,6 +12,11 @@ on:
         type: choice
         options: [standard, busy, large, large-busy]
         default: standard
+      database_cpus:
+        description: Disposable lab database CPU ceiling; API limits stay unchanged
+        type: choice
+        options: ['1', '2']
+        default: '1'
   pull_request:
     branches: [main]
     paths: ['cmd/capacity-lab/**', 'deploy/capacity-lab/**', 'migrations/**', '.github/workflows/capacity-lab.yml']
@@ -24,6 +29,7 @@ jobs:
     env:
       LAB_PROFILE: ${{ inputs.profile || 'smoke' }}
       LAB_SCENARIO: ${{ inputs.scenario || 'standard' }}
+      LAB_DB_CPUS: ${{ inputs.database_cpus || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

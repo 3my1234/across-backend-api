@@ -51,6 +51,13 @@ all clients through one shared-IP allowance. This is not a fix for production
 proxy-header trust or a shared-IP/abuse qualification.
 
 `smoke` uses 20 seconds per stage, `baseline` 90 seconds, at 20/50/100 active
+buyer/provider pairs. The optional `database_cpus` input accepts only one
+(default) or two CPUs for the disposable PostgreSQL container. It changes no
+API, pool, memory or dataset limits, and the stage output records the ceiling.
+This comparison tests whether the lab's database CPU ceiling limits throughput;
+it is not a production CPU sizing formula.
+
+Each scenario uses the same 20/50/100 active
 buyer/provider pairs. Each pair sends sequential requests then waits two seconds;
 this is a deliberately busy closed-loop workload, not 100 simultaneous requests
 or a production user-count claim. The first stage is cold-ish; preflight timings

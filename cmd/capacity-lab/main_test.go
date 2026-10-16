@@ -107,6 +107,19 @@ func TestScenarioSelectionRejectsArbitrarySeedInput(t *testing.T) {
 	}
 }
 
+func TestDatabaseCeilingRemainsBounded(t *testing.T) {
+	for _, value := range []string{"", "1", "2"} {
+		if _, err := databaseCPU(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"0", "4", "200", "NaN"} {
+		if _, err := databaseCPU(value); err == nil {
+			t.Fatalf("unbounded database CPU accepted: %q", value)
+		}
+	}
+}
+
 func TestBusyRoomOperationsUseAdmittedProviderIdentity(t *testing.T) {
 	a := actor{Buyer: uuid.NewString(), ProviderUser: uuid.NewString(), Room: uuid.NewString(), HotRoom: uuid.NewString()}
 	want := map[string]bool{"busy_room_history": false, "busy_room_send": false, "town_hall_offer": false}

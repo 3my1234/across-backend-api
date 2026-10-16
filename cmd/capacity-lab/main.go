@@ -57,10 +57,22 @@ func scenarioPlan(name string) (fixturePlan, error) {
 	return p, nil
 }
 
+func databaseCPU(value string) (string, error) {
+	if value == "" {
+		return "1", nil
+	}
+	if value != "1" && value != "2" {
+		return "", fmt.Errorf("LAB_DB_CPUS must be 1 or 2")
+	}
+	return value, nil
+}
+
 func main() {
 	if os.Getenv("CAPACITY_LAB") != "disposable-compose-only" || len(os.Args) != 2 {
 		log.Fatal("Use only the isolated capacity Compose workflow")
 	}
+	_, cpuError := databaseCPU(os.Getenv("LAB_DB_CPUS"))
+	must(cpuError)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	cfg, err := pgxpool.ParseConfig(database)
@@ -351,6 +363,10 @@ func request(c *http.Client, op operation, index int) sample {
 }
 
 func run(ctx context.Context, db *pgxpool.Pool) error {
+	dbCPUs, err := databaseCPU(os.Getenv("LAB_DB_CPUS"))
+	if err != nil {
+		return err
+	}
 	plan, err := scenarioPlan(os.Getenv("LAB_SCENARIO"))
 	if err != nil {
 		return err
@@ -469,6 +485,7 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 			}
 		}
 		report := map[string]any{"scenario": plan.Name, "profile": os.Getenv("LAB_PROFILE"), "simulated_active_pairs": users, "elapsed_seconds": time.Since(started).Seconds(), "requests_per_second": float64(total) / time.Since(started).Seconds(), "operations": metrics, "backends": backends, "unexpected_errors": errors, "busy": busy, "latency_target_ms": 500, "latency_target_passed": latencyPassed, "scope": "isolated Docker host; no internet/media/worker delivery capacity claim"}
+		report["database_cpus"] = dbCPUs
 		must(json.NewEncoder(os.Stdout).Encode(report))
 		if errors > 0 || busy > 0 {
 			stageError = fmt.Errorf("stage did not pass: errors=%d busy=%d; stop increasing load", errors, busy)
