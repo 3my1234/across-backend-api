@@ -93,16 +93,18 @@ class RouteSafety(unittest.TestCase):
                 ports = json.loads(docker('inspect', '--format', '{{json .NetworkSettings.Ports}}', proxy))
                 port = ports['8000/tcp'][0]['HostPort']
                 def wait_for(body):
+                    last_error = ''
                     for _ in range(50):
                         try:
                             request = urllib.request.Request('http://127.0.0.1:' + port + '/api/v1/ready', headers={'Host': 'pilot.test'})
                             with urllib.request.urlopen(request, timeout=2) as response:
                                 if response.read().decode().strip() == body:
                                     return
-                        except Exception:
-                            pass
+                        except Exception as error:
+                            last_error = str(error)
                         time.sleep(0.2)
-                    self.fail('Traefik did not reach expected synthetic backend ' + body)
+                    logs = subprocess.run(['docker', 'logs', proxy], capture_output=True, text=True, timeout=10)
+                    self.fail('Traefik did not reach expected synthetic backend ' + body + '; ' + last_error + '\n' + logs.stdout + logs.stderr)
                 wait_for('PRIMARY')
                 docker('stop', '--time', '2', primary)
                 wait_for('FALLBACK')
