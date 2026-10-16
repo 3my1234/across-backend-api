@@ -18,12 +18,11 @@ listings/products/conversations, 2,000 Town Hall rooms, 20,000 bargaining messag
 10,000 marketplace messages and 2,000 Support messages. The workload exercises
 catalogue/service browsing, authenticated buyer/provider history, both directions
 of marketplace sends, Support history/replies, request creation and provider
-offers/bargaining. Notification database triggers execute normally. Distinct
+offers/bargaining. Notification database triggers execute normally.
 Public browsing omits Authorization so the normal shared public cache is tested;
 private requests use valid signed synthetic sessions. A separate uncached stress
 case is needed before estimating a predominantly authenticated-browsing workload.
-Distinct
-synthetic client IPs exercise the current Redis rate limiter rather than sending
+Distinct synthetic client IPs exercise the current Redis rate limiter rather than sending
 all clients through one shared-IP allowance. This is not a fix for production
 proxy-header trust or a shared-IP/abuse qualification.
 
