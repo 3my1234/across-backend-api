@@ -70,7 +70,9 @@ Support, Town Hall browsing/admission/messages and upload signing. Verify public
 HTTPS responses as well as the local check. Roll back on failed acceptance.
 Do not send load tests at this shared production database.
 
-The pilot is NOT updated by normal Coolify deployments. Until a managed replica
+The pilot is NOT updated by normal Coolify deployments alone. The separately
+installed [release controller](RELEASES.md) can reconcile healthy API/worker
+releases after its host installation and verification. Until that managed replica
 release process is installed, rollback this route BEFORE any API code, signing
 secret or runtime-setting deployment. Deploy the original Coolify API/worker;
 then refresh the pilot explicitly, verify identical image/settings and repeat

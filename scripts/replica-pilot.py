@@ -11,10 +11,35 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 
 API_RESOURCE = 'x139kasktvpelpef1t6xgid3'
 WORKER_RESOURCE = 'sx426mx9d9ugbeouvhk4dunj'
 PROJECT = 'atlxpres-scale-pilot'
+
+
+class OperationBusy(RuntimeError):
+    pass
+
+
+@contextmanager
+def operation_lock(runtime):
+    """Serialize host route/release operations; never lock a private env file."""
+    import fcntl  # Linux execution only; keep read-only checks importable elsewhere.
+    if runtime.is_symlink() or not runtime.is_dir():
+        raise ValueError('Expected real private runtime directory')
+    info = runtime.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError('Runtime directory owner/permissions are unsafe')
+    descriptor = os.open(runtime / 'operation.lock', os.O_WRONLY | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise OperationBusy('Another replica operation is running') from None
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def docker(*args):

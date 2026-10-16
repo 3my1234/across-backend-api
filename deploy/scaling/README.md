@@ -1,5 +1,10 @@
 # Two-replica pilot on the existing main server
 
+Current status16 October2026: production HTTPS routing, replica failover and
+customer/provider device checks passed. Initial setup instructions below are
+retained for reproducibility; do not rerun the initial launcher on the accepted
+installation. See [routing](ROUTING.md) and [managed releases](RELEASES.md).
+
 This is a manual pilot, not production routing or autoscaling. It uses the same
 production database/settings and must NOT receive a load test. No cloud, DNS,
 Traefik, current API or worker changes are performed by the launcher.

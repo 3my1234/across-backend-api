@@ -105,7 +105,7 @@ def probe():
         return backend
 
 
-def rollback():
+def rollback(pause_updates=True):
     if STATE.is_symlink() or ROUTE.is_symlink():
         raise ValueError('Refusing a symlink in route rollback')
     if not STATE.is_file():
@@ -118,6 +118,9 @@ def rollback():
             raise ValueError('Route changed since activation; refusing to remove someone else\'s changes')
         ROUTE.unlink()
     STATE.unlink()
+    if pause_updates:
+        # A manual rollback must remain effective if a release timer is installed.
+        (RUNTIME / 'auto-release-enabled').unlink(missing_ok=True)
     print('Replica route removed. Existing Coolify API route is retained.')
 
 
@@ -127,14 +130,17 @@ def helper(*args):
         raise RuntimeError('Gateway update failed; details suppressed to protect runtime settings')
 
 
-def main():
+def main(argv=None, _locked=False):
     parser = argparse.ArgumentParser(description=__doc__)
     operation = parser.add_mutually_exclusive_group()
     operation.add_argument('--execute', action='store_true')
     operation.add_argument('--rollback', action='store_true')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if (args.execute or args.rollback) and (not hasattr(os, 'geteuid') or os.geteuid() != 0):
         raise ValueError('Execution requires root on the main Linux server')
+    if (args.execute or args.rollback) and not _locked:
+        with pilot.operation_lock(RUNTIME):
+            return main(argv, _locked=True)
     if args.rollback:
         rollback()
         return
