@@ -5,7 +5,8 @@ services:
   api:
     image: ${ATL_API_IMAGE:?Set ATL_API_IMAGE to a tested immutable API image}
     env_file:
-      - ${ATL_RUNTIME_ENV:?Set ATL_RUNTIME_ENV to an absolute private env-file path}
+      - path: ${ATL_RUNTIME_ENV:?Set ATL_RUNTIME_ENV to an absolute private env-file path}
+        format: raw
     environment:
       HTTP_ADDR: :8080
       RUN_MIGRATIONS: "false"
@@ -13,6 +14,8 @@ services:
       REDIS_OPTIONAL: "false"
       DB_MAX_CONNS: "8"
       DB_MIN_CONNS: "1"
+      # Keep one bounded pool per pilot API; do not inherit an extra read pool.
+      DATABASE_READ_URL: ""
       HTTP_MAX_IN_FLIGHT: "64"
     init: true
     restart: unless-stopped
