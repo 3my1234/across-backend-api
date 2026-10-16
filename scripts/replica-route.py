@@ -88,10 +88,13 @@ def probe():
         headers, body = Path(directory) / 'headers', Path(directory) / 'body'
         result = subprocess.run(['curl', '-fsS', '--max-time', '8', '--connect-timeout', '3',
                                  '--resolve', DOMAIN + ':443:127.0.0.1', '-H', 'Cache-Control: no-cache',
-                                 '-D', str(headers), '-o', str(body), 'https://' + DOMAIN + '/api/v1/ready'],
+                                 '-D', str(headers), '-o', str(body), '--write-out', '%{http_code}',
+                                 'https://' + DOMAIN + '/api/v1/ready'],
                                 capture_output=True, timeout=12)
         if result.returncode:
-            raise RuntimeError('Local HTTPS readiness failed (curl output suppressed)')
+            status = result.stdout.decode(errors='replace').strip()
+            status = status if re.fullmatch(r'\d{3}', status) else 'unknown'
+            raise RuntimeError('Local HTTPS readiness failed: curl_exit=%d http_status=%s' % (result.returncode, status))
         data = json.loads(body.read_text())
         if data.get('ok') is not True:
             raise ValueError('Local HTTPS dependencies are not ready')
@@ -189,6 +192,7 @@ def main():
         finally:
             pending.unlink()
         seen = set()
+        outcomes = {}
         deadline = time.monotonic() + 45
         for _ in range(20):
             if time.monotonic() >= deadline:
@@ -196,6 +200,10 @@ def main():
             time.sleep(1)
             try:
                 backend = probe()
+                outcome = backend if backend in {'api1', 'api2', 'api3', 'api4'} else 'original/fallback (no replica header)' if not backend else 'unexpected replica header'
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                if outcomes[outcome] == 1:
+                    print('HTTPS verification:', outcome, flush=True)
                 if backend in {'api1', 'api2', 'api3', 'api4'}:
                     seen.add(backend)
                     print('HTTPS readiness via', backend)
@@ -204,8 +212,13 @@ def main():
                     print('Now test customer/provider chat, uploads, Support and Town Hall on devices.')
                     print('Rollback: python3 scripts/replica-route.py --rollback')
                     return
-            except (ValueError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            except (ValueError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                outcome = str(error) if type(error) is RuntimeError else type(error).__name__
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                if outcomes[outcome] == 1:
+                    print('HTTPS verification:', outcome, flush=True)
                 continue
+        print('Verification outcomes:', json.dumps(outcomes), flush=True)
         raise RuntimeError('Two healthy replica paths were not confirmed; reverting the new route')
     except BaseException:
         if installed:

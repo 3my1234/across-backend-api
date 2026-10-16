@@ -24,6 +24,14 @@ ARGS = ['--providers.file.directory=/traefik/dynamic/', '--providers.file.watch=
 
 
 class RouteSafety(unittest.TestCase):
+    def test_failed_probe_reports_status_without_private_curl_output(self):
+        failure = subprocess.CompletedProcess([], 22, b'503', b'private-do-not-print')
+        with patch.object(route.subprocess, 'run', return_value=failure):
+            with self.assertRaises(RuntimeError) as error:
+                route.probe()
+        self.assertIn('curl_exit=22 http_status=503', str(error.exception))
+        self.assertNotIn('private-do-not-print', str(error.exception))
+
     def test_route_preserves_tls_and_middleware_and_fallback(self):
         config = route.routing(LABELS, ARGS)['http']
         router = config['routers']['atlxpres-replicas']
@@ -73,24 +81,32 @@ class RouteSafety(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = copy.deepcopy(route.routing(LABELS, ARGS))
             router = config['http']['routers']['atlxpres-replicas']
-            router.pop('tls'); router.pop('middlewares')
+            router.pop('tls')
             router['entryPoints'], router['rule'] = ['http'], 'Host(`pilot.test`)'
             services = config['http']['services']
-            services['atlxpres-available']['failover']['fallback'] = 'backup'
-            services['backup'] = {'loadBalancer': {'servers': [{'url': 'http://' + backup + ':8080'}]}}
             main = services['atlxpres-replicas']['loadBalancer']
             main['servers'] = [{'url': 'http://' + primary + ':8080'}]
             main['healthCheck']['interval'], main['healthCheck']['timeout'] = '1s', '500ms'
-            (Path(directory) / 'route.yaml').write_text(json.dumps(config))
+            pending = Path(directory) / '.route.tmp'
+            pending.write_text(json.dumps(config))
             docker('network', 'create', project)
             try:
                 for name, body in ((primary, 'PRIMARY'), (backup, 'FALLBACK')):
-                    docker('run', '-d', '--name', name, '--network', project, 'busybox:1.36', 'sh', '-c',
+                    labels = [] if name == primary else ['--label', 'traefik.enable=true',
+                        '--label', 'traefik.http.services.https-0-' + route.pilot.API_RESOURCE + '.loadbalancer.server.port=8080',
+                        '--label', 'traefik.http.middlewares.gzip.compress=true']
+                    docker('run', '-d', '--name', name, '--network', project, *labels, 'busybox:1.36', 'sh', '-c',
                            'mkdir -p /www/api/v1; echo ' + body + ' > /www/api/v1/ready; exec httpd -f -p 8080 -h /www')
                     self.assertEqual(docker('exec', name, 'wget', '-qO-', 'http://127.0.0.1:8080/api/v1/ready'), body)
                 docker('run', '-d', '--name', proxy, '--network', project, '-p', '127.0.0.1::8000',
-                       '-v', str(Path(directory).resolve()) + ':/dynamic:ro', 'traefik:v3.6',
-                       '--entrypoints.http.address=:8000', '--providers.file.directory=/dynamic', '--providers.file.watch=true', '--log.level=DEBUG')
+                       '-v', str(Path(directory).resolve()) + ':/dynamic:ro',
+                       '-v', '/var/run/docker.sock:/var/run/docker.sock:ro', 'traefik:v3.6',
+                       '--entrypoints.http.address=:8000', '--providers.file.directory=/dynamic', '--providers.file.watch=true',
+                       '--providers.docker=true', '--providers.docker.exposedbydefault=false', '--providers.docker.network=' + project, '--log.level=DEBUG')
+                # Exercise the exact publish method after the watcher starts.
+                time.sleep(1)
+                os.link(pending, Path(directory) / 'route.yaml')
+                pending.unlink()
                 ports = json.loads(docker('inspect', '--format', '{{json .NetworkSettings.Ports}}', proxy))
                 port = ports['8000/tcp'][0]['HostPort']
                 def wait_for(body):
