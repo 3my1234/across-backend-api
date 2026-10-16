@@ -29,6 +29,8 @@ x-api: &api
 services:
   postgres:
     image: postgres:16-alpine
+    # Synthetic lab only: identify slow statements without logging parameters.
+    command: [postgres, -c, log_min_duration_statement=100ms, -c, log_parameter_max_length=0, -c, log_parameter_max_length_on_error=0]
     environment: {POSTGRES_USER: lab, POSTGRES_PASSWORD: lab-disposable-only, POSTGRES_DB: capacity_lab}
     networks: [lab]
     cpus: 1
@@ -53,7 +55,9 @@ services:
     build: {context: ../.., dockerfile: deploy/capacity-lab/Dockerfile}
     image: atlxpres-capacity-lab:local
     command: [/app/lab, seed]
-    environment: {CAPACITY_LAB: disposable-compose-only}
+    environment:
+      CAPACITY_LAB: disposable-compose-only
+      LAB_SCENARIO: ${LAB_SCENARIO:-standard}
     depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
     networks: [lab]
     cpus: 1
@@ -73,6 +77,7 @@ services:
     environment:
       CAPACITY_LAB: disposable-compose-only
       LAB_PROFILE: ${LAB_PROFILE:-smoke}
+      LAB_SCENARIO: ${LAB_SCENARIO:-standard}
     depends_on: {gateway: {condition: service_started}}
     networks: [lab]
     cpus: 1

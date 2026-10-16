@@ -25,7 +25,37 @@ const database = "postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?
 const secret = "capacity-lab-not-a-production-secret"
 const origin = "http://gateway:8080"
 
-type actor struct{ Buyer, ProviderUser, Provider, Listing, Conversation, Room, Ticket string }
+type actor struct{ Buyer, ProviderUser, Provider, Listing, Conversation, Room, Ticket, HotRoom string }
+
+type fixturePlan struct {
+	Name                                           string
+	OlderRooms, ConversationHistory, ExtraListings int
+	Busy                                           bool
+}
+
+func scenarioPlan(name string) (fixturePlan, error) {
+	if name == "" {
+		name = "standard"
+	}
+	p := fixturePlan{Name: name, OlderRooms: 19, ConversationHistory: 100}
+	switch name {
+	case "standard":
+	case "busy":
+		p.Busy = true
+	case "large":
+		p.OlderRooms = 199
+		p.ConversationHistory = 1000
+		p.ExtraListings = 9
+	case "large-busy":
+		p.OlderRooms = 199
+		p.ConversationHistory = 1000
+		p.ExtraListings = 9
+		p.Busy = true
+	default:
+		return p, fmt.Errorf("LAB_SCENARIO must be standard, busy, large or large-busy")
+	}
+	return p, nil
+}
 
 func main() {
 	if os.Getenv("CAPACITY_LAB") != "disposable-compose-only" || len(os.Args) != 2 {
@@ -56,6 +86,10 @@ func must(err error) {
 }
 
 func seed(ctx context.Context, db *pgxpool.Pool) error {
+	plan, err := scenarioPlan(os.Getenv("LAB_SCENARIO"))
+	if err != nil {
+		return err
+	}
 	// No conflict updates or truncate: a repeat must fail rather than mutate a
 	// database that isn't the fresh lab. No production data or secrets are copied.
 	tx, err := db.Begin(ctx)
@@ -63,10 +97,10 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, `CREATE TABLE capacity_lab_identity (marker text PRIMARY KEY);
- INSERT INTO capacity_lab_identity VALUES ('disposable-compose-only');
- CREATE TABLE capacity_lab_actors (buyer uuid,provider_user uuid,provider uuid,listing uuid,conversation uuid,room uuid,ticket uuid);
- INSERT INTO capacity_lab_actors SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid() FROM generate_series(1,100);
+	_, err = tx.Exec(ctx, fmt.Sprintf(`CREATE TABLE capacity_lab_identity (marker text PRIMARY KEY,scenario text NOT NULL);
+ INSERT INTO capacity_lab_identity VALUES ('disposable-compose-only','%s');
+ CREATE TABLE capacity_lab_actors (buyer uuid,provider_user uuid,provider uuid,listing uuid,conversation uuid,room uuid,ticket uuid,slot int UNIQUE,hot_room uuid);
+ INSERT INTO capacity_lab_actors SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),i,NULL FROM generate_series(1,100) i;
  INSERT INTO countries_config(country_code,currency_code) VALUES ('NG','NGN') ON CONFLICT(country_code) DO NOTHING;
  INSERT INTO users(id,country_id,email,password_hash,full_name,email_verified)
  SELECT id,(SELECT id FROM countries_config WHERE country_code='NG'),id::text||'@example.invalid','unusable','Synthetic lab actor',true
@@ -74,22 +108,32 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  INSERT INTO provider_organizations(id,owner_user_id,business_name,slug,contact_email,contact_phone,verification_status)
  SELECT provider,provider_user,'Synthetic lab provider',provider::text,'lab@example.invalid','lab','approved' FROM capacity_lab_actors;
  INSERT INTO provider_members(provider_id,user_id,role) SELECT provider,provider_user,'owner' FROM capacity_lab_actors;
- INSERT INTO provider_subscription_plans(code,name,amount_ngn,listing_limit,badge_tier) VALUES ('capacity-lab-paid','Synthetic paid plan',500,5,'bronze');
+ INSERT INTO provider_subscription_plans(code,name,amount_ngn,listing_limit,badge_tier) VALUES ('capacity-lab-paid','Synthetic paid plan',500,40,'bronze');
  INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,starts_at,current_period_end,expected_amount_ngn)
  SELECT provider,(SELECT id FROM provider_subscription_plans WHERE code='capacity-lab-paid'),'active',provider::text,'lab@example.invalid',now()-interval '1 day',now()+interval '30 days',500 FROM capacity_lab_actors;
  INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id,tx_ref,amount,currency_code)
  SELECT id,id::text,tx_ref,500,'NGN' FROM provider_subscriptions WHERE customer_email='lab@example.invalid';
  INSERT INTO provider_listings(id,provider_id,listing_type,title,slug,description,category,status,published_at,city)
  SELECT listing,provider,'hotel','Synthetic hotel',listing::text,'Synthetic hotel listing','hotel','approved',now(),'Abuja' FROM capacity_lab_actors;
+ INSERT INTO provider_listings(provider_id,listing_type,title,slug,description,category,status,published_at,city)
+ SELECT provider,'hotel','Synthetic extra hotel',provider::text||'-'||i,'Synthetic hotel listing','hotel','approved',now(),'Abuja' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d) i;
  INSERT INTO products(provider_id,sku,title,description,category_path,cost_price_rmb,local_selling_price,exchange_rate_snapshot,inventory_count,moderation_status,published_at,fulfillment_mode)
  SELECT provider,provider::text,'Synthetic trousers','Synthetic catalogue item',ARRAY['Fashion','Trousers'],1,1000,1,100,'approved',now(),'merchant_local' FROM capacity_lab_actors;
+ INSERT INTO products(provider_id,sku,title,description,category_path,cost_price_rmb,local_selling_price,exchange_rate_snapshot,inventory_count,moderation_status,published_at,fulfillment_mode)
+ SELECT provider,provider::text||'-'||i,'Synthetic extra trousers','Synthetic catalogue item',ARRAY['Fashion','Trousers'],1,1000,1,100,'approved',now(),'merchant_local' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d) i;
  INSERT INTO product_delivery_areas(product_id,country_code,delivered_price,currency_code)
- SELECT id,'NG',1000,'NGN' FROM products WHERE sku IN (SELECT provider::text FROM capacity_lab_actors);
+ SELECT id,'NG',1000,'NGN' FROM products WHERE provider_id IN (SELECT provider FROM capacity_lab_actors);
  INSERT INTO provider_conversations(id,listing_id,provider_id,user_id) SELECT conversation,listing,provider,buyer FROM capacity_lab_actors;
+ -- Historical import only: avoid repeatedly updating the same revision row
+ -- thousands of times in a single seed transaction. Restore the equivalent
+ -- revision and re-enable the named trigger before any API starts.
+ ALTER TABLE provider_conversation_messages DISABLE TRIGGER provider_chat_revision;
  INSERT INTO provider_conversation_messages(conversation_id,sender_type,sender_user_id,body)
- SELECT conversation,'buyer',buyer,'Synthetic prior message' FROM capacity_lab_actors CROSS JOIN generate_series(1,100);
+ SELECT conversation,'buyer',buyer,'Synthetic prior message' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d);
+ UPDATE provider_conversations c SET history_revision=h.total FROM (SELECT conversation_id,count(*) AS total FROM provider_conversation_messages GROUP BY conversation_id) h WHERE c.id=h.conversation_id;
+ ALTER TABLE provider_conversation_messages ENABLE TRIGGER provider_chat_revision;
  INSERT INTO chat_rooms(id,kind,owner_user_id,title) SELECT room,'town_hall',buyer,'Synthetic request' FROM capacity_lab_actors;
- INSERT INTO chat_rooms(kind,owner_user_id,title,created_at) SELECT 'town_hall',buyer,'Synthetic older request',now()-i*interval '1 second' FROM capacity_lab_actors CROSS JOIN generate_series(1,19) i;
+ INSERT INTO chat_rooms(kind,owner_user_id,title,created_at) SELECT 'town_hall',buyer,'Synthetic older request',now()-i*interval '1 second' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d) i;
  INSERT INTO town_hall_requests(room_id,description,location,unit,message_only,first_provider_engaged_at)
  SELECT id,'Synthetic request','','',true,now() FROM chat_rooms;
  INSERT INTO chat_participants(room_id,user_id,role) SELECT id,owner_user_id,'buyer' FROM chat_rooms;
@@ -97,15 +141,56 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  INSERT INTO chat_messages(room_id,sender_user_id,body,client_message_id) SELECT id,owner_user_id,'Synthetic prior message',gen_random_uuid() FROM chat_rooms CROSS JOIN generate_series(1,10);
  INSERT INTO town_hall_offers(room_id,provider_id,sender_user_id,unit_price,terms) SELECT room,provider,provider_user,1000,'Synthetic prior offer' FROM capacity_lab_actors;
  INSERT INTO support_tickets(id,user_id,subject,message) SELECT ticket,buyer,'Synthetic support','Synthetic support' FROM capacity_lab_actors;
- INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`)
+ INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`, plan.Name, plan.ExtraListings, plan.ExtraListings, plan.ConversationHistory, plan.OlderRooms))
 	if err != nil {
 		return err
+	}
+	if plan.Busy {
+		_, err = tx.Exec(ctx, `CREATE TABLE capacity_lab_hotspots AS SELECT (slot-1)/10 AS group_id,gen_random_uuid() AS room,min(buyer::text)::uuid AS owner FROM capacity_lab_actors GROUP BY (slot-1)/10;
+ UPDATE capacity_lab_actors a SET hot_room=h.room FROM capacity_lab_hotspots h WHERE (a.slot-1)/10=h.group_id;
+ INSERT INTO chat_rooms(id,kind,owner_user_id,title) SELECT room,'town_hall',owner,'Synthetic busy room' FROM capacity_lab_hotspots;
+ INSERT INTO town_hall_requests(room_id,description,location,unit,message_only,first_provider_engaged_at) SELECT room,'Synthetic busy request','','',true,now() FROM capacity_lab_hotspots;
+ INSERT INTO chat_participants(room_id,user_id,role) SELECT room,owner,'buyer' FROM capacity_lab_hotspots;
+ INSERT INTO chat_participants(room_id,user_id,provider_id,role) SELECT hot_room,provider_user,provider,'provider' FROM capacity_lab_actors;
+ INSERT INTO town_hall_offers(room_id,provider_id,sender_user_id,unit_price,terms) SELECT hot_room,provider,provider_user,1000,'Synthetic prior offer' FROM capacity_lab_actors;
+ INSERT INTO chat_messages(room_id,sender_user_id,body,client_message_id) SELECT room,owner,'Synthetic prior busy message',gen_random_uuid() FROM capacity_lab_hotspots CROSS JOIN generate_series(1,500);`)
+		if err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 	_, err = db.Exec(ctx, "ANALYZE")
 	return err
+}
+
+func checkFixtures(ctx context.Context, db *pgxpool.Pool, plan fixturePlan) (map[string]int, error) {
+	counts := map[string]int{}
+	var products, listings, rooms, hallMessages, marketMessages, busyRooms int
+	err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM products),(SELECT count(*) FROM provider_listings),(SELECT count(*) FROM chat_rooms),(SELECT count(*) FROM chat_messages),(SELECT count(*) FROM provider_conversation_messages),(SELECT count(*) FROM (SELECT room_id FROM chat_participants WHERE role='provider' AND state='active' GROUP BY room_id HAVING count(*)=10) rooms)`).Scan(&products, &listings, &rooms, &hallMessages, &marketMessages, &busyRooms)
+	if err != nil {
+		return counts, err
+	}
+	var revisionsReady bool
+	err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='provider_conversation_messages'::regclass AND tgname='provider_chat_revision' AND tgenabled='O') AND NOT EXISTS(SELECT 1 FROM provider_conversations WHERE history_revision<>$1)`, plan.ConversationHistory).Scan(&revisionsReady)
+	if err != nil {
+		return counts, err
+	}
+	if !revisionsReady {
+		return counts, fmt.Errorf("history revisions or live trigger not ready")
+	}
+	counts = map[string]int{"products": products, "listings": listings, "rooms": rooms, "hall_messages": hallMessages, "marketplace_messages": marketMessages, "busy_rooms": busyRooms}
+	extraRooms, extraMessages, wantBusy := 0, 0, 0
+	if plan.Busy {
+		extraRooms = 10
+		extraMessages = 5000
+		wantBusy = 10
+	}
+	if products != 100*(1+plan.ExtraListings) || listings != products || rooms != 100*(1+plan.OlderRooms)+extraRooms || hallMessages != 100*(1+plan.OlderRooms)*10+extraMessages || marketMessages != 100*plan.ConversationHistory || busyRooms != wantBusy {
+		return counts, fmt.Errorf("synthetic fixture shape mismatch: %v", counts)
+	}
+	return counts, nil
 }
 
 type sample struct {
@@ -117,15 +202,20 @@ type sample struct {
 	Valid   bool
 }
 type metric struct {
-	Requests int     `json:"requests"`
-	Success  int     `json:"success"`
-	Busy     int     `json:"busy"`
-	Errors   int     `json:"errors"`
-	P95MS    float64 `json:"successful_p95_ms"`
+	Requests int         `json:"requests"`
+	Success  int         `json:"success"`
+	Busy     int         `json:"busy"`
+	Errors   int         `json:"errors"`
+	P95MS    float64     `json:"successful_p95_ms"`
+	Statuses map[int]int `json:"status_counts"`
 	times    []time.Duration
 }
 
 func (m *metric) add(s sample) {
+	if m.Statuses == nil {
+		m.Statuses = map[int]int{}
+	}
+	m.Statuses[s.Status]++
 	m.Requests++
 	if s.Valid {
 		m.Success++
@@ -175,7 +265,15 @@ func operations(a actor, n int, prefix string) []operation {
 	}
 	if n%5 == 0 {
 		b, _ := json.Marshal(map[string]any{"unit_price": 1000, "terms": prefix + uuid.NewString(), "client_message_id": uuid.NewString()})
-		ops = append(ops, operation{Name: "town_hall_offer", Path: "/api/v1/chat/town-hall/" + a.Room + "/offers", Token: provider, Body: string(b), Want: 204, Write: true})
+		room := a.Room
+		if a.HotRoom != "" {
+			room = a.HotRoom
+		}
+		ops = append(ops, operation{Name: "town_hall_offer", Path: "/api/v1/chat/town-hall/" + room + "/offers", Token: provider, Body: string(b), Want: 204, Write: true})
+	}
+	if a.HotRoom != "" {
+		path := "/api/v1/chat/conversations/" + a.HotRoom + "/messages"
+		ops = append(ops, operation{Name: "busy_room_history", Path: path + "?limit=40&mark_read=false", Token: provider, Want: 200}, operation{Name: "busy_room_send", Path: path, Token: provider, Body: body(), Want: 201, Write: true})
 	}
 	if n%7 == 0 {
 		ops = append(ops, operation{Name: "support_reply", Path: "/api/v1/support/tickets/" + a.Ticket + "/reply", Token: buyer, Body: body(), Want: 201, Write: true})
@@ -253,18 +351,22 @@ func request(c *http.Client, op operation, index int) sample {
 }
 
 func run(ctx context.Context, db *pgxpool.Pool) error {
-	var marker string
-	if err := db.QueryRow(ctx, "SELECT marker FROM capacity_lab_identity").Scan(&marker); err != nil || marker != "disposable-compose-only" {
+	plan, err := scenarioPlan(os.Getenv("LAB_SCENARIO"))
+	if err != nil {
+		return err
+	}
+	var marker, seedScenario string
+	if err := db.QueryRow(ctx, "SELECT marker,scenario FROM capacity_lab_identity").Scan(&marker, &seedScenario); err != nil || marker != "disposable-compose-only" || seedScenario != plan.Name {
 		return fmt.Errorf("missing isolated lab identity")
 	}
-	rows, err := db.Query(ctx, "SELECT buyer::text,provider_user::text,provider::text,listing::text,conversation::text,room::text,ticket::text FROM capacity_lab_actors")
+	rows, err := db.Query(ctx, "SELECT buyer::text,provider_user::text,provider::text,listing::text,conversation::text,room::text,ticket::text,COALESCE(hot_room::text,'') FROM capacity_lab_actors ORDER BY slot")
 	if err != nil {
 		return err
 	}
 	actors := []actor{}
 	for rows.Next() {
 		var a actor
-		if err = rows.Scan(&a.Buyer, &a.ProviderUser, &a.Provider, &a.Listing, &a.Conversation, &a.Room, &a.Ticket); err != nil {
+		if err = rows.Scan(&a.Buyer, &a.ProviderUser, &a.Provider, &a.Listing, &a.Conversation, &a.Room, &a.Ticket, &a.HotRoom); err != nil {
 			return err
 		}
 		actors = append(actors, a)
@@ -276,6 +378,11 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 	if len(actors) != 100 {
 		return fmt.Errorf("expected 100 synthetic pairs")
 	}
+	counts, err := checkFixtures(ctx, db, plan)
+	if err != nil {
+		return err
+	}
+	must(json.NewEncoder(os.Stdout).Encode(map[string]any{"scenario": plan.Name, "fixture_counts": counts}))
 	duration := 20 * time.Second
 	if os.Getenv("LAB_PROFILE") == "baseline" {
 		duration = 90 * time.Second
@@ -284,6 +391,20 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 	}
 	c := client()
 	defer c.CloseIdleConnections()
+	if plan.Busy {
+		token, _, _ := auth.Sign(actors[10].Buyer, secret, time.Hour)
+		req, _ := http.NewRequest("GET", origin+"/api/v1/chat/conversations/"+actors[0].HotRoom+"/messages", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := c.Do(req)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		if res.StatusCode != 403 {
+			return fmt.Errorf("busy-room privacy check status=%d", res.StatusCode)
+		}
+	}
 	prefix := "lab-run-" + uuid.NewString() + ":"
 	// Fail fast on bad fixtures/routes instead of interpreting fast errors as capacity.
 	for n := 0; n < 3; n++ {
@@ -340,10 +461,14 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 				}
 			}
 		}
+		latencyPassed := true
 		for _, m := range metrics {
 			m.finish()
+			if m.Success == 0 || m.P95MS > 500 {
+				latencyPassed = false
+			}
 		}
-		report := map[string]any{"profile": os.Getenv("LAB_PROFILE"), "simulated_active_pairs": users, "elapsed_seconds": time.Since(started).Seconds(), "requests_per_second": float64(total) / time.Since(started).Seconds(), "operations": metrics, "backends": backends, "unexpected_errors": errors, "busy": busy, "scope": "isolated Docker host; no internet/media/worker delivery capacity claim"}
+		report := map[string]any{"scenario": plan.Name, "profile": os.Getenv("LAB_PROFILE"), "simulated_active_pairs": users, "elapsed_seconds": time.Since(started).Seconds(), "requests_per_second": float64(total) / time.Since(started).Seconds(), "operations": metrics, "backends": backends, "unexpected_errors": errors, "busy": busy, "latency_target_ms": 500, "latency_target_passed": latencyPassed, "scope": "isolated Docker host; no internet/media/worker delivery capacity claim"}
 		must(json.NewEncoder(os.Stdout).Encode(report))
 		if errors > 0 || busy > 0 {
 			stageError = fmt.Errorf("stage did not pass: errors=%d busy=%d; stop increasing load", errors, busy)
