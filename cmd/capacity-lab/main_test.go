@@ -1,6 +1,7 @@
 package main
 
 import (
+	"across/backend/internal/auth"
 	"across/backend/internal/migrations"
 	"context"
 	"github.com/google/uuid"
@@ -80,9 +81,65 @@ func TestFreshLabMigrationsAndFixtures(t *testing.T) {
 	if err = seed(ctx, db); err != nil {
 		t.Fatal("fixtures:", err)
 	}
+	plan, err := scenarioPlan(os.Getenv("LAB_SCENARIO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = checkFixtures(ctx, db, plan); err != nil {
+		t.Fatal(err)
+	}
 	var actors int
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM capacity_lab_actors").Scan(&actors); err != nil || actors != 100 {
 		t.Fatalf("actors=%d error=%v", actors, err)
+	}
+}
+
+func TestScenarioSelectionRejectsArbitrarySeedInput(t *testing.T) {
+	for _, name := range []string{"standard", "large", "busy", "large-busy"} {
+		if _, err := scenarioPlan(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"huge", "large';DROP TABLE users;--", "1000000"} {
+		if _, err := scenarioPlan(name); err == nil {
+			t.Fatalf("unbounded seed input accepted: %q", name)
+		}
+	}
+}
+
+func TestDatabaseCeilingRemainsBounded(t *testing.T) {
+	for _, value := range []string{"", "1", "2"} {
+		if _, err := databaseCPU(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"0", "4", "200", "NaN"} {
+		if _, err := databaseCPU(value); err == nil {
+			t.Fatalf("unbounded database CPU accepted: %q", value)
+		}
+	}
+}
+
+func TestBusyRoomOperationsUseAdmittedProviderIdentity(t *testing.T) {
+	a := actor{Buyer: uuid.NewString(), ProviderUser: uuid.NewString(), Room: uuid.NewString(), HotRoom: uuid.NewString()}
+	want := map[string]bool{"busy_room_history": false, "busy_room_send": false, "town_hall_offer": false}
+	for _, op := range operations(a, 0, "synthetic:") {
+		if _, ok := want[op.Name]; !ok {
+			continue
+		}
+		want[op.Name] = true
+		if !strings.Contains(op.Path, a.HotRoom) {
+			t.Errorf("%s did not target shared room", op.Name)
+		}
+		claims, err := auth.Verify(op.Token, secret)
+		if err != nil || claims.UserID != a.ProviderUser {
+			t.Errorf("%s did not use admitted provider session", op.Name)
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("missing %s", name)
+		}
 	}
 }
 func TestLabHTTPClientDoesNotFollowRedirects(t *testing.T) {

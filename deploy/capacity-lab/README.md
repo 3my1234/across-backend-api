@@ -13,9 +13,33 @@ accept a target URL or production environment file. Its HTTP transport ignores
 proxy environment variables and refuses redirects. Do not expose these lab
 services publicly or reuse their deliberately disposable credentials.
 
-Seed: 100 buyer/provider pairs with approved paid provider fixtures, 100 service
-listings/products/conversations, 2,000 Town Hall rooms, 20,000 bargaining messages,
-10,000 marketplace messages and 2,000 Support messages. The workload exercises
+All scenarios use 100 buyer/provider pairs with approved paid provider fixtures,
+100 marketplace conversations and 2,000 Support messages. Choose `scenario` in
+the manual workflow; only the following bounded shapes are accepted:
+
+| Scenario | Products / services each | Town Hall rooms | Bargaining history | Marketplace history | Busy rooms |
+|---|---:|---:|---:|---:|---:|
+| standard | 100 | 2,000 | 20,000 | 10,000 | 0 |
+| large | 1,000 | 20,000 | 200,000 | 100,000 | 0 |
+| busy | 100 | 2,010 | 25,000 | 10,000 | 10 |
+| large-busy | 1,000 | 20,010 | 205,000 | 100,000 | 10 |
+
+Busy rooms each have one buyer and ten distinct admitted, paid providers. Each
+provider reads and sends into its shared room on every cycle, with periodic
+offers. These writes exercise the room lock and notification fan-out to ten
+other members. The first 20 actors share two rooms, 50 share five, and 100 share
+all ten. The runner verifies outsider access is denied and checks actual seed
+counts, including full rooms, before starting traffic. It rejects a scenario
+that differs from the database's seeded identity.
+
+Historical marketplace messages are imported with only the history-revision
+trigger temporarily disabled inside the seed transaction. Their equivalent
+revision counts are then rebuilt and the trigger re-enabled. The runner refuses
+fixtures unless revisions match history and the live trigger is enabled. API
+traffic uses the normal triggers. This avoids treating a single huge historical
+import transaction as live message throughput; seed duration is not benchmarked.
+
+The workload exercises
 catalogue/service browsing, authenticated buyer/provider history, both directions
 of marketplace sends, Support history/replies, request creation and provider
 offers/bargaining. Notification database triggers execute normally.
@@ -27,6 +51,13 @@ all clients through one shared-IP allowance. This is not a fix for production
 proxy-header trust or a shared-IP/abuse qualification.
 
 `smoke` uses 20 seconds per stage, `baseline` 90 seconds, at 20/50/100 active
+buyer/provider pairs. The optional `database_cpus` input accepts only one
+(default) or two CPUs for the disposable PostgreSQL container. It changes no
+API, pool, memory or dataset limits, and the stage output records the ceiling.
+This comparison tests whether the lab's database CPU ceiling limits throughput;
+it is not a production CPU sizing formula.
+
+Each scenario uses the same 20/50/100 active
 buyer/provider pairs. Each pair sends sequential requests then waits two seconds;
 this is a deliberately busy closed-loop workload, not 100 simultaneous requests
 or a production user-count claim. The first stage is cold-ish; preflight timings
@@ -42,6 +73,11 @@ successful latency alongside errors: fast failures are never counted as success.
 Resource samples record container CPU/memory and PostgreSQL active connections
 and lock waiters approximately every five seconds during the workload. API logs
 also contain the normal cumulative pool-acquisition and admission counters.
+The lab PostgreSQL logs statements slower than 100ms with bound parameter
+logging disabled; these logs contain synthetic workload SQL only. Production
+logging settings are not changed. Per-operation status counts distinguish
+429/503 overload from other errors. Each stage reports whether all successful
+p95 values met the initial 500ms target separately from the correctness result.
 The workflow exit status enforces correctness and absence of overload, not a
 500ms latency certification. Interpret latency against the launch runbook's
 initial 500ms operating target and investigate each operation separately.
@@ -49,7 +85,7 @@ initial 500ms operating target and investigate each operation separately.
 The lab puts all services and generator on one shared CI machine, with per-service
 CPU/memory ceilings. Its results are a repeatable software baseline. They omit
 mobile rendering, real internet/TLS/CDN, media transfers, worker queue drain,
-large catalogue history, hot-room contention and production hardware/network
+production-scale catalogue history and production hardware/network
 characteristics. Sampling can miss short utilization peaks; end-of-run Docker
 stats are a snapshot. Further qualification needs worker queue-age observations
 and staging on hardware representative of the main/database split.
