@@ -75,14 +75,14 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  SELECT provider,provider_user,'Synthetic lab provider',provider::text,'lab@example.invalid','lab','approved' FROM capacity_lab_actors;
  INSERT INTO provider_members(provider_id,user_id,role) SELECT provider,provider_user,'owner' FROM capacity_lab_actors;
  INSERT INTO provider_subscription_plans(code,name,amount_ngn,listing_limit,badge_tier) VALUES ('capacity-lab-paid','Synthetic paid plan',500,5,'bronze');
- INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,starts_at,current_period_end)
- SELECT provider,(SELECT id FROM provider_subscription_plans WHERE code='capacity-lab-paid'),'active',provider::text,'lab@example.invalid',now()-interval '1 day',now()+interval '30 days' FROM capacity_lab_actors;
+ INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,starts_at,current_period_end,expected_amount_ngn)
+ SELECT provider,(SELECT id FROM provider_subscription_plans WHERE code='capacity-lab-paid'),'active',provider::text,'lab@example.invalid',now()-interval '1 day',now()+interval '30 days',500 FROM capacity_lab_actors;
  INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id,tx_ref,amount,currency_code)
  SELECT id,id::text,tx_ref,500,'NGN' FROM provider_subscriptions WHERE customer_email='lab@example.invalid';
  INSERT INTO provider_listings(id,provider_id,listing_type,title,slug,description,category,status,published_at,city)
  SELECT listing,provider,'hotel','Synthetic hotel',listing::text,'Synthetic hotel listing','hotel','approved',now(),'Abuja' FROM capacity_lab_actors;
- INSERT INTO products(provider_id,sku,title,description,category_path,cost_price_rmb,local_selling_price,exchange_rate_snapshot,inventory_count,moderation_status,published_at)
- SELECT provider,provider::text,'Synthetic trousers','Synthetic catalogue item',ARRAY['Fashion','Trousers'],1,1000,1,100,'approved',now() FROM capacity_lab_actors;
+ INSERT INTO products(provider_id,sku,title,description,category_path,cost_price_rmb,local_selling_price,exchange_rate_snapshot,inventory_count,moderation_status,published_at,fulfillment_mode)
+ SELECT provider,provider::text,'Synthetic trousers','Synthetic catalogue item',ARRAY['Fashion','Trousers'],1,1000,1,100,'approved',now(),'merchant_local' FROM capacity_lab_actors;
  INSERT INTO provider_conversations(id,listing_id,provider_id,user_id) SELECT conversation,listing,provider,buyer FROM capacity_lab_actors;
  INSERT INTO provider_conversation_messages(conversation_id,sender_type,sender_user_id,body)
  SELECT conversation,'buyer',buyer,'Synthetic prior message' FROM capacity_lab_actors CROSS JOIN generate_series(1,100);
