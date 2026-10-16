@@ -95,7 +95,7 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  INSERT INTO chat_messages(room_id,sender_user_id,body,client_message_id) SELECT id,owner_user_id,'Synthetic prior message',gen_random_uuid() FROM chat_rooms CROSS JOIN generate_series(1,10);
  INSERT INTO town_hall_offers(room_id,provider_id,sender_user_id,unit_price,terms) SELECT room,provider,provider_user,1000,'Synthetic prior offer' FROM capacity_lab_actors;
  INSERT INTO support_tickets(id,user_id,subject,message) SELECT ticket,buyer,'Synthetic support','Synthetic support' FROM capacity_lab_actors;
- INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer::text,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`)
+ INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`)
 	if err != nil {
 		return err
 	}

@@ -337,7 +337,7 @@ CREATE TABLE xp_daily_login (
 
 -- Materialized XP balance view
 CREATE VIEW user_xp_balance AS
-  SELECT user_id, COALESCE(SUM(amount), 0)::int AS total_xp
+  SELECT user_id, COALESCE(SUM(amount), 0)::bigint AS total_xp
   FROM xp_transactions GROUP BY user_id;
 
 -- Support tickets
