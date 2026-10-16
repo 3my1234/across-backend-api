@@ -83,6 +83,8 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  SELECT listing,provider,'hotel','Synthetic hotel',listing::text,'Synthetic hotel listing','hotel','approved',now(),'Abuja' FROM capacity_lab_actors;
  INSERT INTO products(provider_id,sku,title,description,category_path,cost_price_rmb,local_selling_price,exchange_rate_snapshot,inventory_count,moderation_status,published_at,fulfillment_mode)
  SELECT provider,provider::text,'Synthetic trousers','Synthetic catalogue item',ARRAY['Fashion','Trousers'],1,1000,1,100,'approved',now(),'merchant_local' FROM capacity_lab_actors;
+ INSERT INTO product_delivery_areas(product_id,country_code,delivered_price,currency_code)
+ SELECT id,'NG',1000,'NGN' FROM products WHERE sku IN (SELECT provider::text FROM capacity_lab_actors);
  INSERT INTO provider_conversations(id,listing_id,provider_id,user_id) SELECT conversation,listing,provider,buyer FROM capacity_lab_actors;
  INSERT INTO provider_conversation_messages(conversation_id,sender_type,sender_user_id,body)
  SELECT conversation,'buyer',buyer,'Synthetic prior message' FROM capacity_lab_actors CROSS JOIN generate_series(1,100);
@@ -155,7 +157,7 @@ func operations(a actor, n int, prefix string) []operation {
 		return string(b)
 	}
 	ops := []operation{
-		{Name: "catalogue", Path: "/api/v1/products?limit=20", Want: 200},
+		{Name: "catalogue", Path: "/api/v1/products", Want: 200},
 		{Name: "services", Path: "/api/v1/marketplace/listings?limit=20", Want: 200},
 		{Name: "town_hall_feed", Path: "/api/v1/chat/town-hall?limit=25", Token: buyer, Want: 200},
 		{Name: "buyer_history", Path: "/api/v1/marketplace/conversations/" + a.Conversation + "/messages?limit=40&mark_read=false", Token: buyer, Want: 200},
@@ -188,6 +190,42 @@ func operations(a actor, n int, prefix string) []operation {
 func client() *http.Client {
 	return &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{MaxIdleConns: 400, MaxIdleConnsPerHost: 200}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
+
+func validPayload(op operation, raw []byte) bool {
+	if op.Want == 204 {
+		return true
+	}
+	if !json.Valid(raw) {
+		return false
+	}
+	if op.Write {
+		return true
+	}
+	key, limit := "items", 40
+	switch op.Name {
+	case "catalogue":
+		key, limit = "products", 80 // Existing public API bound.
+	case "services":
+		limit = 20
+	case "town_hall_feed":
+		limit = 25
+	case "support_history":
+		key = "messages"
+	}
+	var result map[string][]json.RawMessage
+	// Other envelope fields need not be arrays.
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	result = map[string][]json.RawMessage{}
+	var items []json.RawMessage
+	if json.Unmarshal(envelope[key], &items) != nil {
+		return false
+	}
+	result[key] = items
+	return len(result[key]) > 0 && len(result[key]) <= limit
+}
 func request(c *http.Client, op operation, index int) sample {
 	method := "GET"
 	if op.Body != "" {
@@ -211,7 +249,7 @@ func request(c *http.Client, op operation, index int) sample {
 	s.Elapsed = time.Since(began)
 	s.Status = res.StatusCode
 	s.Backend = res.Header.Get("X-Lab-Backend")
-	s.Valid = err == nil && res.StatusCode == op.Want && (op.Want == 204 || json.Valid(raw))
+	s.Valid = err == nil && res.StatusCode == op.Want && validPayload(op, raw)
 	return s
 }
 

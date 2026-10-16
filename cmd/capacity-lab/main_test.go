@@ -101,3 +101,16 @@ func TestLabHTTPClientDoesNotFollowRedirects(t *testing.T) {
 		t.Fatal("lab client followed a redirect outside its target")
 	}
 }
+
+func TestSeededReadsMustContainBoundedHistory(t *testing.T) {
+	op := operation{Name: "support_history", Want: 200}
+	if validPayload(op, []byte(`{"messages":[]}`)) || validPayload(op, []byte(`{"error":"failure"}`)) {
+		t.Fatal("empty/error response passed as real history")
+	}
+	if !validPayload(op, []byte(`{"messages":[{"id":"synthetic"}],"has_more":true}`)) {
+		t.Fatal("valid bounded history rejected")
+	}
+	if validPayload(op, []byte(`{"messages":[`+strings.Repeat(`{},`, 40)+`{}]}`)) {
+		t.Fatal("unbounded page accepted")
+	}
+}
