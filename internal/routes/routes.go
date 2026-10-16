@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	_ "embed"
 	"strings"
 	"time"
@@ -74,13 +75,18 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		return c.JSON(fiber.Map{"ok": true})
 	})
 	v1.Get("/ready", func(c *fiber.Ctx) error {
-		databaseReady := db.Ping(c.Context()) == nil
-		readDatabaseReady := readDB.Ping(c.Context()) == nil
-		communitySchemaReady := databaseReady && controllers.CommunitySchemaReady(c.Context(), db)
-		providerNotificationsReady := databaseReady && controllers.ProviderNativeNotificationsReady(c.Context(), db)
+		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
+		defer cancel()
+		databaseReady := db.Ping(ctx) == nil
+		readDatabaseReady := readDB == db && databaseReady
+		if readDB != db {
+			readDatabaseReady = readDB.Ping(ctx) == nil
+		}
+		communitySchemaReady := databaseReady && controllers.CommunitySchemaReady(ctx, db)
+		providerNotificationsReady := databaseReady && controllers.ProviderNativeNotificationsReady(ctx, db)
 		redisReady := cache != nil
 		if redisReady {
-			redisReady = cache.Ping(c.Context()).Err() == nil
+			redisReady = cache.Ping(ctx).Err() == nil
 		} else if cfg.RedisOptional {
 			redisReady = true
 		}

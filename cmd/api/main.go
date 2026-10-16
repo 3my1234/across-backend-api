@@ -41,21 +41,28 @@ func main() {
 	app := fiber.New(fiber.Config{
 		AppName:      "Across API",
 		ServerHeader: "Across",
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	})
+	admission := appmiddleware.NewAdmission(cfg.HTTPMaxInFlight)
 	app.Use(requestid.New())
 	app.Use(recover.New())
+	// CORS must also apply to early overload/draining rejections so browser
+	// clients can distinguish a retryable 503 from a network failure.
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:  cfg.AllowedOrigins,
+		AllowHeaders:  "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code, Cache-Control, If-None-Match",
+		ExposeHeaders: "ETag, Retry-After",
+		AllowMethods:  "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+	}))
+	app.Use(admission.Handler)
 	app.Use(appmiddleware.DistributedRateLimit(store.Redis, "api", cfg.RateLimitPerMinute, time.Minute))
 	app.Use(appmiddleware.CatalogFreshness(store.PG))
 	app.Use(appmiddleware.SharedPublicCache(store.Redis, time.Duration(cfg.PublicCacheTTLSeconds)*time.Second))
 	app.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 	app.Use(logger.New(logger.Config{
 		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${locals:requestid} error=${error}\n",
-	}))
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:  cfg.AllowedOrigins,
-		AllowHeaders:  "Origin, Content-Type, Accept, Authorization, X-Admin-Token, X-Client-Country-Code, Cache-Control, If-None-Match",
-		ExposeHeaders: "ETag",
-		AllowMethods:  "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg)
 
@@ -71,6 +78,19 @@ func main() {
 		strings.TrimSpace(cfg.SMTPHost) != "" && strings.TrimSpace(cfg.SMTPUsername) != "" && strings.TrimSpace(cfg.SMTPPassword) != "",
 		strings.TrimSpace(cfg.SESSNSTopicARN) != "")
 	serverErrors := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pool := store.PG.Stat()
+				log.Printf("api_capacity admission=%v db_acquired=%d db_max=%d db_wait_ms=%d db_cancelled=%d", admission.Snapshot(), pool.AcquiredConns(), pool.MaxConns(), pool.AcquireDuration().Milliseconds(), pool.CanceledAcquireCount())
+			}
+		}
+	}()
 	go func() { serverErrors <- app.Listen(cfg.HTTPAddr) }()
 	select {
 	case err := <-serverErrors:
@@ -78,7 +98,10 @@ func main() {
 			log.Fatal(err)
 		}
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		admission.Drain()
+		// Give a readiness-based balancer time to stop routing new traffic.
+		time.Sleep(3 * time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 		defer cancel()
 		if err := app.ShutdownWithContext(shutdownCtx); err != nil {
 			log.Printf("graceful shutdown error: %v", err)

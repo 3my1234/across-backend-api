@@ -45,6 +45,9 @@ func TestProductionURLDefaults(t *testing.T) {
 	if cfg.RateLimitPerMinute != 600 || cfg.PublicCacheTTLSeconds != 5 {
 		t.Fatalf("unexpected scale defaults: rate=%d cache=%d", cfg.RateLimitPerMinute, cfg.PublicCacheTTLSeconds)
 	}
+	if cfg.HTTPMaxInFlight != 128 {
+		t.Fatalf("unexpected admission default: %d", cfg.HTTPMaxInFlight)
+	}
 	origins := strings.Split(cfg.AllowedOrigins, ",")
 	for _, origin := range []string{"https://atlxpres.com", "https://admin.atlxpres.com"} {
 		if !slices.Contains(origins, origin) {

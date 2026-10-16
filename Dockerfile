@@ -30,6 +30,7 @@ COPY --from=builder /out/across-settlements /app/across-settlements
 COPY --from=builder /src/migrations /app/migrations
 
 USER across
+ADD --chmod=0644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/aws-rds-global.pem
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=3 CMD curl -fsS http://127.0.0.1:8080/api/v1/health || exit 1
 
