@@ -39,7 +39,7 @@ class PilotSafety(unittest.TestCase):
             self.assertEqual(api['environment']['DATABASE_READ_URL'], '')
             self.assertEqual(api['environment']['DB_MAX_CONNS'], '8')
             self.assertIn('atlxpres-pilot-api', api['networks']['default']['aliases'])
-            self.assertNotIn('atlxpres-pilot-api', config['services']['gateway']['networks']['default'].get('aliases', []))
+            self.assertNotIn('atlxpres-pilot-api', (config['services']['gateway']['networks']['default'] or {}).get('aliases', []))
             self.assertFalse(api.get('ports'))
             self.assertEqual(config['services']['gateway']['ports'][0]['host_ip'], '127.0.0.1')
             command = ['docker', 'compose', '-p', project, '-f', str(compose)]
