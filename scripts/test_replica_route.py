@@ -85,11 +85,12 @@ class RouteSafety(unittest.TestCase):
             docker('network', 'create', project)
             try:
                 for name, body in ((primary, 'PRIMARY'), (backup, 'FALLBACK')):
-                    docker('run', '-d', '--name', name, '--network', project, 'alpine:3.20', 'sh', '-c',
+                    docker('run', '-d', '--name', name, '--network', project, 'busybox:1.36', 'sh', '-c',
                            'mkdir -p /www/api/v1; echo ' + body + ' > /www/api/v1/ready; exec httpd -f -p 8080 -h /www')
+                    self.assertEqual(docker('exec', name, 'wget', '-qO-', 'http://127.0.0.1:8080/api/v1/ready'), body)
                 docker('run', '-d', '--name', proxy, '--network', project, '-p', '127.0.0.1::8000',
                        '-v', str(Path(directory).resolve()) + ':/dynamic:ro', 'traefik:v3.6',
-                       '--entrypoints.http.address=:8000', '--providers.file.directory=/dynamic', '--providers.file.watch=true')
+                       '--entrypoints.http.address=:8000', '--providers.file.directory=/dynamic', '--providers.file.watch=true', '--log.level=DEBUG')
                 ports = json.loads(docker('inspect', '--format', '{{json .NetworkSettings.Ports}}', proxy))
                 port = ports['8000/tcp'][0]['HostPort']
                 def wait_for(body):
