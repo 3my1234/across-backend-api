@@ -58,6 +58,10 @@ jobs:
         run: |
           CGO_ENABLED=1 go test -race ./internal/middleware ./internal/config ./cmd/api
           node --test scripts/scale-budget.test.mjs
+          python3 scripts/test_replica_pilot.py
+          python3 scripts/test_replica_route.py
+          python3 scripts/test_replica_discovery.py
+          python3 scripts/test_replica_release.py
           docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:3.0-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: Build production image
         run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .
