@@ -1,5 +1,11 @@
 # Across Backend Deployment
 
+For bounded API overload handling, the isolated two-replica pilot, connection
+budget checks and the proposed cloud expansion, see [Spike readiness](docs/SPIKE_READINESS.md).
+These files do not activate production load balancing or cloud autoscaling.
+For the AWS pay-as-you-go deployment templates and activation steps, see
+[AWS deployment](deploy/aws/README.md). No cloud resources are created by a commit.
+
 For seller payout reconciliation, migration 052, and historical transaction
 verification, follow [Seller settlements](docs/SELLER_SETTLEMENTS.md).
 

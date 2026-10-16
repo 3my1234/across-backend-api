@@ -8,6 +8,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  aws-template-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cfn-lint==1.57.2
+      - run: python deploy/aws/test_safety.py
+      - run: cfn-lint deploy/aws/foundation.json deploy/aws/application.json
   provider-policy-tests:
     runs-on: ubuntu-latest
     services:
@@ -44,5 +54,10 @@ jobs:
           go-version: '1.22.x'
       - name: Check worker health and heartbeat concurrency
         run: CGO_ENABLED=1 go test -race ./cmd/worker ./internal/workers
+      - name: Check API admission and connection budget
+        run: |
+          CGO_ENABLED=1 go test -race ./internal/middleware ./internal/config ./cmd/api
+          node --test scripts/scale-budget.test.mjs
+          docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:3.0-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: Build production image
         run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .

@@ -1,0 +1,47 @@
+# Pilot only. No production domain labels, no public API ports, no database.
+# Use the same immutable production image and a private runtime env file.
+name: atlxpres-scale-pilot
+services:
+  api:
+    image: ${ATL_API_IMAGE:?Set ATL_API_IMAGE to a tested immutable API image}
+    env_file:
+      - ${ATL_RUNTIME_ENV:?Set ATL_RUNTIME_ENV to an absolute private env-file path}
+    environment:
+      HTTP_ADDR: :8080
+      RUN_MIGRATIONS: "false"
+      RUN_INLINE_WORKERS: "false"
+      REDIS_OPTIONAL: "false"
+      DB_MAX_CONNS: "8"
+      DB_MIN_CONNS: "1"
+      HTTP_MAX_IN_FLIGHT: "64"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 75s
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 128
+    networks: [default, shared]
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, "3", "http://localhost:8080/api/v1/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  gateway:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    ports: ["127.0.0.1:18080:8080"]
+    volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  shared:
+    external: true
+    name: ${ATL_SHARED_NETWORK:-coolify}

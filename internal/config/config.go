@@ -24,6 +24,7 @@ type Config struct {
 
 	AppEnv                        string
 	HTTPAddr                      string
+	HTTPMaxInFlight               int
 	WorkerHealthAddr              string
 	AllowedOrigins                string
 	DatabaseURL                   string
@@ -112,6 +113,7 @@ func Load() Config {
 		WebPushSubject:                env("WEB_PUSH_SUBJECT", "mailto:support@atlxpres.com"),
 		AppEnv:                        env("APP_ENV", "development"),
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
+		HTTPMaxInFlight:               envInt("HTTP_MAX_IN_FLIGHT", 128),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),
 		AllowedOrigins:                env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		DatabaseURL:                   databaseURL(),
