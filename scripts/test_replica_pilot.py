@@ -7,6 +7,7 @@ import stat
 import shutil
 import tempfile
 import unittest
+import uuid
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
@@ -26,17 +27,28 @@ class PilotSafety(unittest.TestCase):
             target = Path(directory) / 'runtime.env'
             secret = '$literal-${UNSET}-"quote"=value'
             pilot.private_env(target, {'SECRET': secret, 'DATABASE_READ_URL': 'must-be-overridden'})
-            env = dict(os.environ, ATL_API_IMAGE='alpine:3.20', ATL_RUNTIME_ENV=str(target), ATL_SHARED_NETWORK='coolify')
+            project = 'pilot-validation-' + uuid.uuid4().hex[:12]
+            env = dict(os.environ, ATL_API_IMAGE='alpine:3.20', ATL_RUNTIME_ENV=str(target), ATL_SHARED_NETWORK=project)
             compose = Path(__file__).parents[1] / 'deploy/scaling/compose.yml'
             result = pilot.subprocess.run(['docker', 'compose', '-f', str(compose), 'config', '--format', 'json'], capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, 'Compose configuration failed')
             config = json.loads(result.stdout)
             api = config['services']['api']
-            self.assertEqual(api['environment']['SECRET'], secret)
+            # Compose serializes literal dollars as $$ in rendered config. Verify
+            # the actual container environment below, not that serialization.
             self.assertEqual(api['environment']['DATABASE_READ_URL'], '')
             self.assertEqual(api['environment']['DB_MAX_CONNS'], '8')
             self.assertFalse(api.get('ports'))
             self.assertEqual(config['services']['gateway']['ports'][0]['host_ip'], '127.0.0.1')
+            command = ['docker', 'compose', '-p', project, '-f', str(compose)]
+            pilot.docker('network', 'create', project)
+            try:
+                import shlex
+                run = pilot.subprocess.run(command + ['run', '--rm', '--no-deps', '-T', '--entrypoint', 'sh', 'api', '-c', 'test "$SECRET" = ' + shlex.quote(secret) + ' && test -z "$DATABASE_READ_URL"'], env=env, capture_output=True, text=True, timeout=180)
+                self.assertEqual(run.returncode, 0, 'Synthetic container env check failed: ' + run.stderr)
+            finally:
+                pilot.subprocess.run(command + ['down'], env=env, capture_output=True, timeout=60)
+                pilot.docker('network', 'rm', project)
 
     def test_default_preflight_performs_no_startup_or_file_writes(self):
         commit = 'a' * 40
