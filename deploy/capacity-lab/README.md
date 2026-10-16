@@ -94,3 +94,38 @@ Do not run this workload on a production host or against production databases.
 No AWS or other paid resources are provisioned. The workflow consumes GitHub
 Actions minutes under the repository's existing account plan and quotas. Cleanup
 removes only this lab's Compose project and anonymous disposable database data.
+
+## Independently paced burst and recovery
+
+The manual `burst` profile keeps the same fixed isolated origin and synthetic
+fixtures. It offers 60 requests/sec for 20 seconds, 1,500/sec for 20 seconds,
+waits ten seconds for draining, then offers 60/sec for 30 seconds. Scheduling is
+independent of response speed, with a hard 384-request generator concurrency cap
+(above the replicas' combined 128 admission slots; below proxy maxconn 512).
+Arrivals more than 50ms behind schedule are counted as scheduler drops. Slots
+that cannot launch immediately are counted as generator-concurrency drops;
+there is no client queue or catch-up retry. Every planned arrival is accounted
+for as launched, scheduler-dropped or concurrency-dropped. These are requests,
+not simulated people. Reported elapsed time includes draining pending requests.
+
+JWTs/read templates are prepared before timing. The mix includes catalogue,
+services, Town Hall, marketplace/Support history, both directions of marketplace
+sends and admitted busy-room bargaining (or the buyer's room in standard data).
+Each attempted write gets a fresh client ID and body; writes are never replayed.
+All 100 synthetic identities rotate through the same mix. Normal Redis limits
+stay enabled and synthetic client IPs are the same bounded addresses as baseline.
+
+Expected overload is distinguished from correctness failure: a 429/503 must
+include JSON error text and a positive bounded Retry-After. HTML proxy 503s,
+500s, invalid successes and network/timeouts count as unexpected failures.
+The spike must observe the actual admission middleware's 503 busy response;
+rate limiting or generator drops alone do not prove admission protection.
+Spike latency and generator drops are reported but do not masquerade as success.
+
+Warmup/recovery must have zero errors, overload or generator drops, observe both
+replicas, and meet every operation's 500ms successful-p95 target. A spike error
+still proceeds to recovery so evidence is retained. A failed warmup stops before
+the spike. Confirmed writes must match stored rows after the requests drain,
+including on failures. A mismatch or failed recovery fails the workflow. Green
+CI here proves only these explicit checks in this lab, not production burst
+capacity, worker queue drain, server redundancy or physical autoscaling.

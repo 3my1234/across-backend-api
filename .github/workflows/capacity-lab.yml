@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: Smoke or longer baseline; never targets production
+        description: Smoke, sustained baseline or independently paced burst/recovery; isolated only
         type: choice
-        options: [smoke, baseline]
+        options: [smoke, baseline, burst]
         default: smoke
       scenario:
         description: Dataset growth and busy Town Hall contention

@@ -206,12 +206,14 @@ func checkFixtures(ctx context.Context, db *pgxpool.Pool, plan fixturePlan) (map
 }
 
 type sample struct {
-	Name    string
-	Status  int
-	Elapsed time.Duration
-	Write   bool
-	Backend string
-	Valid   bool
+	Name              string
+	Status            int
+	Elapsed           time.Duration
+	Write             bool
+	Backend           string
+	Valid             bool
+	Controlled        bool // JSON overload response with a positive Retry-After.
+	AdmissionRejected bool
 }
 type metric struct {
 	Requests int         `json:"requests"`
@@ -359,6 +361,13 @@ func request(c *http.Client, op operation, index int) sample {
 	s.Status = res.StatusCode
 	s.Backend = res.Header.Get("X-Lab-Backend")
 	s.Valid = err == nil && res.StatusCode == op.Want && validPayload(op, raw)
+	s.Controlled = err == nil && controlledOverload(res.StatusCode, res.Header.Get("Retry-After"), raw)
+	var overload struct {
+		Error string `json:"error"`
+	}
+	if s.Controlled && json.Unmarshal(raw, &overload) == nil {
+		s.AdmissionRejected = s.Status == 503 && overload.Error == "Service busy. Please retry shortly."
+	}
 	return s
 }
 
@@ -402,8 +411,8 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 	duration := 20 * time.Second
 	if os.Getenv("LAB_PROFILE") == "baseline" {
 		duration = 90 * time.Second
-	} else if os.Getenv("LAB_PROFILE") != "smoke" {
-		return fmt.Errorf("LAB_PROFILE must be smoke or baseline")
+	} else if os.Getenv("LAB_PROFILE") != "smoke" && os.Getenv("LAB_PROFILE") != "burst" {
+		return fmt.Errorf("LAB_PROFILE must be smoke, baseline or burst")
 	}
 	c := client()
 	defer c.CloseIdleConnections()
@@ -433,6 +442,9 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 				must(json.NewEncoder(os.Stdout).Encode(map[string]any{"preflight_operation": s.Name, "elapsed_ms": float64(s.Elapsed.Microseconds()) / 1000}))
 			}
 		}
+	}
+	if os.Getenv("LAB_PROFILE") == "burst" {
+		return runBurst(ctx, db, actors, prefix, plan.Name, dbCPUs, c)
 	}
 	var confirmed int
 	var stageError error
@@ -496,8 +508,15 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 			break
 		}
 	}
+	if err := reconcileWrites(ctx, db, prefix, confirmed); err != nil {
+		return err
+	}
+	return stageError
+}
+
+func reconcileWrites(ctx context.Context, db *pgxpool.Pool, prefix string, confirmed int) error {
 	var stored int
-	err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM provider_conversation_messages WHERE body LIKE $1)+(SELECT count(*) FROM chat_messages WHERE body LIKE $1 OR body LIKE $2)+(SELECT count(*) FROM support_messages WHERE message LIKE $1)+(SELECT count(*) FROM chat_rooms WHERE title LIKE $1)`, prefix+"%", "Offer:%"+prefix+"%").Scan(&stored)
+	err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM provider_conversation_messages WHERE body LIKE $1)+(SELECT count(*) FROM chat_messages WHERE body LIKE $1 OR body LIKE $2)+(SELECT count(*) FROM support_messages WHERE message LIKE $1)+(SELECT count(*) FROM chat_rooms WHERE title LIKE $1)`, prefix+"%", "Offer:%"+prefix+"%").Scan(&stored)
 	if err != nil {
 		return err
 	}
@@ -505,5 +524,5 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 	if stored != confirmed {
 		return fmt.Errorf("confirmed and stored writes differ")
 	}
-	return stageError
+	return nil
 }
