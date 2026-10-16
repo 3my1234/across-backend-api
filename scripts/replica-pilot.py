@@ -82,16 +82,17 @@ def main():
     compose = root / 'deploy/scaling/compose.yml'
     if not compose.is_file() or not (compose.parent / 'haproxy.cfg').is_file():
         raise ValueError('Run from the complete reviewed repository checkout')
-    ids = docker('ps', '-q').split()
-    if not ids:
+    inventory = [json.loads(line) for line in docker('ps', '--format', '{{json .}}').splitlines() if line]
+    if not inventory:
         raise ValueError('No running containers found')
-    containers = json.loads(docker('inspect', *ids))
-    selected = []
+    ids = []
     for resource in (API_RESOURCE, WORKER_RESOURCE):
-        matches = [c for c in containers if c['Name'].lstrip('/').startswith(resource + '-')]
+        matches = [c for c in inventory if c['Names'].startswith(resource + '-')]
         if len(matches) != 1:
             raise ValueError('Expected exactly one running ' + resource + '; wait for any rolling deployment to finish')
-        selected.append(matches[0])
+        ids.append(matches[0]['ID'])
+    # Inspect only the application API/worker, never Coolify's own secrets.
+    selected = json.loads(docker('inspect', *ids))
     api, worker = selected
     if not api['Config']['Image'].endswith(':' + args.expected_commit):
         raise ValueError('Live API image does not match the reviewed commit; no pilot started')
@@ -105,7 +106,7 @@ def main():
         raise ValueError('Shared Redis configuration is required')
     if 'coolify' not in api['NetworkSettings']['Networks']:
         raise ValueError('Existing API is not on the expected coolify network')
-    if any((c['Config'].get('Labels') or {}).get('com.docker.compose.project') == PROJECT for c in containers):
+    if docker('ps', '-q', '--filter', 'label=com.docker.compose.project=' + PROJECT).strip():
         raise ValueError('Pilot already running: inspect it instead of creating another copy')
     existing, required = connection_budget(selected, args.max_connections)
     ready = json.loads(docker('exec', api['Id'], 'curl', '-fsS', '--max-time', '5', 'http://127.0.0.1:8080/api/v1/ready'))

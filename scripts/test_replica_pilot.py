@@ -49,7 +49,9 @@ class PilotSafety(unittest.TestCase):
                                 NetworkSettings=dict(Networks=dict(coolify={}))))
         def run(*args):
             if args[0] == 'ps':
-                return 'api worker'
+                if '--filter' in args:
+                    return ''
+                return '\n'.join(json.dumps({'Names': c['Name'].lstrip('/'), 'ID': c['Id']}) for c in configs)
             if args[0] == 'inspect':
                 return json.dumps(configs)
             if args[0] == 'exec':
