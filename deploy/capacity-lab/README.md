@@ -36,6 +36,9 @@ Download the workflow's `isolated-capacity-<run-id>` artifact for per-operation
 successful p95, errors, busy responses, throughput, replica distribution, write
 reconciliation, synthetic service logs and runner hardware information. Read
 successful latency alongside errors: fast failures are never counted as success.
+Resource samples record container CPU/memory and PostgreSQL active connections
+and lock waiters approximately every five seconds during the workload. API logs
+also contain the normal cumulative pool-acquisition and admission counters.
 The workflow exit status enforces correctness and absence of overload, not a
 500ms latency certification. Interpret latency against the launch runbook's
 initial 500ms operating target and investigate each operation separately.
@@ -44,9 +47,9 @@ The lab puts all services and generator on one shared CI machine, with per-servi
 CPU/memory ceilings. Its results are a repeatable software baseline. They omit
 mobile rendering, real internet/TLS/CDN, media transfers, worker queue drain,
 large catalogue history, hot-room contention and production hardware/network
-characteristics. End-of-run Docker stats are a snapshot, not a peak utilization
-measurement. Further qualification needs time-series CPU/memory/DB wait/queue-age
-observations and staging on hardware representative of the main/database split.
+characteristics. Sampling can miss short utilization peaks; end-of-run Docker
+stats are a snapshot. Further qualification needs worker queue-age observations
+and staging on hardware representative of the main/database split.
 Do not run this workload on a production host or against production databases.
 
 No AWS or other paid resources are provisioned. The workflow consumes GitHub

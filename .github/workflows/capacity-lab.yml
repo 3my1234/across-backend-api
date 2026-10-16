@@ -9,7 +9,7 @@ on:
         default: smoke
   pull_request:
     branches: [main]
-    paths: ['cmd/capacity-lab/**', 'deploy/capacity-lab/**', '.github/workflows/capacity-lab.yml']
+    paths: ['cmd/capacity-lab/**', 'deploy/capacity-lab/**', 'migrations/**', '.github/workflows/capacity-lab.yml']
 permissions:
   contents: read
 jobs:
@@ -29,6 +29,16 @@ jobs:
       - name: Run bounded workload on the internal network
         run: |
           mkdir -p capacity-artifacts
+          (
+            while true; do
+              date -u +%FT%TZ
+              docker stats --no-stream --format '{{json .}}'
+              docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -At -c "SELECT count(*) AS clients, count(*) FILTER (WHERE state='active') AS active, count(*) FILTER (WHERE wait_event_type='Lock') AS lock_waiters FROM pg_stat_activity WHERE backend_type='client backend';"
+              sleep 5
+            done
+          ) > capacity-artifacts/resource-samples.log 2>&1 &
+          sampler_pid=$!
+          trap 'kill "$sampler_pid" 2>/dev/null || true' EXIT
           docker compose -f deploy/capacity-lab/compose.yml run --rm runner > capacity-artifacts/results.jsonl
       - name: Collect lab evidence
         if: always()
