@@ -40,7 +40,10 @@ services:
     volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
     cpus: 0.25
     mem_limit: 128m
-    networks: [default, shared]
+    networks:
+      default:
+        aliases: [atlxpres-pilot-api]
+      shared: {}
     pids_limit: 64
     logging:
       driver: json-file
