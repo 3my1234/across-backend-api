@@ -1,0 +1,35 @@
+name: Production readiness
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: production-readiness
+  cancel-in-progress: false
+jobs:
+  ready:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check API dependencies without user credentials or writes
+        run: |
+          python3 - <<'PY'
+          import json, time, urllib.request
+          for attempt in range(3):
+              try:
+                  began=time.monotonic()
+                  request=urllib.request.Request('https://api.atlxpres.com/api/v1/ready',headers={'User-Agent':'Atl-readiness-check/1.0','Cache-Control':'no-cache'})
+                  with urllib.request.urlopen(request,timeout=12) as response:
+                      data=json.load(response)
+                  if data.get('ok') is not True:
+                      raise RuntimeError('readiness returned ok=false')
+                  print('API ready; probe seconds=%.2f' % (time.monotonic()-began))
+                  break
+              except Exception as error:
+                  print('Readiness attempt %d failed: %s' % (attempt+1,type(error).__name__))
+                  if attempt==2:
+                      raise SystemExit('Production API readiness failed. Check Coolify API/database/Redis and worker queue health.')
+                  time.sleep(5)
+          PY

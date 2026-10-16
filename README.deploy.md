@@ -33,6 +33,9 @@ control; adding a Free tier does not cancel those renewals.
 
 This backend is ready for Coolify as a Docker application.
 
+For current-server traffic safeguards, deployment checks and the capacity-test
+limits, follow [Launch traffic runbook](docs/LAUNCH_TRAFFIC_RUNBOOK.md).
+
 ## Coolify API Service
 
 Use `Dockerfile` from the repository root.

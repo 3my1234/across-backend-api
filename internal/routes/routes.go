@@ -121,14 +121,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		})
 	})
 	v1.Get("/products", catalog.ListProducts)
-	v1.Get("/catalog/version", func(c *fiber.Ctx) error {
-		c.Set(fiber.HeaderCacheControl, "no-store")
-		var revision int64
-		if err := db.QueryRow(c.Context(), `SELECT revision FROM catalog_revision WHERE singleton=true`).Scan(&revision); err != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "catalog version unavailable")
-		}
-		return c.JSON(fiber.Map{"change_token": middleware.CatalogChangeToken(revision, time.Now())})
-	})
+	v1.Get("/catalog/version", middleware.CatalogVersion(db))
 	v1.Get("/buyer-markets", orders.ListBuyerMarkets)
 	v1.Get("/products/flash-sale", catalog.ListFlashSales)
 	v1.Get("/public/brand/logo.png", func(c *fiber.Ctx) error {

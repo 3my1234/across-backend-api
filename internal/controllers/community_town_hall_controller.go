@@ -108,8 +108,14 @@ func (s *CommunityController) HallList(c *fiber.Ctx) error {
 		return err
 	}
 	mine := c.Query("mine") == "true"
-	rows, err := s.db.Query(c.Context(), hallPreviewSQL+` WHERE (CASE WHEN $5::boolean THEN r.owner_user_id=$1::uuid ELSE r.state='open' AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp()) END)
- AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $4`, communityActor(c), page.CursorTime, nullID(page.CursorID), page.Limit+1, mine)
+	// Literal, server-selected predicates let PostgreSQL use the partial feed
+	// indexes even for prepared plans; buyer history still includes closed rooms.
+	filter := `r.kind='town_hall' AND r.state='open' AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())`
+	if mine {
+		filter = `r.kind='town_hall' AND r.owner_user_id=$1::uuid`
+	}
+	rows, err := s.db.Query(c.Context(), hallPreviewSQL+` WHERE `+filter+`
+ AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $4`, communityActor(c), page.CursorTime, nullID(page.CursorID), page.Limit+1)
 	if err != nil {
 		return communityError(err)
 	}
