@@ -240,7 +240,9 @@ def install(maximum):
             target = pinned / name
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             target.write_bytes((ROOT / name).read_bytes())
-            target.chmod(0o600)
+            # Public code/config only, behind a root-only parent directory. The
+            # HAProxy bind-mounted config must be readable by its container UID.
+            target.chmod(0o644)
     elif pinned.is_symlink() or any((pinned / name).is_symlink() or (pinned / name).read_bytes() != (ROOT / name).read_bytes() for name in files):
         raise ValueError('Pinned controller differs from reviewed content')
     units = Path('/etc/systemd/system')

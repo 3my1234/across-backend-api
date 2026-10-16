@@ -243,6 +243,8 @@ class Releases(unittest.TestCase):
             timer = (units / (release.UNIT + '.timer')).read_text()
             self.assertIn('OnUnitInactiveSec=15s', timer)
             pinned = next((runtime / 'controllers').iterdir())
+            if os.name != 'nt':
+                self.assertEqual((pinned / 'deploy/scaling/haproxy.cfg').stat().st_mode & 0o777, 0o644)
             (root / names[0]).write_text('later unreviewed change')
             self.assertEqual((pinned / names[0]).read_text(), 'synthetic reviewed content')
             systemctl.assert_any_call('enable', '--now', release.UNIT + '.timer')
