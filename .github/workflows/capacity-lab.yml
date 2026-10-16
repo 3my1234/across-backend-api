@@ -39,7 +39,7 @@ jobs:
           ) > capacity-artifacts/resource-samples.log 2>&1 &
           sampler_pid=$!
           trap 'kill "$sampler_pid" 2>/dev/null || true' EXIT
-          docker compose -f deploy/capacity-lab/compose.yml run --rm runner > capacity-artifacts/results.jsonl
+          docker compose -f deploy/capacity-lab/compose.yml run --rm --no-deps runner > capacity-artifacts/results.jsonl
       - name: Collect lab evidence
         if: always()
         run: |
