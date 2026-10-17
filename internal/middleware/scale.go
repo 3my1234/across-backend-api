@@ -1,9 +1,6 @@
 package middleware
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"net"
 	"net/url"
 	"strconv"
@@ -63,64 +60,6 @@ type cachedResponse struct {
 	ContentType  string `json:"content_type"`
 	Encoding     string `json:"content_encoding"`
 	CacheControl string `json:"cache_control"`
-}
-
-func SharedPublicCache(client *redis.Client, ttl time.Duration) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		if client == nil || ttl <= 0 || c.Method() != fiber.MethodGet ||
-			c.Get(fiber.HeaderAuthorization) != "" || !publicCacheablePath(c.Path()) {
-			return c.Next()
-		}
-		revision, _ := c.Locals("catalog_revision").(string)
-		if publicCacheBypass(c) && revision == "" {
-			return c.Next()
-		}
-		// The primary-database revision already revalidated this response. Share
-		// its current body across refreshing buyers instead of running one full
-		// catalogue query per phone. Refresh nonces only bypass device/edge caches.
-		keyInput := canonicalPublicURL(c.OriginalURL()) + "|" + c.Get(fiber.HeaderAcceptEncoding) + "|" + c.Get("CF-IPCountry") + "|" + c.Get("X-Client-Country-Code") + "|" + revision
-		digest := sha256.Sum256([]byte(keyInput))
-		key := "cache:public:" + hex.EncodeToString(digest[:])
-		{
-			if raw, err := client.Get(c.Context(), key).Bytes(); err == nil {
-				var entry cachedResponse
-				if json.Unmarshal(raw, &entry) == nil {
-					if entry.ContentType != "" {
-						c.Set(fiber.HeaderContentType, entry.ContentType)
-					}
-					if entry.Encoding != "" {
-						c.Set(fiber.HeaderContentEncoding, entry.Encoding)
-					}
-					if entry.CacheControl != "" {
-						c.Set(fiber.HeaderCacheControl, entry.CacheControl)
-					}
-					c.Set("X-Cache", "HIT")
-					return c.Send(entry.Body)
-				}
-			}
-		}
-		if err := c.Next(); err != nil {
-			return err
-		}
-		if c.Response().StatusCode() != fiber.StatusOK {
-			return nil
-		}
-		entry := cachedResponse{
-			Body:         append([]byte(nil), c.Response().Body()...),
-			ContentType:  string(c.Response().Header.ContentType()),
-			Encoding:     string(c.Response().Header.Peek(fiber.HeaderContentEncoding)),
-			CacheControl: string(c.Response().Header.Peek(fiber.HeaderCacheControl)),
-		}
-		if raw, err := json.Marshal(entry); err == nil {
-			cacheTTL := ttl
-			if cacheTTL > 5*time.Second {
-				cacheTTL = 5 * time.Second
-			}
-			_ = client.Set(c.Context(), key, raw, cacheTTL).Err()
-		}
-		c.Set("X-Cache", "MISS")
-		return nil
-	}
 }
 
 func canonicalPublicURL(raw string) string {

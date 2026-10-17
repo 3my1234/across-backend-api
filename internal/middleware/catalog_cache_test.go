@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 )
 
 // Exercise the real Redis middleware without a network/server dependency.
-type memoryRedis struct{ values map[string]string }
+type memoryRedis struct {
+	values map[string]string
+	mu     sync.Mutex
+}
 
 func (m *memoryRedis) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (m *memoryRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
@@ -21,6 +25,8 @@ func (m *memoryRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.
 }
 func (m *memoryRedis) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
 	return func(_ context.Context, cmd redis.Cmder) error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 		key := cmd.Args()[1].(string)
 		switch command := cmd.(type) {
 		case *redis.StringCmd:
