@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -19,10 +20,12 @@ func NewAnalyticsController(db *pgxpool.Pool) *AnalyticsController {
 
 // GetDailySales - Super admin sees count + revenue, Admin I sees count only
 func (a *AnalyticsController) GetDailySales(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
 	role, _ := c.Locals("admin_role").(string)
 	isSuperAdmin := role == "super_admin"
 
-	rows, err := a.db.Query(c.Context(), `
+	rows, err := a.db.Query(ctx, `
 		SELECT sale_date, order_count, total_revenue FROM daily_sales
 		ORDER BY sale_date DESC LIMIT 30
 	`)
@@ -49,12 +52,19 @@ func (a *AnalyticsController) GetDailySales(c *fiber.Ctx) error {
 		sales = append(sales, entry)
 	}
 
+	if err := rows.Err(); err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "analytics unavailable")
+	}
+	rows.Close() // Release before acquiring a connection for totals, including a pool of one.
 	// Totals
 	var totalOrders int
 	var totalRevenue float64
-	a.db.QueryRow(c.Context(), `
+	err = a.db.QueryRow(ctx, `
 		SELECT COALESCE(SUM(order_count), 0), COALESCE(SUM(total_revenue), 0) FROM daily_sales
 	`).Scan(&totalOrders, &totalRevenue)
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "analytics unavailable")
+	}
 
 	result := fiber.Map{
 		"daily":        sales,
