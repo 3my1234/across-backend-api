@@ -166,6 +166,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Patch("/activity/read-all", allAdmins, admin.MarkAllActivityRead)
 	adminRoutes.Patch("/activity/:event_id/read", allAdmins, admin.MarkActivityRead)
 	adminRoutes.Get("/overview", allAdmins, admin.Overview)
+	adminRoutes.Get("/business-overview", catalogOnly, admin.BusinessOverview)
+	adminRoutes.Get("/subscribers", catalogOnly, admin.Subscribers)
 	adminRoutes.Get("/ops/queue-health", allAdmins, ops.QueueHealth)
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
