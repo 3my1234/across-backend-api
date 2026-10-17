@@ -25,9 +25,11 @@ func NewOpsController(db *pgxpool.Pool) *OpsController {
 // QueueHealth exposes bounded aggregate signals for worker autoscaling and
 // incident diagnosis without returning recipients, tokens, or message bodies.
 func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
 	var emailPending, pushPending int64
 	var emailOldestSeconds, pushOldestSeconds float64
-	if err := o.db.QueryRow(c.Context(), `
+	if err := o.db.QueryRow(ctx, `
 		SELECT COUNT(*)::bigint,
 			COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at))), 0)
 		FROM email_outbox
@@ -35,7 +37,7 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
 	`).Scan(&emailPending, &emailOldestSeconds); err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "email queue health unavailable")
 	}
-	if err := o.db.QueryRow(c.Context(), `
+	if err := o.db.QueryRow(ctx, `
 		SELECT COUNT(*)::bigint,
 			COALESCE(EXTRACT(EPOCH FROM (now() - MIN(n.created_at))), 0)
 		FROM notification_push_deliveries d
@@ -46,7 +48,7 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
 	}
 	var settlementDue, settlementLeased, settlementFailed int64
 	var settlementOverdueSeconds float64
-	if err := o.db.QueryRow(c.Context(), `SELECT
+	if err := o.db.QueryRow(ctx, `SELECT
 		COUNT(*) FILTER(WHERE next_check_at<=now() AND (locked_until IS NULL OR locked_until<now())),
 		COUNT(*) FILTER(WHERE locked_until>now()),COUNT(*) FILTER(WHERE failure_count>0),
 		COALESCE(MAX(GREATEST(EXTRACT(EPOCH FROM now()-next_check_at),0)),0)
@@ -56,7 +58,7 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
 	pool := o.db.Stat()
 	var webPending, webFailed int64
 	var webOldest float64
-	if err := o.db.QueryRow(c.Context(), `SELECT count(*) FILTER(WHERE d.status IN ('pending','retry','sending')), count(*) FILTER(WHERE d.status='failed'),
+	if err := o.db.QueryRow(ctx, `SELECT count(*) FILTER(WHERE d.status IN ('pending','retry','sending')), count(*) FILTER(WHERE d.status='failed'),
  COALESCE(EXTRACT(EPOCH FROM now()-MIN(d.created_at) FILTER(WHERE d.status IN ('pending','retry','sending'))),0)
  FROM web_push_deliveries d JOIN web_push_subscriptions s ON s.id=d.subscription_id AND s.disabled_at IS NULL`).Scan(&webPending, &webFailed, &webOldest); err != nil {
 		return fiber.NewError(503, "browser push queue health unavailable")
