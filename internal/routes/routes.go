@@ -215,6 +215,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Post("/support/tickets/:ticket_id/read", catalogOnly, supportController.AdminMarkTicketRead)
 	adminRoutes.Post("/support/tickets/:ticket_id/reply", catalogOnly, supportController.AdminReply)
 	adminRoutes.Post("/support/tickets/:ticket_id/close", catalogOnly, supportController.AdminCloseTicket)
+	adminRoutes.Get("/analytics/overview", catalogOnly, analyticsController.GetOverview)
 	adminRoutes.Get("/analytics/daily-sales", catalogOnly, analyticsController.GetDailySales)
 	adminRoutes.Get("/analytics/complaints", catalogOnly, analyticsController.ListComplaints)
 	adminRoutes.Post("/analytics/complaints", catalogOnly, analyticsController.CreateComplaint)
