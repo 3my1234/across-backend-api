@@ -1488,12 +1488,31 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if err != nil {
 		return fiber.ErrForbidden
 	}
+	checkoutTx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer checkoutTx.Rollback(context.Background())
+	var locked bool
+	if err = checkoutTx.QueryRow(c.Context(), `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "provider-renewal:"+providerID).Scan(&locked); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if !locked {
+		return fiber.NewError(409, "A renewal change or checkout is already in progress. Check its status before retrying.")
+	}
 	var alreadySubscribed bool
-	if err := m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now())`, providerID).Scan(&alreadySubscribed); err != nil {
+	if err := checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now())`, providerID).Scan(&alreadySubscribed); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if alreadySubscribed {
 		return fiber.NewError(fiber.StatusConflict, "this provider already has an active subscription")
+	}
+	var uncertain bool
+	if err := checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND renewal_status='uncertain')`, providerID).Scan(&uncertain); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if uncertain {
+		return fiber.NewError(409, "Confirm cancellation of the old renewal before starting a new subscription.")
 	}
 	var req struct {
 		PlanID         string `json:"plan_id"`
@@ -1528,7 +1547,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	var planID, name string
 	var amount float64
 	var fwPlanID *int64
-	err = m.db.QueryRow(c.Context(), `SELECT id::text,name,amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE id=$1::uuid AND is_active=true`, req.PlanID).Scan(&planID, &name, &amount, &fwPlanID)
+	err = checkoutTx.QueryRow(c.Context(), `SELECT id::text,name,amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE id=$1::uuid AND is_active=true`, req.PlanID).Scan(&planID, &name, &amount, &fwPlanID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "subscription plan not found")
 	}
@@ -1545,7 +1564,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	amount, _ = providerSubscriptionPrice(amount, months)
 	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
-	err = m.db.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
+	err = checkoutTx.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
 		p.business_name,p.contact_email,p.contact_phone,p.verification_status,p.country_code
 		FROM users u
 		JOIN provider_members member ON member.user_id=u.id AND member.provider_id=$2::uuid AND member.is_active=true
@@ -1578,12 +1597,15 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		redirect = "across://providers/subscription"
 	}
 	var subscriptionID string
-	err = m.db.QueryRow(c.Context(), `
-		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months)
-		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6,$7)
+	err = checkoutTx.QueryRow(c.Context(), `
+		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months,gateway_plan_id)
+		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6,$7,$8)
 		RETURNING id::text
-	`, providerID, planID, txRef, email, amount, billingMode, months).Scan(&subscriptionID)
+	`, providerID, planID, txRef, email, amount, billingMode, months, fwPlanID).Scan(&subscriptionID)
 	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if err = checkoutTx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if err := recordSubscriptionPaymentAttempt(c.Context(), m.db, m.paymentProvider.Name(), subscriptionID, userID, countryCode, amount, "NGN", txRef, method); err != nil {

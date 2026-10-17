@@ -38,6 +38,13 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	if _, err = db.Exec(ctx, string(sql)); err != nil {
 		t.Fatal(err)
 	}
+	renewalSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "094_provider_renewal_controls.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(renewalSQL)); err != nil {
+		t.Fatal(err)
+	}
 	user, seller, plan := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err = db.Exec(ctx, `INSERT INTO users(id) VALUES($1);`, user); err != nil {
 		t.Fatal(err)
