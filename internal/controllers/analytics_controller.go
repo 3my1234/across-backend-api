@@ -1,9 +1,11 @@
 package controllers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -157,17 +159,50 @@ func (a *AnalyticsController) CreateComplaint(c *fiber.Ctx) error {
 		OrderID      string  `json:"order_id"`
 		ProductID    string  `json:"product_id"`
 		UserID       string  `json:"user_id"`
+		UserEmail    string  `json:"user_email"`
 		Description  string  `json:"description"`
 		RefundAmount float64 `json:"refund_amount"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.Description == "" {
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Description) == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "description required")
+	}
+	for _, id := range []*string{&req.OrderID, &req.ProductID, &req.UserID} {
+		*id = strings.TrimSpace(*id)
+		if *id != "" {
+			value, err := uuid.Parse(*id)
+			if err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, "Order, product and customer IDs must be valid UUIDs.")
+			}
+			*id = value.String()
+		}
+	}
+	if req.RefundAmount < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "Refund amount cannot be negative.")
+	}
+	if email := strings.TrimSpace(req.UserEmail); email != "" {
+		if len(email) > 254 {
+			return fiber.NewError(fiber.StatusBadRequest, "Customer email is too long")
+		}
+		// Signup normalizes addresses. Match that form or the exact stored legacy
+		// address using the existing email index; never choose between two users.
+		var userID *string
+		var matches int
+		if err := a.db.QueryRow(c.Context(), `SELECT min(id::text),count(*) FROM users WHERE email=$1 OR email=$2`, email, strings.ToLower(email)).Scan(&userID, &matches); err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "Customer lookup unavailable. Please retry.")
+		}
+		if matches != 1 || userID == nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Use the exact email address of one existing customer account.")
+		}
+		if req.UserID != "" && req.UserID != *userID {
+			return fiber.NewError(fiber.StatusBadRequest, "Customer ID and email do not match.")
+		}
+		req.UserID = *userID
 	}
 
 	var complaintID string
 	err := a.db.QueryRow(c.Context(), `
 		INSERT INTO complaints(order_id, product_id, user_id, admin_id, description, refund_amount)
-		VALUES (NULLIF($1, ''), NULLIF($2, ''), NULLIF($3, ''), $4, $5, $6)
+		VALUES (NULLIF($1::text, '')::uuid, NULLIF($2::text, '')::uuid, NULLIF($3::text, '')::uuid, $4, $5, $6)
 		RETURNING id
 	`, req.OrderID, req.ProductID, req.UserID, adminID, req.Description, req.RefundAmount).Scan(&complaintID)
 	if err != nil {
