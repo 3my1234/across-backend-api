@@ -1477,7 +1477,7 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		}
 		var f map[string]any
 		_ = json.Unmarshal(features, &f)
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerPlanTier(code)})
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerPlanTier(code), "period_prices": providerPeriodPrices(amount, cardAvailable)})
 	}
 	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true}, "transfer_months": []int{1, 3, 6, 12}})
 }
@@ -1518,11 +1518,11 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if months != 1 && months != 3 && months != 6 && months != 12 {
 		return fiber.NewError(422, "Choose 1, 3, 6 or 12 months")
 	}
-	if method == "card" && months != 1 {
-		return fiber.NewError(422, "Card subscriptions renew monthly; choose bank transfer to pay for several months")
+	if method == "card" && months != 1 && months != 12 {
+		return fiber.NewError(422, "Choose monthly or yearly for card payments; bank transfer also supports 3 or 6 months")
 	}
 	billingMode := "recurring"
-	if method == "banktransfer" {
+	if method == "banktransfer" || months == 12 {
 		billingMode = "one_time"
 	}
 	var planID, name string
@@ -1532,7 +1532,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "subscription plan not found")
 	}
-	if method == "card" {
+	if method == "card" && months == 1 {
 		if fwPlanID == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "subscription checkout is not configured for this plan")
 		}
@@ -1542,7 +1542,7 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	} else {
 		fwPlanID = nil
 	}
-	amount = math.Round(amount*float64(months)*100) / 100
+	amount, _ = providerSubscriptionPrice(amount, months)
 	var email, fullName, phone, providerName, providerEmail, providerPhone, verificationStatus, countryCode string
 	var emailVerified bool
 	err = m.db.QueryRow(c.Context(), `SELECT u.email,u.full_name,COALESCE(u.phone,''),u.email_verified,
@@ -2087,7 +2087,8 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 		if err := rows.Scan(&id, &code, &name, &description, &amount, &interval, &listingLimit, &flutterwavePlanID, &active, &createdAt, &updatedAt); err != nil {
 			return fiber.ErrInternalServerError
 		}
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": description, "amount_ngn": amount, "billing_interval": interval, "listing_limit": listingLimit, "flutterwave_plan_id": flutterwavePlanID, "is_active": active, "created_at": createdAt, "updated_at": updatedAt})
+		yearly, savings := providerSubscriptionPrice(amount, 12)
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": description, "amount_ngn": amount, "yearly_amount_ngn": yearly, "yearly_savings_ngn": savings, "yearly_discount_percent": providerYearlyDiscountPercent, "billing_interval": interval, "listing_limit": listingLimit, "flutterwave_plan_id": flutterwavePlanID, "is_active": active, "created_at": createdAt, "updated_at": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
 		return fiber.ErrInternalServerError

@@ -23,7 +23,7 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,email text DEFAULT 'seller@example.test',full_name text DEFAULT 'Seller',phone text DEFAULT '07060507214',email_verified boolean DEFAULT true,is_active boolean DEFAULT true);
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,owner_user_id uuid,business_name text DEFAULT 'Seller',contact_email text DEFAULT 'seller@example.test',contact_phone text DEFAULT '07060507214',verification_status text DEFAULT 'approved',country_code text DEFAULT 'NG',is_active boolean DEFAULT true);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text DEFAULT 'owner',is_active boolean DEFAULT true);
- CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY,name text DEFAULT 'Basic',amount_ngn numeric DEFAULT 500,flutterwave_plan_id bigint DEFAULT 123,is_active boolean DEFAULT true);
+ CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY,name text DEFAULT 'Basic',code text DEFAULT 'provider-monthly',description text DEFAULT '',listing_limit int DEFAULT 5,features jsonb DEFAULT '{}',amount_ngn numeric DEFAULT 500,flutterwave_plan_id bigint DEFAULT 123,is_active boolean DEFAULT true);
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),provider_id uuid,plan_id uuid,status text,tx_ref text,customer_email text,expected_amount_ngn numeric,billing_mode text DEFAULT 'recurring',current_period_end timestamptz,starts_at timestamptz,last_payment_at timestamptz,flutterwave_transaction_id text,updated_at timestamptz DEFAULT now(),version int DEFAULT 1);
  CREATE TABLE provider_subscription_payments(subscription_id uuid,flutterwave_transaction_id text UNIQUE,tx_ref text,amount numeric,currency_code text);
  CREATE TABLE provider_marketplace_events(provider_id uuid,event_type text,metadata jsonb);
@@ -69,6 +69,31 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", user); return c.Next() })
 	app.Post("/checkout", controller.SubscriptionCheckout)
+	app.Get("/plans", controller.ListPlans)
+	plansRes, err := app.Test(httptest.NewRequest("GET", "/plans", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogue struct {
+		Items []struct {
+			PeriodPrices []struct {
+				Months  int     `json:"duration_months"`
+				Amount  float64 `json:"amount_ngn"`
+				Savings float64 `json:"savings_ngn"`
+				Card    bool    `json:"card_available"`
+			} `json:"period_prices"`
+		} `json:"items"`
+	}
+	err = json.NewDecoder(plansRes.Body).Decode(&catalogue)
+	plansRes.Body.Close()
+	if err != nil || plansRes.StatusCode != 200 || len(catalogue.Items) != 1 || len(catalogue.Items[0].PeriodPrices) != 4 {
+		t.Fatal("missing period quotes", catalogue, err)
+	}
+	annualQuote := catalogue.Items[0].PeriodPrices[3]
+	if annualQuote.Months != 12 || annualQuote.Amount != 5400 || annualQuote.Savings != 600 || !annualQuote.Card {
+		t.Fatal(annualQuote)
+	}
+
 	checkout := func(method string, periods ...int) (int, map[string]any) {
 		t.Helper()
 		months := 1
@@ -109,7 +134,7 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 		if status != 202 {
 			t.Fatal(status, paid)
 		}
-		amount := float64(500 * months)
+		amount, _ := providerSubscriptionPrice(500, months)
 		ref := paid["tx_ref"].(string)
 		if paid["amount_ngn"] != amount || gatewayBodies[len(gatewayBodies)-1]["amount"] != amount {
 			t.Fatal("incorrect prepaid total", paid)
@@ -148,6 +173,47 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = db.Exec(ctx, "UPDATE provider_subscription_plans SET amount_ngn=500 WHERE id=$1", plan)
+	}
+
+	// Yearly cards work even when a monthly recurring plan is not linked.
+	if _, err = db.Exec(ctx, `UPDATE provider_subscription_plans SET flutterwave_plan_id=NULL WHERE id=$1`, plan); err != nil {
+		t.Fatal(err)
+	}
+	status, annual := checkout("card", 12)
+	if status != 202 || annual["amount_ngn"] != float64(5400) || annual["billing_mode"] != "one_time" {
+		t.Fatal(status, annual)
+	}
+	last := gatewayBodies[len(gatewayBodies)-1]
+	if last["payment_plan"] != nil || last["payment_options"] != "card" || planChecks != 1 {
+		t.Fatal("annual card unexpectedly recurring", last, planChecks)
+	}
+	annualRef := annual["tx_ref"].(string)
+	if err = settleProviderSubscription(ctx, db, annualRef, "annual-card", 5400, "NGN"); err != nil {
+		t.Fatal(err)
+	}
+	var annualDays float64
+	if err = db.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM current_period_end-starts_at)/86400 FROM provider_subscriptions WHERE tx_ref=$1`, annualRef).Scan(&annualDays); err != nil || annualDays < 365 || annualDays > 366 {
+		t.Fatal("annual card period", annualDays, err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET status='expired',current_period_end=now()-interval '1 day' WHERE tx_ref=$1`, annualRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscription_plans SET flutterwave_plan_id=123 WHERE id=$1`, plan); err != nil {
+		t.Fatal(err)
+	}
+	// Older pending purchases retain their saved total after introducing discounts.
+	oldRef := "old-yearly-pending"
+	if _, err = db.Exec(ctx, `INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months) VALUES($1,$2,'pending',$3,'seller@example.test',6000,'one_time',12)`, seller, plan, oldRef); err != nil {
+		t.Fatal(err)
+	}
+	if err = settleProviderSubscription(ctx, db, oldRef, "old-yearly", 5400, "NGN"); err == nil {
+		t.Fatal("old purchase repriced")
+	}
+	if err = settleProviderSubscription(ctx, db, oldRef, "old-yearly", 6000, "NGN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET status='expired',current_period_end=now()-interval '1 day' WHERE tx_ref=$1`, oldRef); err != nil {
+		t.Fatal(err)
 	}
 	status, transfer := checkout("banktransfer")
 	if status != 202 || transfer["billing_mode"] != "one_time" {
