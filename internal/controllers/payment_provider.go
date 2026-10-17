@@ -100,6 +100,7 @@ type paymentProvider interface {
 	GetPaymentPlan(context.Context, int64) (paymentPlanDetails, error)
 	CreateMonthlyPaymentPlan(context.Context, string, int64) (paymentPlanDetails, error)
 	ListActiveSubscriptions(context.Context, int64) ([]gatewaySubscription, error)
+	ListTransactionSubscriptions(context.Context, string, string) ([]gatewaySubscription, error)
 	CancelSubscription(context.Context, int64) error
 	VerifyPayment(context.Context, string, string) (verifiedProviderPayment, error)
 	ListBanks(context.Context, string) ([]flutterwaveBank, error)
@@ -174,9 +175,22 @@ func (p *flutterwaveProvider) CreateMonthlyPaymentPlan(ctx context.Context, name
 }
 
 func (p *flutterwaveProvider) ListActiveSubscriptions(ctx context.Context, planID int64) ([]gatewaySubscription, error) {
+	return p.listSubscriptions(ctx, planID, "", "")
+}
+
+// Match a verified purchase, rather than trusting a caller-supplied gateway ID.
+func (p *flutterwaveProvider) ListTransactionSubscriptions(ctx context.Context, transactionID, email string) ([]gatewaySubscription, error) {
+	return p.listSubscriptions(ctx, 0, transactionID, email)
+}
+
+func (p *flutterwaveProvider) listSubscriptions(ctx context.Context, planID int64, transactionID, email string) ([]gatewaySubscription, error) {
 	items := []gatewaySubscription{}
 	for page := 1; page <= 20; page++ {
 		endpoint := fmt.Sprintf("https://api.flutterwave.com/v3/subscriptions?plan=%d&status=active&page=%d", planID, page)
+		if transactionID != "" {
+			query := url.Values{"transaction_id": {transactionID}, "email": {email}, "status": {"active"}, "page": {strconv.Itoa(page)}}
+			endpoint = "https://api.flutterwave.com/v3/subscriptions?" + query.Encode()
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return nil, err
@@ -202,7 +216,7 @@ func (p *flutterwaveProvider) ListActiveSubscriptions(ctx context.Context, planI
 			return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave subscriptions could not be checked"}
 		}
 		for _, item := range result.Data {
-			if item.PlanID != planID || !strings.EqualFold(item.Status, "active") || item.ID <= 0 {
+			if (planID > 0 && item.PlanID != planID) || (email != "" && !strings.EqualFold(item.Customer.Email, email)) || !strings.EqualFold(item.Status, "active") || item.ID <= 0 {
 				return nil, &paymentProviderError{StatusCode: http.StatusBadGateway, Message: "Flutterwave returned inconsistent subscription data"}
 			}
 			items = append(items, item)
