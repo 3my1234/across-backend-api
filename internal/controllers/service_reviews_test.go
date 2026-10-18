@@ -35,11 +35,13 @@ func TestServiceReviewsOwnershipDiscoveryAndConcurrentTotals(t *testing.T) {
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active boolean DEFAULT true);
  CREATE TABLE provider_requests(id uuid PRIMARY KEY,listing_id uuid,provider_id uuid,user_id uuid,status text);
- CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
+ CREATE TABLE provider_subscriptions(id uuid,provider_id uuid,plan_id uuid,status text,starts_at timestamptz,current_period_end timestamptz);
+ CREATE TABLE provider_subscription_plans(id uuid,badge_tier text,listing_limit int);
+ CREATE TABLE provider_subscription_payments(subscription_id uuid,currency_code text,amount numeric);
  CREATE TABLE countries_config(country_code text,currency_code text,is_active boolean,active_payment_gateways text[]);
  CREATE TABLE xp_transactions(user_id uuid,amount int,reason text,reference_id text UNIQUE);
  CREATE TABLE notifications(user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text UNIQUE);
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,listing_type text DEFAULT 'artisan',title text DEFAULT 'Plumber',slug text DEFAULT '',description text DEFAULT '',category text DEFAULT '',address_line text DEFAULT '',city text DEFAULT 'Abuja',state text DEFAULT 'FCT',country_code text DEFAULT 'NG',price numeric DEFAULT 100,currency_code text DEFAULT 'NGN',pricing_unit text DEFAULT 'job',capacity int DEFAULT 1,media_urls text[] DEFAULT '{}',attributes jsonb DEFAULT '{}',status text DEFAULT 'approved',moderation_notes text,published_at timestamptz,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),latitude numeric DEFAULT 9,longitude numeric DEFAULT 7,service_radius_km numeric,is_mobile_service boolean DEFAULT false,is_available_now boolean DEFAULT true);
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,listing_type text DEFAULT 'artisan',title text DEFAULT 'Plumber',slug text DEFAULT '',description text DEFAULT '',category text DEFAULT '',address_line text DEFAULT '',city text DEFAULT 'Abuja',state text DEFAULT 'FCT',country_code text DEFAULT 'NG',price numeric DEFAULT 100,currency_code text DEFAULT 'NGN',pricing_unit text DEFAULT 'job',capacity int DEFAULT 1,media_urls text[] DEFAULT '{}',attributes jsonb DEFAULT '{}',status text DEFAULT 'approved',moderation_notes text,published_at timestamptz,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),latitude numeric DEFAULT 9,longitude numeric DEFAULT 7,service_radius_km numeric,is_mobile_service boolean DEFAULT false,is_available_now boolean DEFAULT true,plan_slot integer DEFAULT 1);
  INSERT INTO countries_config VALUES('NG','NGN',true,ARRAY['flutterwave']);`)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +70,7 @@ func TestServiceReviewsOwnershipDiscoveryAndConcurrentTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := &ProviderMarketplaceController{db: db}
-	installPublicIdentityFixture(t,db)
+	installPublicIdentityFixture(t, db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-Test-User")); return c.Next() })
 	app.Put("/listings/:listing_id/review", controller.UpsertListingReview)

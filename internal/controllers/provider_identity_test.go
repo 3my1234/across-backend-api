@@ -33,8 +33,8 @@ func TestProviderIdentityEligibilityAndLifecycle(t *testing.T) {
  CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),code text UNIQUE,name text,description text,amount_ngn numeric,listing_limit int,features jsonb);
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY,provider_id uuid,plan_id uuid,status text,starts_at timestamptz,current_period_end timestamptz,created_at timestamptz DEFAULT now());
  CREATE TABLE provider_subscription_payments(subscription_id uuid,amount numeric,currency_code text);
- CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,payment_mode text DEFAULT 'flutterwave',catalog_version int DEFAULT 1,updated_at timestamptz DEFAULT now(),moderation_status text,is_active boolean,published_at timestamptz);
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,status text,published_at timestamptz);`)
+ CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,payment_mode text DEFAULT 'flutterwave',catalog_version int DEFAULT 1,updated_at timestamptz DEFAULT now(),moderation_status text,is_active boolean,published_at timestamptz,plan_slot integer DEFAULT 1);
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,status text,published_at timestamptz,plan_slot integer DEFAULT 1);`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,9 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci-provider-tests@127.0.0.1:5432/provider_tests?sslmode=disable
           SETTLEMENT_TEST_LOCAL: 'true'
-        run: go test ./internal/controllers -v -count=1 -run 'Test(ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
+        run: |
+          command -v ffprobe || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          go test ./internal/controllers -v -count=1 -run 'Test(ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderPostRules|PublicPostMedia|PostVideo|NewPassword|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
   docker-build:
     runs-on: ubuntu-latest
     strategy:

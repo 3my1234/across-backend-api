@@ -16,7 +16,7 @@ import (
 func TestListingApprovedBaselineAndStaleModeration(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,description text,price numeric,attributes jsonb,status text,moderation_notes text,moderated_by uuid,moderated_at timestamptz,published_at timestamptz,updated_at timestamptz);
+	_, err := db.Exec(ctx, `CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,description text,price numeric,attributes jsonb,status text,moderation_notes text,moderated_by uuid,moderated_at timestamptz,published_at timestamptz,updated_at timestamptz,plan_slot integer DEFAULT 1);
  CREATE TABLE provider_marketplace_events(provider_id uuid,listing_id uuid,event_type text,metadata jsonb);`)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestListingApprovedBaselineAndStaleModeration(t *testing.T) {
 		t.Fatal("cannot reconstruct old pending content", err, string(legacyBaseline))
 	}
 	controller := &ProviderMarketplaceController{db: db}
-	installPublicIdentityFixture(t,db)
+	installPublicIdentityFixture(t, db)
 	app := fiber.New()
 	app.Patch("/listing/:listing_id", func(c *fiber.Ctx) error { c.Locals("admin_id", admin); return controller.AdminModerateListing(c) })
 	for _, tc := range []struct {

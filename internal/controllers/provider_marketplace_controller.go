@@ -251,6 +251,9 @@ func (m *ProviderMarketplaceController) UpdateMyProvider(c *fiber.Ctx) error {
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_organizations SET business_name=$2,description=$3,contact_email=$4,contact_phone=$5,website_url=$6,address_line=$7,city=$8,state=$9,country_code=COALESCE(NULLIF($10,''),'NG'),logo_url=$11,updated_at=now() WHERE id=$1::uuid`, providerID, strings.TrimSpace(req.BusinessName), strings.TrimSpace(req.Description), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), strings.TrimSpace(req.LogoURL))
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -275,10 +278,20 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 	}
 	mime := strings.ToLower(strings.TrimSpace(req.MimeType))
 	purpose := strings.ToLower(strings.TrimSpace(req.Purpose))
-	if purpose != "listing" && purpose != "verification" && purpose != "logo" && purpose != "banner" {
+	if purpose != "listing" && purpose != "verification" && purpose != "logo" && purpose != "banner" && purpose != "post_video" {
 		return fiber.NewError(fiber.StatusBadRequest, "purpose must be listing, verification, logo, or banner")
 	}
 	allowed := supportedPortableImageMime(mime)
+	if purpose == "post_video" {
+		policy, e := m.postPolicy(c.Context(), providerID)
+		if e != nil {
+			return fiber.NewError(503, "Could not check your plan. Retry.")
+		}
+		if policy.Videos == 0 {
+			return fiber.NewError(403, "Upgrade to Gold or Diamond to upload videos.")
+		}
+		allowed = mime == "video/mp4"
+	}
 	if purpose == "verification" && mime == "application/pdf" {
 		allowed = true
 	}
@@ -289,6 +302,12 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 		return fiber.NewError(fiber.StatusServiceUnavailable, "media storage is not configured")
 	}
 	key := storage.SafeKey("user-uploads/providers/"+providerID+"/"+purpose, req.Filename)
+	if purpose == "verification" {
+		key = storage.SafeKey("private/providers/"+providerID+"/verification", req.Filename)
+	}
+	if purpose == "post_video" {
+		key = storage.SafeKey("private/providers/"+providerID+"/video-pending", req.Filename)
+	}
 	uploadURL, err := m.s3.PresignPut(key, mime, 15*time.Minute)
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -309,7 +328,13 @@ func (m *ProviderMarketplaceController) AddVerificationDocument(c *fiber.Ctx) er
 	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.DocumentType) == "" || !validProviderAssetURL(req.DocumentURL) {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "document_type and an approved document_url are required")
 	}
+	req.DocumentType = strings.ToLower(strings.TrimSpace(req.DocumentType))
 	var id string
+	if driverDocument(req.DocumentType) {
+		if req.DocumentURL, err = m.freezeDriverDocument(c, providerID, req.DocumentURL); err != nil {
+			return err
+		}
+	}
 	err = m.db.QueryRow(c.Context(), `INSERT INTO provider_verification_documents(provider_id,document_type,document_url) VALUES($1::uuid,$2,$3) RETURNING id::text`, providerID, strings.TrimSpace(req.DocumentType), strings.TrimSpace(req.DocumentURL)).Scan(&id)
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -340,6 +365,16 @@ func (m *ProviderMarketplaceController) listVerificationDocuments(c *fiber.Ctx, 
 		if err := rows.Scan(&id, &kind, &url, &status, &notes, &created, &reviewed); err != nil {
 			return fiber.ErrInternalServerError
 		}
+		if m.s3 != nil && m.s3.Configured() {
+			key := m.s3.KeyFromURL(url)
+			if strings.Contains(key, "/verification/") {
+				if signed, e := m.s3.ObjectGetURL(key, 5*time.Minute); e == nil {
+					url = signed
+				} else {
+					url = ""
+				}
+			}
+		}
 		items = append(items, fiber.Map{"id": id, "document_type": kind, "document_url": url, "status": status, "review_notes": notes, "created_at": created, "reviewed_at": reviewed})
 	}
 	return c.JSON(fiber.Map{"items": items})
@@ -364,6 +399,9 @@ func (m *ProviderMarketplaceController) AdminReviewVerificationDocument(c *fiber
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_verification_documents SET status=$3,review_notes=$4,reviewed_at=now(),reviewed_by=$5::uuid WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("document_id"), c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -390,6 +428,7 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		State             string `json:"state"`
 		CountryCode       string `json:"country_code"`
 		LogoURL           string `json:"logo_url"`
+		IsDriver          bool   `json:"is_driver"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid provider profile")
@@ -432,6 +471,11 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusUnauthorized, "your account session is no longer valid; sign in again")
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create provider profile")
+	}
+	if req.IsDriver {
+		if _, err = tx.Exec(c.Context(), `UPDATE provider_organizations SET is_driver=true WHERE id=$1::uuid`, providerID); err != nil {
+			return fiber.NewError(500, "Could not save driver verification requirements.")
+		}
 	}
 	if _, err = tx.Exec(c.Context(), `INSERT INTO provider_members(provider_id,user_id,role) VALUES($1::uuid,$2::uuid,'owner')`, providerID, userID); err != nil {
 		log.Printf("provider onboarding membership insert failed user_id=%s provider_id=%s: %v", userID, providerID, err)
@@ -568,11 +612,11 @@ func (m *ProviderMarketplaceController) legacyConfigurePayoutAccount(c *fiber.Ct
 func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(string)
 	var id, business, providerType, providerTypeOther, slug, description, email, phone, website, logo, address, city, state, country, verification, notes string
-	var active bool
+	var active, isDriver bool
 	var created time.Time
 	var subStatus, subBillingMode string
 	var periodEnd *time.Time
-	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end,COALESCE(s.billing_mode,'recurring') FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end,COALESCE(to_jsonb(provider_subscriptions)->>'billing_mode','recurring') AS billing_mode FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &providerType, &providerTypeOther, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd, &subBillingMode)
+	err := m.db.QueryRow(c.Context(), `SELECT p.id::text,p.business_name,p.provider_type,p.provider_type_other,p.slug,p.description,p.contact_email,p.contact_phone,p.website_url,p.logo_url,p.address_line,p.city,p.state,p.country_code,p.verification_status,p.verification_notes,p.is_active,p.created_at,COALESCE(s.status,'none'),s.current_period_end,COALESCE(s.billing_mode,'recurring'),COALESCE((to_jsonb(p)->>'is_driver')::boolean,false) FROM provider_organizations p JOIN provider_members pm ON pm.provider_id=p.id AND pm.user_id=$1::uuid AND pm.is_active=true LEFT JOIN LATERAL (SELECT status,current_period_end,COALESCE(to_jsonb(provider_subscriptions)->>'billing_mode','recurring') AS billing_mode FROM provider_subscriptions WHERE provider_id=p.id ORDER BY (status='active' AND current_period_end>now()) DESC,current_period_end DESC NULLS LAST,created_at DESC LIMIT 1) s ON true`, userID).Scan(&id, &business, &providerType, &providerTypeOther, &slug, &description, &email, &phone, &website, &logo, &address, &city, &state, &country, &verification, &notes, &active, &created, &subStatus, &periodEnd, &subBillingMode, &isDriver)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusNotFound, "provider profile not found")
 	}
@@ -591,7 +635,7 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 		}
 	}
 	required := m.subscriptionsRequired()
-	return providerIdentityJSON(c, m.db, fiber.Map{"id": id, "business_name": business, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "billing_mode": subBillingMode, "current_period_end": periodEnd, "required": required, "launch_access_active": false, "free_plan": true}, "payout_account": payout}, m.s3)
+	return providerIdentityJSON(c, m.db, fiber.Map{"id": id, "business_name": business, "is_driver": isDriver, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "billing_mode": subBillingMode, "current_period_end": periodEnd, "required": required, "launch_access_active": false, "free_plan": true}, "payout_account": payout}, m.s3)
 }
 
 type listingPayload struct {
@@ -770,6 +814,9 @@ func (m *ProviderMarketplaceController) UpdateListing(c *fiber.Ctx) error {
 	attrs, _ := json.Marshal(req.Attributes)
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET listing_type=$3,title=$4,description=$5,category=$6,contact_email=$7,contact_phone=$8,address_line=$9,city=$10,state=$11,country_code=COALESCE(NULLIF($12,''),'NG'),price=$13,currency_code=COALESCE(NULLIF($14,''),'NGN'),pricing_unit=$15,capacity=$16,media_urls=$17,attributes=$18::jsonb,latitude=$19,longitude=$20,service_radius_km=$21,is_mobile_service=$22,is_available_now=$23,status=CASE WHEN status IN ('pending','approved') THEN 'pending' ELSE status END,moderation_notes='',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status<>'archived'`, c.Params("listing_id"), providerID, strings.ToLower(strings.TrimSpace(req.ListingType)), strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), strings.TrimSpace(req.Category), strings.TrimSpace(req.ContactEmail), strings.TrimSpace(req.ContactPhone), strings.TrimSpace(req.AddressLine), strings.TrimSpace(req.City), strings.TrimSpace(req.State), strings.ToUpper(strings.TrimSpace(req.CountryCode)), req.Price, strings.ToUpper(strings.TrimSpace(req.CurrencyCode)), strings.TrimSpace(req.PricingUnit), req.Capacity, req.MediaURLs, attrs, req.Latitude, req.Longitude, req.ServiceRadiusKM, req.IsMobileService, req.IsAvailableNow)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -786,6 +833,9 @@ func (m *ProviderMarketplaceController) ArchiveListing(c *fiber.Ctx) error {
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET status='archived',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status<>'archived'`, c.Params("listing_id"), providerID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -810,6 +860,9 @@ func (m *ProviderMarketplaceController) SubmitListing(c *fiber.Ctx) error {
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_listings SET status='pending',updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND status IN ('draft','rejected') AND (listing_type NOT IN ('hotel','short_let','car_rental','car_wash','mechanic','plumber','carpenter','fuel_station','food_vendor','artisan') OR (latitude IS NOT NULL AND longitude IS NOT NULL))`, c.Params("listing_id"), providerID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -832,6 +885,7 @@ func (m *ProviderMarketplaceController) ListMyListings(c *fiber.Ctx) error {
 }
 
 func (m *ProviderMarketplaceController) ListPublicListings(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	return m.listListings(c, "public", "")
 }
 
@@ -839,6 +893,7 @@ func (m *ProviderMarketplaceController) ListPublicListings(c *fiber.Ctx) error {
 // Haversine calculation. This keeps the expensive distance calculation bounded
 // as the marketplace grows and returns no unbounded totals.
 func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	latitude, err := strconv.ParseFloat(c.Query("latitude"), 64)
 	if err != nil || latitude < -90 || latitude > 90 {
 		return fiber.NewError(fiber.StatusBadRequest, "valid latitude is required")
@@ -875,7 +930,7 @@ func (m *ProviderMarketplaceController) ListNearbyListings(c *fiber.Ctx) error {
 			l.review_count,l.review_rating_sum,l.attributes,
 			6371 * 2 * asin(sqrt(power(sin(radians((l.latitude::float8-$1::float8)/2)),2)+cos(radians($1::float8))*cos(radians(l.latitude::float8))*power(sin(radians((l.longitude::float8-$2::float8)/2)),2))) AS distance_km
 		FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id
-		WHERE l.status='approved' AND p.verification_status='approved' AND p.is_active=true
+		WHERE l.plan_slot<=COALESCE((SELECT listing_limit FROM provider_public_identity WHERE provider_id=l.provider_id),1) AND l.status='approved' AND p.verification_status='approved' AND p.is_active=true
 		  AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways))
 		  AND ($12::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()))
 		  AND l.latitude BETWEEN $3 AND $4 AND l.longitude BETWEEN $5 AND $6
@@ -941,13 +996,14 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	// latest-plan lookup. Deduplicate eligible providers once; keep its payment,
 	// currency and subscription-window rules aligned with provider_public_identity.
 	// Whole-row JSON and edit revisions are needed only for admin moderation.
-	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.paid_active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum,CASE WHEN $3='admin' THEN to_jsonb(l)->'approved_snapshot' ELSE NULL END,CASE WHEN $3='admin' THEN to_jsonb(l) ELSE NULL END,CASE WHEN $3='admin' THEN COALESCE((to_jsonb(l)->>'content_revision')::bigint,0) ELSE 0::bigint END,CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN (
- SELECT DISTINCT sub.provider_id,true AS paid_active
+	rows, err := m.db.Query(c.Context(), `SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type,l.title,l.slug,l.description,l.category,l.address_line,l.city,l.state,l.country_code,l.price,l.currency_code,l.pricing_unit,l.capacity,l.media_urls,l.attributes,l.status,l.moderation_notes,l.published_at,l.created_at,($9::boolean OR COALESCE(s.paid_active,false)),l.latitude::float8,l.longitude::float8,l.service_radius_km::float8,l.is_mobile_service,l.is_available_now,l.review_count,l.review_rating_sum,CASE WHEN $3='admin' THEN to_jsonb(l)->'approved_snapshot' ELSE NULL END,CASE WHEN $3='admin' THEN to_jsonb(l) ELSE NULL END,CASE WHEN $3='admin' THEN COALESCE((to_jsonb(l)->>'content_revision')::bigint,0) ELSE 0::bigint END,CASE WHEN $3='public' THEN COALESCE(s.visibility_rank,0) ELSE 0 END FROM provider_listings l JOIN provider_organizations p ON p.id=l.provider_id LEFT JOIN (
+ SELECT sub.provider_id,true AS paid_active,MAX(plan.listing_limit) AS post_limit,MAX(CASE plan.badge_tier WHEN 'bronze' THEN 1 WHEN 'silver' THEN 2 WHEN 'gold' THEN 3 WHEN 'diamond' THEN 3 ELSE 1 END) AS visibility_rank
  FROM provider_subscriptions sub JOIN provider_subscription_plans plan ON plan.id=sub.plan_id
  WHERE sub.status='active' AND sub.current_period_end>now()
  AND (sub.starts_at IS NULL OR sub.starts_at<=now())
  AND EXISTS(SELECT 1 FROM provider_subscription_payments pay WHERE pay.subscription_id=sub.id AND pay.currency_code='NGN' AND pay.amount>0)
-) s ON s.provider_id=p.id WHERE ($12='' OR lower(trim(l.category))=lower($12)) AND ($13='' OR l.id<>NULLIF($13,'')::uuid) AND ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.category||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%' OR ($2='driver' AND (lower(l.category) LIKE '%driver%' OR lower(l.category) LIKE '%chauffeur%' OR lower(l.category) LIKE '%taxi%'))) AND ($3<>'public' OR (l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.paid_active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END,l.created_at,l.id)<($11::boolean,$6,$7::uuid)) ORDER BY CASE WHEN $3='public' THEN COALESCE(s.paid_active,false) ELSE false END DESC,l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating, promotedCursorPriority(c.Query("cursor")), category, exclude)
+ GROUP BY sub.provider_id
+) s ON s.provider_id=p.id WHERE ($12='' OR lower(trim(l.category))=lower($12)) AND ($13='' OR l.id<>NULLIF($13,'')::uuid) AND ($1='' OR l.listing_type=$1) AND ($2='' OR (l.title||' '||l.description||' '||l.category||' '||l.city||' '||l.state) ILIKE '%%'||$2||'%%' OR ($2='driver' AND (lower(l.category) LIKE '%driver%' OR lower(l.category) LIKE '%chauffeur%' OR lower(l.category) LIKE '%taxi%'))) AND ($3<>'public' OR (l.plan_slot<=COALESCE(s.post_limit,1) AND l.status='approved' AND p.verification_status='approved' AND p.is_active=true AND ($9::boolean OR COALESCE(s.paid_active,false)) AND EXISTS(SELECT 1 FROM countries_config market WHERE market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)))) AND ($3<>'provider' OR l.provider_id=NULLIF($4,'')::uuid) AND ($5='' OR l.status=$5) AND ($10::float8=0 OR (l.review_count>0 AND l.review_rating_sum::float8/l.review_count >= $10)) AND ($6::timestamptz IS NULL OR (CASE WHEN $3='public' THEN COALESCE(s.visibility_rank,0) ELSE 0 END,l.created_at,l.id)<($11::int,$6,$7::uuid)) ORDER BY CASE WHEN $3='public' THEN COALESCE(s.visibility_rank,0) ELSE 0 END DESC,l.created_at DESC,l.id DESC LIMIT $8`, listingType, search, scope, providerID, status, cursorTime, cursorID, limit+1, !m.subscriptionsRequired(), minRating, promotedCursorRank(c.Query("cursor")), category, exclude)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "listings unavailable")
 	}
@@ -956,7 +1012,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 	next := ""
 	var lastCreated time.Time
 	var lastID string
-	var lastPaid bool
+	var lastPaid int
 	for rows.Next() {
 		var id, pid, business, lt, title, slug, desc, category, address, city, state, country, currency, unit, lstatus string
 		var moderationNotes *string
@@ -968,7 +1024,8 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 		var attrs []byte
 		var published *time.Time
 		var created time.Time
-		var subscribed, paidPriority bool
+		var subscribed bool
+		var paidPriority int
 		var latitude, longitude, radius *float64
 		var mobile, available bool
 		var reviewCount, reviewRatingSum int
@@ -976,7 +1033,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
-			next = encodePromotedCursor(lastCreated, lastID, lastPaid)
+			next = encodeRankedCursor(lastCreated, lastID, lastPaid)
 			break
 		}
 		var attributes map[string]any
@@ -1003,6 +1060,7 @@ func (m *ProviderMarketplaceController) listListings(c *fiber.Ctx, scope, provid
 }
 
 func (m *ProviderMarketplaceController) GetPublicListing(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	var id, pid, business, lt, title, slug, desc, category, address, city, state, country, currency, unit string
 	var price *float64
 	var capacity int
@@ -1341,6 +1399,9 @@ func (m *ProviderMarketplaceController) MarkProviderNotificationRead(c *fiber.Ct
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_marketplace_events SET read_at=COALESCE(read_at,now()) WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("notification_id"), providerID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -1477,9 +1538,9 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		}
 		var f map[string]any
 		_ = json.Unmarshal(features, &f)
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerPlanTier(code), "period_prices": providerPeriodPrices(amount, cardAvailable)})
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerPlanTier(code), "post_policy": postPolicy(providerPlanTier(code)), "period_prices": providerPeriodPrices(amount, cardAvailable)})
 	}
-	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true}, "transfer_months": []int{1, 3, 6, 12}})
+	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true, "post_policy": postPolicy("")}, "transfer_months": []int{1, 3, 6, 12}})
 }
 
 func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error {
@@ -1778,6 +1839,9 @@ func (m *ProviderMarketplaceController) AdminVerifyProvider(c *fiber.Ctx) error 
 	}
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_organizations SET verification_status=$2,verification_notes=$3,verified_at=CASE WHEN $2='approved' THEN now() ELSE verified_at END,verified_by=$4::uuid,updated_at=now() WHERE id=$1::uuid AND ($2<>'approved' OR EXISTS(SELECT 1 FROM provider_verification_documents d WHERE d.provider_id=provider_organizations.id AND d.status='approved'))`, c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -1960,6 +2024,9 @@ func (m *ProviderMarketplaceController) AdminChangePlanPrice(c *fiber.Ctx) error
 	tag, err := tx.Exec(c.Context(), `UPDATE provider_subscription_plans SET amount_ngn=$2,flutterwave_plan_id=$3,updated_at=now()
 		WHERE id=$1::uuid AND is_active=TRUE AND amount_ngn=$4 AND flutterwave_plan_id IS NOT DISTINCT FROM $5`, c.Params("plan_id"), *req.AmountNGN, newGatewayID, oldAmount, oldGatewayID)
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
@@ -2144,6 +2211,9 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 func (m *ProviderMarketplaceController) AdminDeactivatePlan(c *fiber.Ctx) error {
 	tag, err := m.db.Exec(c.Context(), `UPDATE provider_subscription_plans SET is_active=false,updated_at=now() WHERE id=$1::uuid AND is_active=true`, c.Params("plan_id"))
 	if err != nil {
+		if policyErr := providerCapacityError(err); policyErr != nil {
+			return policyErr
+		}
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {

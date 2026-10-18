@@ -22,8 +22,8 @@ func TestAdminBusinessSubscribers(t *testing.T) {
  INSERT INTO provider_subscription_plans VALUES('11111111-1111-4111-8111-111111111111','Bronze');
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY,provider_id uuid,plan_id uuid DEFAULT '11111111-1111-4111-8111-111111111111',status text DEFAULT 'active',starts_at timestamptz,current_period_end timestamptz,created_at timestamptz DEFAULT now(),billing_mode text DEFAULT 'prepaid',duration_months int DEFAULT 1,last_payment_at timestamptz);
  CREATE TABLE provider_subscription_payments(subscription_id uuid,currency_code text,amount numeric);
- CREATE TABLE provider_listings(status text);INSERT INTO provider_listings VALUES('pending'),('approved');
- CREATE TABLE products(provider_id uuid,moderation_status text);INSERT INTO products VALUES('11111111-1111-4111-8111-111111111111','pending'),(NULL,'pending');
+ CREATE TABLE provider_listings(status text,plan_slot integer DEFAULT 1);INSERT INTO provider_listings VALUES('pending'),('approved');
+ CREATE TABLE products(provider_id uuid,moderation_status text,plan_slot integer DEFAULT 1);INSERT INTO products VALUES('11111111-1111-4111-8111-111111111111','pending'),(NULL,'pending');
  CREATE TABLE support_tickets(status text);INSERT INTO support_tickets VALUES('open'),('responded'),('closed');
  CREATE TABLE chat_reports(state text);INSERT INTO chat_reports VALUES('open'),('resolved');
  CREATE TABLE complaints(status text);INSERT INTO complaints VALUES('unresolved'),('unresolved'),('resolved');`)

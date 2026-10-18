@@ -87,8 +87,11 @@ func providerIdentityJSON(c *fiber.Ctx, db *pgxpool.Pool, payload fiber.Map, ass
 		if tier != "" {
 			label += " · " + strings.ToUpper(tier[:1]) + tier[1:] + " subscription"
 		}
-		identity := fiber.Map{"id": id, "name": name, "avatar_url": avatar, "banner_url": banner, "verified": verified, "paid_active": paid, "tier": tier, "label": label, "listing_limit": limit, "combined_limit": !paid}
+		identity := fiber.Map{"id": id, "name": name, "avatar_url": avatar, "banner_url": banner, "verified": verified, "paid_active": paid, "tier": tier, "label": label, "listing_limit": limit, "combined_limit": true}
 		for _, target := range targets[id] {
+			if c.Locals("public_provider_media") == true {
+				limitPublicPostMedia(target, tier)
+			}
 			target["provider_identity"] = identity
 			target["provider_name"] = name
 			target["provider_logo_url"] = avatar
@@ -134,8 +137,48 @@ func providerPlanTier(code string) string {
 
 func providerCapacityError(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23514" && (strings.Contains(pgErr.Message, "listing limit") || strings.Contains(pgErr.Message, "Free allows")) {
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" && (strings.Contains(pgErr.Message, "listing limit") || strings.Contains(pgErr.Message, "Free allows") || strings.HasPrefix(pgErr.Message, "Your plan") || strings.HasPrefix(pgErr.Message, "Driver verification")) {
 		return fiber.NewError(409, pgErr.Message)
 	}
 	return nil
+}
+
+// Limit public presentation after expiry/downgrade without deleting the owner's media.
+func limitPublicPostMedia(item fiber.Map, tier string) {
+	policy := postPolicy(tier)
+	trim := func(value any, max int) any {
+		switch values := value.(type) {
+		case []string:
+			if len(values) > max {
+				return values[:max]
+			}
+			return values
+		case []any:
+			if len(values) > max {
+				return values[:max]
+			}
+			return values
+		}
+		return []string{}
+	}
+	for _, key := range []string{"image_urls", "media_urls"} {
+		if value, ok := item[key]; ok {
+			item[key] = trim(value, policy.Images)
+		}
+	}
+	if value, ok := item["video_urls"]; ok {
+		item["video_urls"] = trim(value, policy.Videos)
+	}
+	for _, key := range []string{"attributes", "factory_details"} {
+		switch details := item[key].(type) {
+		case map[string]any:
+			if value, ok := details["video_urls"]; ok {
+				details["video_urls"] = trim(value, policy.Videos)
+			}
+		case fiber.Map:
+			if value, ok := details["video_urls"]; ok {
+				details["video_urls"] = trim(value, policy.Videos)
+			}
+		}
+	}
 }

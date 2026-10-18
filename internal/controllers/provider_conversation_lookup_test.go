@@ -14,9 +14,9 @@ func TestBuyerConversationListingLookupIsScoped(t *testing.T) {
 	ctx := context.Background()
 	buyer, other, provider, first, second, conversation := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	_, err := db.Exec(ctx, `CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text);
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text);
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,plan_slot integer DEFAULT 1);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
- CREATE TABLE products(id uuid PRIMARY KEY,title text);
+ CREATE TABLE products(id uuid PRIMARY KEY,title text,plan_slot integer DEFAULT 1);
  CREATE TABLE provider_conversations(id uuid PRIMARY KEY,product_id uuid,listing_id uuid,provider_id uuid,user_id uuid,status text DEFAULT 'open',last_message_at timestamptz DEFAULT now(),buyer_last_read_at timestamptz);
  CREATE TABLE provider_conversation_messages(id uuid PRIMARY KEY,conversation_id uuid,sender_type text,body text,created_at timestamptz DEFAULT now());`)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestBuyerConversationListingLookupIsScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := &ProviderMarketplaceController{db: db}
-	installPublicIdentityFixture(t,db)
+	installPublicIdentityFixture(t, db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Get("/chats", controller.ListBuyerConversations)

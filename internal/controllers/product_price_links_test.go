@@ -49,9 +49,9 @@ func TestLegacyPortalPrimaryEditRetainsLink(t *testing.T) {
 func TestPrimaryPriceMigrationAndCommittedCatalogRevision(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE products(id UUID PRIMARY KEY,local_currency_code TEXT,local_selling_price NUMERIC(14,2));
+	_, err := db.Exec(ctx, `CREATE TABLE products(id UUID PRIMARY KEY,local_currency_code TEXT,local_selling_price NUMERIC(14,2),plan_slot integer DEFAULT 1);
  CREATE TABLE product_delivery_areas(product_id UUID REFERENCES products(id),country_code TEXT,state_key TEXT DEFAULT '',city_key TEXT DEFAULT '',delivered_price NUMERIC(14,2),delivery_fee NUMERIC(14,2) DEFAULT 0,currency_code TEXT,PRIMARY KEY(product_id,country_code,state_key,city_key));
- CREATE TABLE provider_listings(id UUID PRIMARY KEY,title TEXT);`)
+ CREATE TABLE provider_listings(id UUID PRIMARY KEY,title TEXT,plan_slot integer DEFAULT 1);`)
 	if err != nil {
 		t.Fatal(err)
 	}

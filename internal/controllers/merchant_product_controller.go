@@ -16,6 +16,7 @@ type merchantProductPayload struct {
 	Title                string                `json:"title"`
 	Description          string                `json:"description"`
 	CategoryPath         []string              `json:"category_path"`
+	VideoURLs            []string              `json:"video_urls"`
 	ImageURLs            []string              `json:"image_urls"`
 	Price                float64               `json:"local_selling_price"`
 	CurrencyCode         string                `json:"currency_code"`
@@ -41,6 +42,9 @@ type merchantProductPayload struct {
 }
 
 func normalizeMerchantProduct(req *merchantProductPayload) {
+	if req.VideoURLs == nil {
+		req.VideoURLs = []string{}
+	}
 	// Marketplace sellers always retain fulfilment responsibility. Ignore the
 	// retired Atlantic last-mile flag from older cached portal builds.
 	req.AtlanticLastMile = false
@@ -214,7 +218,7 @@ func (m *ProviderMarketplaceController) CreateMerchantProduct(c *fiber.Ctx) erro
 		sku = "MER-" + strings.ToUpper(strings.ReplaceAll(uuid.NewString()[:12], "-", ""))
 	}
 	id := uuid.New()
-	factory, _ := json.Marshal(map[string]any{"merchant_managed": true, "inventory_country_code": req.InventoryCountryCode, "inventory_city": req.InventoryCity})
+	factory, _ := json.Marshal(map[string]any{"video_urls": req.VideoURLs, "merchant_managed": true, "inventory_country_code": req.InventoryCountryCode, "inventory_city": req.InventoryCity})
 	tx, err := m.db.Begin(c.Context())
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -279,7 +283,7 @@ func (m *ProviderMarketplaceController) UpdateMerchantProduct(c *fiber.Ctx) erro
 	if err = validateEnabledDeliveryMarkets(c.Context(), tx, req.DeliveryAreas); err != nil {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 	}
-	tag, err := tx.Exec(c.Context(), `UPDATE products SET title=$3,description=$4,category_path=$5,image_urls=$6,local_selling_price=$7,compare_at_price=$8,inventory_count=$9,is_flash_sale=$10,flash_sale_price=CASE WHEN $10 THEN $11::numeric ELSE NULL END,fulfillment_mode=$12,inventory_country_code=$13,inventory_city=$14,inventory_location=$15,stock_state=$16,handling_time_hours=$17,delivery_min_days=$18,delivery_max_days=$19,delivery_methods=$20,return_policy=$21,atlantic_last_mile=$22,inventory_latitude=$23,inventory_longitude=$24,local_currency_code=$25,payment_mode=COALESCE(NULLIF($26,''),payment_mode),moderation_status=CASE WHEN moderation_status IN ('pending','approved') THEN 'pending' ELSE moderation_status END,moderation_notes='',is_active=false,catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status<>'archived'`, c.Params("product_id"), providerID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, req.IsFlashSale, req.FlashSalePrice, req.FulfillmentMode, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode, req.PaymentMode)
+	tag, err := tx.Exec(c.Context(), `UPDATE products SET factory_details=jsonb_set(COALESCE(factory_details,'{}'::jsonb),'{video_urls}',$27::jsonb),title=$3,description=$4,category_path=$5,image_urls=$6,local_selling_price=$7,compare_at_price=$8,inventory_count=$9,is_flash_sale=$10,flash_sale_price=CASE WHEN $10 THEN $11::numeric ELSE NULL END,fulfillment_mode=$12,inventory_country_code=$13,inventory_city=$14,inventory_location=$15,stock_state=$16,handling_time_hours=$17,delivery_min_days=$18,delivery_max_days=$19,delivery_methods=$20,return_policy=$21,atlantic_last_mile=$22,inventory_latitude=$23,inventory_longitude=$24,local_currency_code=$25,payment_mode=COALESCE(NULLIF($26,''),payment_mode),moderation_status=CASE WHEN moderation_status IN ('pending','approved') THEN 'pending' ELSE moderation_status END,moderation_notes='',is_active=false,catalog_version=catalog_version+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid AND moderation_status<>'archived'`, c.Params("product_id"), providerID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.CategoryPath, req.ImageURLs, req.Price, req.CompareAtPrice, req.InventoryCount, req.IsFlashSale, req.FlashSalePrice, req.FulfillmentMode, req.InventoryCountryCode, req.InventoryCity, req.InventoryLocation, req.StockState, req.HandlingTimeHours, req.DeliveryMinDays, req.DeliveryMaxDays, req.DeliveryMethods, req.ReturnPolicy, req.AtlanticLastMile, req.InventoryLatitude, req.InventoryLongitude, req.CurrencyCode, req.PaymentMode, mustJSONVideos(req.VideoURLs))
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -359,7 +363,7 @@ func (m *ProviderMarketplaceController) listMerchantProducts(c *fiber.Ctx, admin
 		cursorID = page.CursorID
 	}
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
-	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,p.payment_mode,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code,'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false)) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(c.Context(), `SELECT p.id::text,p.provider_id::text,o.business_name,p.sku,p.title,p.description,p.category_path,p.image_urls,p.local_currency_code,p.local_selling_price,p.compare_at_price,p.inventory_count,p.is_flash_sale,p.flash_sale_price,p.moderation_status,p.moderation_notes,p.is_active,p.fulfillment_mode,p.inventory_country_code,p.inventory_city,p.inventory_location,p.stock_state,p.handling_time_hours,p.delivery_min_days,p.delivery_max_days,p.delivery_methods,p.return_policy,p.atlantic_last_mile,p.inventory_latitude::float8,p.inventory_longitude::float8,p.created_at,p.payment_mode,COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code,'uses_primary_price',COALESCE((to_jsonb(a)->>'uses_primary_price')::boolean,false)) ORDER BY a.country_code,a.state_key,a.city_key) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb),COALESCE(to_jsonb(p)#>'{factory_details,video_urls}','[]'::jsonb) FROM products p JOIN provider_organizations o ON o.id=p.provider_id WHERE ($1 OR p.provider_id=NULLIF($2,'')::uuid) AND ($3='' OR p.moderation_status=$3) AND ($4='' OR p.sku ILIKE '%'||$4||'%' OR p.title ILIKE '%'||$4||'%') AND ($5::timestamptz IS NULL OR (p.created_at,p.id)<($5,$6::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $7`, admin, providerID, status, page.Search, page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -374,15 +378,17 @@ func (m *ProviderMarketplaceController) listMerchantProducts(c *fiber.Ctx, admin
 		var latitude, longitude *float64
 		var isFlash, active, atlanticLastMile bool
 		var created time.Time
-		var areasRaw []byte
-		if rows.Scan(&id, &pid, &business, &sku, &title, &desc, &cats, &images, &currency, &price, &compare, &stock, &isFlash, &flash, &moderation, &notes, &active, &mode, &country, &city, &location, &stockState, &handlingHours, &minDays, &maxDays, &deliveryMethods, &returnPolicy, &atlanticLastMile, &latitude, &longitude, &created, &paymentMode, &areasRaw) != nil {
+		var areasRaw, videosRaw []byte
+		if rows.Scan(&id, &pid, &business, &sku, &title, &desc, &cats, &images, &currency, &price, &compare, &stock, &isFlash, &flash, &moderation, &notes, &active, &mode, &country, &city, &location, &stockState, &handlingHours, &minDays, &maxDays, &deliveryMethods, &returnPolicy, &atlanticLastMile, &latitude, &longitude, &created, &paymentMode, &areasRaw, &videosRaw) != nil {
 			return fiber.ErrInternalServerError
 		}
+		var videos []string
+		_ = json.Unmarshal(videosRaw, &videos)
 		var areas []productDeliveryArea
 		if err := json.Unmarshal(areasRaw, &areas); err != nil {
 			return fiber.ErrInternalServerError
 		}
-		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "sku": sku, "title": title, "description": desc, "category_path": cats, "image_urls": images, "currency_code": currency, "local_selling_price": price, "compare_at_price": compare, "inventory_count": stock, "is_flash_sale": isFlash, "flash_sale_price": flash, "moderation_status": moderation, "moderation_notes": notes, "is_active": active, "fulfillment_mode": mode, "inventory_country_code": country, "inventory_city": city, "inventory_location": location, "inventory_latitude": latitude, "inventory_longitude": longitude, "stock_state": stockState, "handling_time_hours": handlingHours, "delivery_min_days": minDays, "delivery_max_days": maxDays, "delivery_methods": deliveryMethods, "delivery_areas": areas, "payment_mode": paymentMode, "return_policy": returnPolicy, "atlantic_last_mile": atlanticLastMile, "created_at": created})
+		items = append(items, fiber.Map{"id": id, "provider_id": pid, "provider_name": business, "sku": sku, "title": title, "description": desc, "category_path": cats, "image_urls": images, "video_urls": videos, "currency_code": currency, "local_selling_price": price, "compare_at_price": compare, "inventory_count": stock, "is_flash_sale": isFlash, "flash_sale_price": flash, "moderation_status": moderation, "moderation_notes": notes, "is_active": active, "fulfillment_mode": mode, "inventory_country_code": country, "inventory_city": city, "inventory_location": location, "inventory_latitude": latitude, "inventory_longitude": longitude, "stock_state": stockState, "handling_time_hours": handlingHours, "delivery_min_days": minDays, "delivery_max_days": maxDays, "delivery_methods": deliveryMethods, "delivery_areas": areas, "payment_mode": paymentMode, "return_policy": returnPolicy, "atlantic_last_mile": atlanticLastMile, "created_at": created})
 	}
 	next := ""
 	if len(items) > page.Limit {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,16 @@ func TestDriverAvailabilityPrivacyExpiryAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(ctx, `CREATE TABLE provider_verification_documents(provider_id uuid,document_type text,status text);`); err != nil {
+		t.Fatal(err)
+	}
+	driverSQL, e := os.ReadFile("../../migrations/096_driver_documents.sql")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, err = db.Exec(ctx, string(driverSQL)); err != nil {
+		t.Fatal(err)
+	}
 	owner, outsider, provider, listing := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	for _, s := range []struct {
 		sql  string
@@ -26,6 +37,7 @@ func TestDriverAvailabilityPrivacyExpiryAndRevocation(t *testing.T) {
 		{`INSERT INTO users(id,full_name) VALUES($1,'Driver'),($2,'Customer')`, []any{owner, outsider}},
 		{`INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status)VALUES($1,$2,'Local driver','approved')`, []any{provider, owner}},
 		{`INSERT INTO provider_members VALUES($1,$2,'owner',true)`, []any{provider, owner}},
+		{`INSERT INTO provider_verification_documents SELECT $1,kind,'approved' FROM unnest(ARRAY['drivers_license','driver_vehicle','driver_plate']) kind`, []any{provider}},
 		{`INSERT INTO provider_listings(id,provider_id,title,status,category)VALUES($1,$2,'Local ride','approved','Independent driver')`, []any{listing, provider}},
 	} {
 		if _, err = db.Exec(ctx, s.sql, s.args...); err != nil {
