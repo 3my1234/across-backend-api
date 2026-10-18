@@ -25,9 +25,9 @@ func communityTestDB(t *testing.T, skipExpiry ...bool) *pgxpool.Pool {
  CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY,code text,listing_limit int);
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY,provider_id uuid,plan_id uuid,status text,starts_at timestamptz,current_period_end timestamptz,created_at timestamptz DEFAULT now());
  CREATE TABLE provider_subscription_payments(subscription_id uuid,amount numeric,currency_code text);
- CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,image_urls text[] DEFAULT '{}',category_path text[] DEFAULT '{}',payment_mode text DEFAULT 'contact',catalog_version int DEFAULT 0,updated_at timestamptz DEFAULT now(),moderation_status text,is_active bool,published_at timestamptz);
+ CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,image_urls text[] DEFAULT '{}',category_path text[] DEFAULT '{}',payment_mode text DEFAULT 'contact',catalog_version int DEFAULT 0,updated_at timestamptz DEFAULT now(),moderation_status text,is_active bool,published_at timestamptz,plan_slot integer DEFAULT 1);
  CREATE TABLE product_delivery_areas(product_id uuid,country_code text,city_key text);
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text,published_at timestamptz,media_urls text[] DEFAULT '{}',country_code text DEFAULT 'NG',city text DEFAULT 'Abuja',category text DEFAULT 'food');
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text,published_at timestamptz,media_urls text[] DEFAULT '{}',country_code text DEFAULT 'NG',city text DEFAULT 'Abuja',category text DEFAULT 'food',plan_slot integer DEFAULT 1);
  CREATE TABLE provider_conversations(id uuid PRIMARY KEY,provider_id uuid,user_id uuid,listing_id uuid,product_id uuid,status text,last_message_at timestamptz,buyer_last_read_at timestamptz,provider_last_read_at timestamptz);
  CREATE TABLE provider_conversation_messages(id uuid PRIMARY KEY,conversation_id uuid,sender_type text,created_at timestamptz);
  CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text);

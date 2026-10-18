@@ -24,6 +24,7 @@ func NewCatalogController(db *pgxpool.Pool, cfg config.Config) *CatalogControlle
 }
 
 func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	destinationCountry, destinationState, destinationCity, destinationErr := requestedDeliveryDestination(c)
 	if destinationErr != nil {
 		return destinationErr
@@ -66,7 +67,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
-		WHERE p.is_active = true AND p.moderation_status='approved'
+		WHERE p.is_active = true AND p.moderation_status='approved' AND (p.provider_id IS NULL OR p.plan_slot<=COALESCE(visibility.listing_limit,1))
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 		  AND ($8::text NOT IN ('local','international') OR ($8='local' AND p.inventory_country_code=$5) OR ($8='international' AND p.inventory_country_code<>$5))
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
@@ -138,6 +139,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 // the query bounded and cursor-paginated even when the catalogue grows to
 // millions of products.
 func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	destinationCountry, destinationState, destinationCity, destinationErr := requestedDeliveryDestination(c)
 	if destinationErr != nil {
 		return destinationErr
@@ -166,7 +168,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$6 AND (a.state_key='' OR a.state_key=$7) AND (a.city_key='' OR a.city_key=$8) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
-		WHERE p.is_active = true AND p.moderation_status='approved' AND p.is_flash_sale = true AND p.inventory_count > 0
+		WHERE p.is_active = true AND p.moderation_status='approved' AND (p.provider_id IS NULL OR p.plan_slot<=COALESCE(visibility.listing_limit,1)) AND p.is_flash_sale = true AND p.inventory_count > 0
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($5::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))
@@ -226,6 +228,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 }
 
 func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	destinationCountry, destinationState, destinationCity, destinationErr := requestedDeliveryDestination(c)
 	if destinationErr != nil {
 		return destinationErr
@@ -255,7 +258,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$3 AND (a.state_key='' OR a.state_key=$4) AND (a.city_key='' OR a.city_key=$5) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
-		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved'
+		WHERE p.id = $1 AND p.is_active = true AND p.moderation_status='approved' AND p.plan_slot<=COALESCE(visibility.listing_limit,1)
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))
@@ -304,6 +307,7 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 // query uses the existing category_path GIN index and never transfers the full
 // catalogue to a device for client-side filtering.
 func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
+	c.Locals("public_provider_media", true)
 	destinationCountry, destinationState, destinationCity, destinationErr := requestedDeliveryDestination(c)
 	if destinationErr != nil {
 		return destinationErr
@@ -338,7 +342,7 @@ func (cc *CatalogController) ListRecommendations(c *fiber.Ctx) error {
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 			WHERE p.id <> $1
 				AND p.is_active = true
-				AND p.moderation_status='approved'
+				AND p.moderation_status='approved' AND p.plan_slot<=COALESCE(visibility.listing_limit,1)
 				AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
 				AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 				AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))

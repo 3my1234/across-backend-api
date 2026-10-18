@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"os"
 	"testing"
@@ -27,6 +28,11 @@ func TestProviderPostRulesCombinedCapacityAndMedia(t *testing.T) {
 		t.Fatal(e)
 	}
 	exec(string(raw))
+	slots, e := os.ReadFile("../../migrations/097_provider_post_visibility_slots.sql")
+	if e != nil {
+		t.Fatal(e)
+	}
+	exec(string(slots))
 	for _, tier := range []string{"", "bronze", "silver", "gold", "diamond"} {
 		t.Run("tier_"+tier, func(t *testing.T) {
 			policy := postPolicy(tier)
@@ -67,6 +73,35 @@ func TestProviderPostRulesCombinedCapacityAndMedia(t *testing.T) {
 			if _, e = db.Exec(ctx, `UPDATE products SET factory_details=$2::jsonb WHERE id=$1`, product, string(payload)); e == nil {
 				t.Fatal("excess/unverified video accepted")
 			}
+
+			if tier == "gold" {
+				// Expiry changes discovery immediately, but keeps every stored record.
+				exec(`UPDATE provider_subscriptions SET current_period_end=now()-interval '1 second' WHERE provider_id=$1`, provider)
+				countVisible := func() int {
+					var count int
+					err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM products p JOIN provider_public_identity i ON i.provider_id=p.provider_id WHERE p.provider_id=$1 AND p.moderation_status<>'archived' AND p.plan_slot<=i.listing_limit)+(SELECT count(*) FROM provider_listings l JOIN provider_public_identity i ON i.provider_id=l.provider_id WHERE l.provider_id=$1 AND l.status<>'archived' AND l.plan_slot<=i.listing_limit)`, provider).Scan(&count)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return count
+				}
+				if got := countVisible(); got != 1 {
+					t.Fatalf("expiry exposes %d posts, want 1", got)
+				}
+				exec(`UPDATE products SET moderation_status='archived' WHERE id=$1`, product)
+				exec(`INSERT INTO products(id,provider_id,moderation_status,image_urls) VALUES($1,$2,'draft',ARRAY['https://example.test/new.jpg'])`, uuid.NewString(), provider)
+				if got := countVisible(); got != 1 {
+					t.Fatalf("reusing the free allowance exposes %d posts", got)
+				}
+				exec(`UPDATE provider_subscriptions SET current_period_end=now()+interval '1 month' WHERE provider_id=$1`, provider)
+				if got := countVisible(); got != 20 {
+					t.Fatalf("renewal exposes %d posts, want 20", got)
+				}
+				var retained int
+				if err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM products WHERE provider_id=$1)+(SELECT count(*) FROM provider_listings WHERE provider_id=$1)`, provider).Scan(&retained); err != nil || retained != 21 {
+					t.Fatalf("records were lost: %d %v", retained, err)
+				}
+			}
 		})
 	}
 }
@@ -78,5 +113,21 @@ func TestPostVideoInspectionRejectsInvalidAndLongMedia(t *testing.T) {
 	}
 	if d, e := verifiedVideoDuration([]byte(`{"format":{"duration":"60"},"streams":[{"codec_type":"video","codec_name":"h264","duration":"60"}]}`)); e != nil || d != 60 {
 		t.Fatal("valid video rejected", e)
+	}
+}
+
+func TestPublicPostMediaCurrentTier(t *testing.T) {
+	for _, tier := range []string{"", "bronze", "silver", "gold", "diamond"} {
+		policy := postPolicy(tier)
+		images := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}
+		videos := []any{"1", "2", "3", "4", "5", "6"}
+		item := fiber.Map{"image_urls": images, "factory_details": map[string]any{"video_urls": videos}}
+		limitPublicPostMedia(item, tier)
+		if len(item["image_urls"].([]string)) != policy.Images || len(item["factory_details"].(map[string]any)["video_urls"].([]any)) != policy.Videos {
+			t.Fatalf("wrong media limits for %q: %#v", tier, item)
+		}
+		if len(images) != 9 || len(videos) != 6 {
+			t.Fatal("stored media changed")
+		}
 	}
 }

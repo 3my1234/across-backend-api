@@ -23,8 +23,8 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,full_name text,email text,is_active boolean DEFAULT true);
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active boolean DEFAULT true,role text,created_at timestamptz DEFAULT now());
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text DEFAULT 'approved');
- CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved');
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text DEFAULT 'approved',plan_slot integer DEFAULT 1);
+ CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved',plan_slot integer DEFAULT 1);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz); CREATE TABLE provider_marketplace_events(id uuid DEFAULT gen_random_uuid(),provider_id uuid,listing_id uuid,event_type text,metadata jsonb);`)
 	if err != nil {
 		t.Fatal(err)

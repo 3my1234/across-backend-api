@@ -62,7 +62,7 @@ func (m *ProviderMarketplaceController) DriverAvailability(c *fiber.Ctx) error {
 	tag, err := m.db.Exec(ctx, `INSERT INTO provider_driver_presence(provider_id,listing_id,latitude,longitude,accuracy_m,updated_at,expires_at)
  SELECT l.provider_id,l.id,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '120 seconds'
  FROM provider_listings l JOIN provider_public_identity i ON i.provider_id=l.provider_id
- WHERE l.id=$2::uuid AND l.provider_id=$1::uuid AND l.status='approved' AND i.verified AND driver_documents_approved(l.provider_id) AND `+driverListingSQL+`
+ WHERE l.id=$2::uuid AND l.provider_id=$1::uuid AND l.status='approved' AND l.plan_slot<=i.listing_limit AND i.verified AND driver_documents_approved(l.provider_id) AND `+driverListingSQL+`
  ON CONFLICT(provider_id) DO UPDATE SET listing_id=EXCLUDED.listing_id,latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,accuracy_m=EXCLUDED.accuracy_m,updated_at=EXCLUDED.updated_at,expires_at=EXCLUDED.expires_at`, provider, req.ListingID, *req.Latitude, *req.Longitude, *req.Accuracy)
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -103,7 +103,7 @@ func (m *ProviderMarketplaceController) NearbyDrivers(c *fiber.Ctx) error {
  6371*2*asin(sqrt(LEAST(1.0,power(sin(radians(d.latitude-$1)/2),2)+cos(radians($1))*cos(radians(d.latitude))*power(sin(radians(d.longitude-$2)/2),2)))) AS distance
  FROM provider_driver_presence d JOIN provider_listings l ON l.id=d.listing_id AND l.provider_id=d.provider_id
  JOIN provider_public_identity i ON i.provider_id=d.provider_id
- WHERE d.expires_at>clock_timestamp() AND i.verified AND driver_documents_approved(l.provider_id) AND l.status='approved' AND `+driverListingSQL+`
+ WHERE d.expires_at>clock_timestamp() AND l.plan_slot<=i.listing_limit AND i.verified AND driver_documents_approved(l.provider_id) AND l.status='approved' AND `+driverListingSQL+`
  AND (point(d.longitude,d.latitude)<@box(point($2-$4,$1-$3),point($2+$4,$1+$3))
  OR point(d.longitude,d.latitude)<@box(point($2-$4-360,$1-$3),point($2+$4-360,$1+$3))
  OR point(d.longitude,d.latitude)<@box(point($2-$4+360,$1-$3),point($2+$4+360,$1+$3))))

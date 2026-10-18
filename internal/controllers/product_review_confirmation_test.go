@@ -17,7 +17,7 @@ func TestProductReviewDurableUpdateAndBoundedReward(t *testing.T) {
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `ALTER TABLE orders ADD user_id uuid, ADD order_status text, ADD created_at timestamptz DEFAULT now();
  CREATE TABLE users(id uuid PRIMARY KEY,full_name text);
- CREATE TABLE products(id uuid PRIMARY KEY,is_active boolean DEFAULT true,review_count bigint DEFAULT 1,review_rating_sum bigint DEFAULT 5);
+ CREATE TABLE products(id uuid PRIMARY KEY,is_active boolean DEFAULT true,review_count bigint DEFAULT 1,review_rating_sum bigint DEFAULT 5,plan_slot integer DEFAULT 1);
  CREATE TABLE order_items(order_id uuid,product_id uuid);
  CREATE TABLE reviews(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),product_id uuid,user_id uuid,order_id uuid,rating int,review_text text,media_urls text[],created_at timestamptz DEFAULT now());
  CREATE TABLE review_rewards(user_id uuid,order_id uuid,is_claimed boolean DEFAULT false,claimed_at timestamptz);

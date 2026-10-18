@@ -68,7 +68,7 @@ func TestDeliveryAreaMigrationBackfillAndSpecificity(t *testing.T) {
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `
 		CREATE TABLE countries_config(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),country_code CHAR(2) UNIQUE NOT NULL,currency_code CHAR(3) NOT NULL,base_escrow_days INT NOT NULL,active_payment_gateways TEXT[] NOT NULL,is_active BOOLEAN NOT NULL DEFAULT true);
-		CREATE TABLE products(id UUID PRIMARY KEY,provider_id UUID,fulfillment_mode TEXT,local_currency_code CHAR(3),local_selling_price NUMERIC(14,2),inventory_country_code CHAR(2));
+		CREATE TABLE products(id UUID PRIMARY KEY,provider_id UUID,fulfillment_mode TEXT,local_currency_code CHAR(3),local_selling_price NUMERIC(14,2),inventory_country_code CHAR(2),plan_slot integer DEFAULT 1);
 	`)
 	if err != nil {
 		t.Fatal(err)

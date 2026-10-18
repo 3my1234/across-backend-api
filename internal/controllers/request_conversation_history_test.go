@@ -19,7 +19,7 @@ func TestRequestConversationBackfillAndAtomicBooking(t *testing.T) {
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,full_name text,email text,phone text);
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,is_active boolean DEFAULT true,verification_status text DEFAULT 'approved');
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text,is_active boolean DEFAULT true,created_at timestamptz DEFAULT now());
- CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,listing_type text DEFAULT 'car_wash',status text DEFAULT 'approved',country_code text DEFAULT 'NG',currency_code text DEFAULT 'NGN');
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,listing_type text DEFAULT 'car_wash',status text DEFAULT 'approved',country_code text DEFAULT 'NG',currency_code text DEFAULT 'NGN',plan_slot integer DEFAULT 1);
  CREATE TABLE countries_config(country_code text,currency_code text,is_active boolean,active_payment_gateways text[]);
  INSERT INTO countries_config VALUES('NG','NGN',true,ARRAY['flutterwave']);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
@@ -60,7 +60,7 @@ func TestRequestConversationBackfillAndAtomicBooking(t *testing.T) {
 	if _, err = db.Exec(ctx, `INSERT INTO provider_requests(listing_id,provider_id,user_id,request_type,message,created_at) VALUES($1,$3,$4,'booking','Fix my car','2026-01-02'),($1,$3,$4,'appointment','Another visit','2026-01-03'),($2,$3,$4,'enquiry','Details please','2026-01-02')`, first, second, provider, buyer); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(ctx, `CREATE TABLE products(id uuid PRIMARY KEY,title text);ALTER TABLE provider_conversations ADD COLUMN product_id uuid;ALTER TABLE provider_conversation_messages ADD COLUMN media_keys text[] DEFAULT '{}';`); err != nil {
+	if _, err := db.Exec(ctx, `CREATE TABLE products(id uuid PRIMARY KEY,title text,plan_slot integer DEFAULT 1);ALTER TABLE provider_conversations ADD COLUMN product_id uuid;ALTER TABLE provider_conversation_messages ADD COLUMN media_keys text[] DEFAULT '{}';`); err != nil {
 		t.Fatal(err)
 	}
 	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "063_request_conversations_and_support_history.sql"))
@@ -89,7 +89,7 @@ func TestRequestConversationBackfillAndAtomicBooking(t *testing.T) {
 		t.Fatal(text, err)
 	}
 	controller := &ProviderMarketplaceController{db: db}
-	installPublicIdentityFixture(t,db)
+	installPublicIdentityFixture(t, db)
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Post("/listings/:listing_id/requests", controller.CreateRequest)
