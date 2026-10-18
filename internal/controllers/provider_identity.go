@@ -134,7 +134,7 @@ func providerPlanTier(code string) string {
 
 func providerCapacityError(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23514" && (strings.Contains(pgErr.Message, "listing limit") || strings.Contains(pgErr.Message, "Free allows")) {
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" && (strings.Contains(pgErr.Message, "listing limit") || strings.Contains(pgErr.Message, "Free allows") || strings.HasPrefix(pgErr.Message, "Your plan") || strings.HasPrefix(pgErr.Message, "Driver verification")) {
 		return fiber.NewError(409, pgErr.Message)
 	}
 	return nil

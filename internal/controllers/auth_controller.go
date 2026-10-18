@@ -97,8 +97,14 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	var validEmail bool
 	req.Email, validEmail = normalizeEmail(req.Email)
 	req.FullName = strings.TrimSpace(req.FullName)
-	if req.FullName == "" || !validEmail || len(req.Password) < 8 {
-		return fiber.NewError(fiber.StatusBadRequest, "name, email, and 8+ character password are required")
+	if req.FullName == "" || !validEmail {
+		return fiber.NewError(fiber.StatusBadRequest, "Enter your name and a valid email address.")
+	}
+	if len(req.Password) > 72 {
+		return fiber.NewError(422, "Password is too long. Choose a shorter password.")
+	}
+	if !validNewPassword(req.Password) {
+		return fiber.NewError(422, passwordRequirements)
 	}
 	if req.RegistrationContext != "provider" {
 		req.RegistrationContext = "buyer"
@@ -1031,7 +1037,7 @@ func (a *AuthController) ResetPasswordPage(c *fiber.Ctx) error {
 	if logoURL := strings.TrimSpace(a.cfg.BrandLogoURL); logoURL != "" {
 		brand = `<img src="` + html.EscapeString(logoURL) + `" width="170" alt="Atlantic Express" style="max-width:170px;height:auto;">`
 	}
-	return c.SendString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Reset your Atlantic Express password</title></head><body style="margin:0;background:#F3F7F6;font-family:Arial,Helvetica,sans-serif;color:#142522;"><main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;"><section style="width:100%;max-width:520px;background:#FFFFFF;border:1px solid #E2EBE8;border-radius:18px;padding:36px;box-sizing:border-box;box-shadow:0 12px 40px rgba(15,61,53,.08);"><div style="text-align:center;">` + brand + `</div><h1 style="font-size:26px;margin:28px 0 10px;">Choose a new password</h1><p style="font-size:15px;line-height:1.6;color:#52625E;margin:0 0 24px;">Use at least eight characters. Completing this reset signs out your existing buyer sessions.</p><form method="post" action="/api/v1/auth/reset-password"><input type="hidden" name="token" value="` + html.EscapeString(token) + `"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">New password</label><input name="password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:16px;"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">Confirm password</label><input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:22px;"><button type="submit" style="width:100%;border:0;border-radius:8px;background:#FF4747;color:#FFFFFF;font-size:16px;font-weight:700;padding:14px;cursor:pointer;">Reset password</button></form><p style="margin:24px 0 0;text-align:center;font-size:12px;color:#84918E;">ATLANTIC SHANSU LOGISTICS LIMITED</p></section></main></body></html>`)
+	return c.SendString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Reset your Atlantic Express password</title></head><body style="margin:0;background:#F3F7F6;font-family:Arial,Helvetica,sans-serif;color:#142522;"><main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;"><section style="width:100%;max-width:520px;background:#FFFFFF;border:1px solid #E2EBE8;border-radius:18px;padding:36px;box-sizing:border-box;box-shadow:0 12px 40px rgba(15,61,53,.08);"><div style="text-align:center;">` + brand + `</div><h1 style="font-size:26px;margin:28px 0 10px;">Choose a new password</h1><p style="font-size:15px;line-height:1.6;color:#52625E;margin:0 0 24px;">Use at least eight characters, including an uppercase letter, a lowercase letter and a special character such as !@#$. Completing this reset signs out your existing buyer sessions.</p><form method="post" action="/api/v1/auth/reset-password"><input type="hidden" name="token" value="` + html.EscapeString(token) + `"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">New password</label><input name="password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:16px;"><label style="display:block;font-size:14px;font-weight:700;margin:0 0 8px;">Confirm password</label><input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required style="width:100%;box-sizing:border-box;padding:13px;border:1px solid #C9D7D3;border-radius:8px;font-size:16px;margin-bottom:22px;"><button type="submit" style="width:100%;border:0;border-radius:8px;background:#FF4747;color:#FFFFFF;font-size:16px;font-weight:700;padding:14px;cursor:pointer;">Reset password</button></form><p style="margin:24px 0 0;text-align:center;font-size:12px;color:#84918E;">ATLANTIC SHANSU LOGISTICS LIMITED</p></section></main></body></html>`)
 }
 
 func (a *AuthController) ResetPassword(c *fiber.Ctx) error {
@@ -1046,6 +1052,12 @@ func (a *AuthController) ResetPassword(c *fiber.Ctx) error {
 	req.Token = strings.TrimSpace(req.Token)
 	if req.Token == "" || len(req.Password) < 8 || req.Password != req.ConfirmPassword {
 		return a.resetPasswordFailure(c, "The passwords must match and contain at least eight characters.")
+	}
+	if len(req.Password) > 72 {
+		return a.resetPasswordFailure(c, "Password is too long. Choose a shorter password.")
+	}
+	if !validNewPassword(req.Password) {
+		return a.resetPasswordFailure(c, passwordRequirements)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {

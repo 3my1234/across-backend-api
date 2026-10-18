@@ -139,6 +139,9 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid media key")
 	}
+	if strings.HasPrefix(key, "private/") || strings.Contains(key, "/verification/") {
+		return fiber.ErrNotFound
+	}
 	isAVIF := strings.EqualFold(filepath.Ext(key), ".avif")
 	getURL, err := u.s3.ObjectGetURL(key, 10*time.Minute)
 	if err != nil {
@@ -158,9 +161,28 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		log.Printf("public image view failed: key=%s err=%v", key, err)
 		return fiber.NewError(fiber.StatusBadGateway, "media unavailable")
 	}
-	defer resp.Body.Close()
+	streamed := false
+	defer func() {
+		if !streamed {
+			resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode >= 400 {
 		return fiber.NewError(resp.StatusCode, "media unavailable")
+	}
+	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "video/") {
+		for _, header := range []string{"Content-Type", "Content-Length", "ETag", "Last-Modified", "Accept-Ranges", "Content-Range"} {
+			if value := resp.Header.Get(header); value != "" {
+				c.Set(header, value)
+			}
+		}
+		c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
+		c.Status(resp.StatusCode)
+		streamed = true
+		if resp.ContentLength >= 0 {
+			return c.SendStream(resp.Body, int(resp.ContentLength))
+		}
+		return c.SendStream(resp.Body)
 	}
 	if isAVIF || strings.EqualFold(resp.Header.Get("Content-Type"), "image/avif") {
 		converted, err := transcodeAVIFToJPEG(io.LimitReader(resp.Body, maxImageProxyBytes+1))

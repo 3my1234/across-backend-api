@@ -29,3 +29,32 @@ func promotedCursorPriority(raw string) bool {
 	}
 	return cursor.Paid
 }
+func encodeRankedCursor(created time.Time, id string, rank int) string {
+	raw, _ := json.Marshal(struct {
+		CreatedAt time.Time `json:"created_at"`
+		ID        string    `json:"id"`
+		Rank      int       `json:"rank"`
+		Paid      bool      `json:"paid"`
+	}{created, id, rank, rank > 0})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+func promotedCursorRank(raw string) int {
+	decoded, e := base64.RawURLEncoding.DecodeString(raw)
+	if e != nil {
+		return 0
+	}
+	var cursor struct {
+		Rank *int `json:"rank"`
+		Paid bool `json:"paid"`
+	}
+	if json.Unmarshal(decoded, &cursor) != nil {
+		return 0
+	}
+	if cursor.Rank != nil && *cursor.Rank >= 0 && *cursor.Rank <= 3 {
+		return *cursor.Rank
+	}
+	if cursor.Paid {
+		return 1
+	}
+	return 0
+}

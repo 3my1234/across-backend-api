@@ -71,7 +71,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 		  AND ($8::text NOT IN ('local','international') OR ($8='local' AND p.inventory_country_code=$5) OR ($8='international' AND p.inventory_country_code<>$5))
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($4::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))
-		ORDER BY COALESCE(visibility.verified AND visibility.paid_active,false) DESC, CASE WHEN p.inventory_country_code=$5 THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
+		ORDER BY CASE WHEN COALESCE(visibility.verified AND visibility.paid_active,false) THEN CASE visibility.badge_tier WHEN 'gold' THEN 3 WHEN 'diamond' THEN 3 WHEN 'silver' THEN 2 ELSE 1 END ELSE 0 END DESC, CASE WHEN p.inventory_country_code=$5 THEN 0 ELSE 1 END, distance_km ASC NULLS LAST, p.created_at DESC
 		LIMIT 80
 	`, hasLocation, latitude, longitude, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity, stockScope)
 	if err != nil {
@@ -161,7 +161,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			p.factory_details || jsonb_build_object('payment_mode',p.payment_mode,'catalog_updated_at',p.updated_at,'catalog_version',p.catalog_version,'provider_name',COALESCE((SELECT seller.business_name FROM provider_organizations seller WHERE seller.id=p.provider_id),''),'inventory_country_code',p.inventory_country_code,'inventory_city',p.inventory_city,'inventory_location',p.inventory_location,'stock_state',p.stock_state,'handling_time_hours',p.handling_time_hours,'delivery_min_days',p.delivery_min_days,'delivery_max_days',p.delivery_max_days,'delivery_methods',p.delivery_methods,'delivery_areas',COALESCE((SELECT jsonb_agg(jsonb_build_object('country_code',a.country_code,'state',a.state_key,'city',a.city_key,'delivered_price',a.delivered_price,'delivery_fee',a.delivery_fee,'currency_code',a.currency_code)) FROM product_delivery_areas a WHERE a.product_id=p.id),'[]'::jsonb)), COALESCE(lh.id::text, ''), COALESCE(lh.name, ''), COALESCE(lh.city, ''),
 			p.created_at, COUNT(*) OVER() AS total_count, p.review_count, p.sold_count,
 			CASE WHEN p.review_count > 0 THEN p.review_rating_sum::float8 / p.review_count ELSE 0 END,
-			p.provider_id::text,p.fulfillment_mode,COALESCE(visibility.verified AND visibility.paid_active,false)
+			p.provider_id::text,p.fulfillment_mode,CASE WHEN COALESCE(visibility.verified AND visibility.paid_active,false) THEN CASE visibility.badge_tier WHEN 'gold' THEN 3 WHEN 'diamond' THEN 3 WHEN 'silver' THEN 2 ELSE 1 END ELSE 0 END
 		FROM products p
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
 		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$6 AND (a.state_key='' OR a.state_key=$7) AND (a.city_key='' OR a.city_key=$8) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
@@ -174,9 +174,9 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		  AND p.flash_sale_price > 0 AND p.flash_sale_price < p.local_selling_price
 		  AND ($1 = '' OR p.sku ILIKE '%' || $1 || '%' OR p.title ILIKE '%' || $1 || '%'
 			OR p.description ILIKE '%' || $1 || '%')
-		  AND ($2::timestamptz IS NULL OR (COALESCE(visibility.verified AND visibility.paid_active,false),p.created_at,p.id)<($9::boolean,$2,$3::uuid))
-		ORDER BY COALESCE(visibility.verified AND visibility.paid_active,false) DESC, p.created_at DESC, p.id DESC LIMIT $4
-	`, page.Search, page.CursorTime, cursorID, page.Limit+1, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity, promotedCursorPriority(c.Query("cursor")))
+		  AND ($2::timestamptz IS NULL OR (CASE WHEN COALESCE(visibility.verified AND visibility.paid_active,false) THEN CASE visibility.badge_tier WHEN 'gold' THEN 3 WHEN 'diamond' THEN 3 WHEN 'silver' THEN 2 ELSE 1 END ELSE 0 END,p.created_at,p.id)<($9::int,$2,$3::uuid))
+		ORDER BY CASE WHEN COALESCE(visibility.verified AND visibility.paid_active,false) THEN CASE visibility.badge_tier WHEN 'gold' THEN 3 WHEN 'diamond' THEN 3 WHEN 'silver' THEN 2 ELSE 1 END ELSE 0 END DESC, p.created_at DESC, p.id DESC LIMIT $4
+	`, page.Search, page.CursorTime, cursorID, page.Limit+1, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity, promotedCursorRank(c.Query("cursor")))
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "flash sales unavailable")
 	}
@@ -193,7 +193,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 		var createdAt time.Time
 		var providerID *string
 		var fulfillmentMode string
-		var paidPriority bool
+		var paidPriority int
 		if err := rows.Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAt, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &createdAt, &total, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode, &paidPriority); err != nil {
 			return err
 		}
@@ -205,7 +205,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 			"price": price, "delivery_fee": catalogDeliveryFee(factory, destinationCountry, destinationState, destinationCity), "compare_at_price": compareAt, "inventory_count": inventory,
 			"review_count": reviewCount, "sold_count": soldCount, "average_rating": averageRating,
 			"provider_id": stringValue(providerID), "fulfillment_mode": catalogProductRoute(factory, destinationCountry),
-			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt, "promoted": paidPriority,
+			"is_flash_sale": true, "flash_sale_price": price, "factory_details": factory, "created_at": createdAt, "visibility_rank": paidPriority, "promoted": paidPriority > 0,
 			"origin_hub": fiber.Map{"id": hubID, "name": hubName, "city": hubCity},
 		})
 	}
@@ -213,7 +213,7 @@ func (cc *CatalogController) ListFlashSales(c *fiber.Ctx) error {
 	if len(products) > page.Limit {
 		products = products[:page.Limit]
 		last := products[len(products)-1]
-		nextCursor = encodePromotedCursor(last["created_at"].(time.Time), last["id"].(string), last["promoted"].(bool))
+		nextCursor = encodeRankedCursor(last["created_at"].(time.Time), last["id"].(string), last["visibility_rank"].(int))
 	}
 	for _, product := range products {
 		delete(product, "created_at")

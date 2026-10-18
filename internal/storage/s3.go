@@ -101,6 +101,9 @@ func (s *S3) ObjectGetURL(key string, expires time.Duration) (string, error) {
 func (s *S3) ObjectHeadURL(key string, expires time.Duration) (string, error) {
 	return s.objectReadURL(key, expires, http.MethodHead)
 }
+func (s *S3) ObjectDeleteURL(key string, expires time.Duration) (string, error) {
+	return s.objectReadURL(key, expires, http.MethodDelete)
+}
 func (s *S3) objectReadURL(key string, expires time.Duration, method string) (string, error) {
 	if !s.Configured() {
 		return "", errors.New("s3 is not configured")
