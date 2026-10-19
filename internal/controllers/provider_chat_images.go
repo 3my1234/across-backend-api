@@ -14,6 +14,7 @@ import (
 )
 
 type conversationMessageInput struct {
+	ReplyTo   string        `json:"reply_to_id"`
 	Location  *chatLocation `json:"location"`
 	Body      string        `json:"message"`
 	MediaKeys []string      `json:"media_keys"`
@@ -53,6 +54,11 @@ func (m *ProviderMarketplaceController) parseConversationMessage(c *fiber.Ctx) (
 	}
 	if err := validateChatLocation(req.Location); err != nil {
 		return req, err
+	}
+	if req.ReplyTo != "" {
+		if _, err := uuid.Parse(req.ReplyTo); err != nil {
+			return req, fiber.NewError(422, "Choose a valid message to reply to")
+		}
 	}
 	req.Body = strings.TrimSpace(req.Body)
 	if len([]rune(req.Body)) > 2000 || (req.Body == "" && len(req.MediaKeys) == 0 && req.Location == nil) || len(req.MediaKeys) > 4 {
@@ -122,6 +128,10 @@ func (m *ProviderMarketplaceController) chatMediaURLs(keys []string) []string {
 // A retry with the same reference returns the same durable message. Reusing
 // that reference for a different thread or body is rejected.
 func insertConversationMessage(ctx context.Context, tx pgx.Tx, conversationID, senderType, userID string, input conversationMessageInput) (uuid.UUID, time.Time, bool, error) {
+	if input.ReplyTo != "" {
+		return uuid.Nil, time.Time{}, false, fiber.NewError(422, "Message replies are available in Town Hall rooms")
+	}
+
 	requestedID := uuid.New()
 	var id uuid.UUID
 	var createdAt time.Time

@@ -35,7 +35,7 @@ func communityTestDB(t *testing.T, skipExpiry ...bool) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql", "084_town_hall_message_requests.sql", "086_town_hall_idle_expiry.sql", "088_chat_location_pins.sql", "089_driver_availability.sql"} {
+	for _, file := range []string{"077_provider_identity_contact_products.sql", "079_permanent_free_provider_tier.sql", "080_shared_chat_town_hall.sql", "081_social_statuses.sql", "084_town_hall_message_requests.sql", "086_town_hall_idle_expiry.sql", "088_chat_location_pins.sql", "089_driver_availability.sql", "098_town_hall_replies.sql"} {
 		if file == "086_town_hall_idle_expiry.sql" && len(skipExpiry) > 0 && skipExpiry[0] {
 			continue
 		}
@@ -67,6 +67,7 @@ func communityApp(db *pgxpool.Pool) *fiber.App {
 	app.Post("/statuses", s.CreateStatus)
 	app.Delete("/statuses/:status_id", s.DeleteStatus)
 	app.Get("/hall", s.HallList)
+	app.Get("/hall/activity", s.HallActivity)
 	app.Post("/hall", s.HallCreate)
 	app.Get("/hall/:room_id", s.HallDetail)
 	app.Post("/hall/:room_id/apply", s.HallApply)

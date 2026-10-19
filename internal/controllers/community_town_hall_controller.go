@@ -13,7 +13,20 @@ import (
 	"time"
 )
 
+func (s *CommunityController) canCreateHall(ctx context.Context, actor string) (bool, error) {
+	var provider bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_members WHERE user_id=$1::uuid AND is_active) OR EXISTS(SELECT 1 FROM provider_organizations WHERE owner_user_id=$1::uuid)`, actor).Scan(&provider)
+	return !provider, err
+}
 func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
+	allowed, permissionErr := s.canCreateHall(c.Context(), communityActor(c))
+	if permissionErr != nil {
+		return communityError(permissionErr)
+	}
+	if !allowed {
+		return fiber.NewError(403, "Only customers can create Town Hall requests. Providers can join and respond to customer requests.")
+	}
+
 	var in struct {
 		Message     string  `json:"message"`
 		ClientID    string  `json:"client_request_id"`
@@ -143,7 +156,11 @@ func (s *CommunityController) HallList(c *fiber.Ctx) error {
 	}
 	rows.Close()
 	_, _ = s.db.Exec(c.Context(), `UPDATE social_profiles SET town_hall_seen_at=now() WHERE user_id=$1::uuid`, communityActor(c))
-	payload, err := json.Marshal(fiber.Map{"items": items, "next_cursor": next})
+	canCreate, permissionErr := s.canCreateHall(c.Context(), communityActor(c))
+	if permissionErr != nil {
+		return communityError(permissionErr)
+	}
+	payload, err := json.Marshal(fiber.Map{"items": items, "next_cursor": next, "can_create": canCreate})
 	if err != nil {
 		return communityError(err)
 	}
@@ -161,7 +178,7 @@ func (s *CommunityController) HallActivity(c *fiber.Ctx) error {
 		return communityError(err)
 	}
 	var count int
-	err := s.db.QueryRow(c.Context(), `SELECT count(*) FROM (SELECT r.id FROM chat_rooms r WHERE r.kind='town_hall' AND r.state='open' AND EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())) AND r.last_message_at>(SELECT town_hall_seen_at FROM social_profiles WHERE user_id=$1::uuid) LIMIT 100) recent`, communityActor(c)).Scan(&count)
+	err := s.db.QueryRow(c.Context(), `SELECT count(*) FROM (SELECT r.id FROM chat_rooms r WHERE r.kind='town_hall' AND r.state='open' AND EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())) AND COALESCE((SELECT m.sender_user_id FROM chat_messages m WHERE m.room_id=r.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),r.owner_user_id)<>$1::uuid AND r.last_message_at>(SELECT town_hall_seen_at FROM social_profiles WHERE user_id=$1::uuid) LIMIT 100) recent`, communityActor(c)).Scan(&count)
 	if err != nil {
 		return communityError(err)
 	}
@@ -312,6 +329,9 @@ func (s *CommunityController) HallMembership(c *fiber.Ctx) error {
 		return communityError(err)
 	}
 	if in.Action == "approve" {
+		if state == "admitted" {
+			return c.SendStatus(204)
+		}
 		if state != "pending" {
 			return fiber.NewError(409, "Request is no longer pending")
 		}
@@ -333,6 +353,12 @@ func (s *CommunityController) HallMembership(c *fiber.Ctx) error {
 			return fiber.NewError(409, "Request is no longer pending")
 		}
 		if in.Action == "remove" {
+			if state == "removed" {
+				return c.SendStatus(204)
+			}
+			if state != "admitted" {
+				return fiber.NewError(409, "Only an admitted provider can be removed. Refresh the request.")
+			}
 			state = "removed"
 			_, err = tx.Exec(c.Context(), `UPDATE chat_participants SET state='removed' WHERE room_id=$1::uuid AND provider_id=$2::uuid`, id, provider)
 		} else {
