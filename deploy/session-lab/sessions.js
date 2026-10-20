@@ -31,7 +31,7 @@ function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=tru
  if(response.headers['X-Lab-Backend'])backends.add(1,{backend:response.headers['X-Lab-Backend']});
  let data=null;try{if(response.body)data=response.json();}catch{}
  const busy=[429,503].includes(response.status)&&!!data&&(typeof data.error==='string'||typeof data.message==='string')&&Number(response.headers['Retry-After'])>0;
- const passed=response.status===want&&(!expectBody||want===204||!!data);
+ const passed=response.status===want&&(!expectBody||want>=400||want===204||!!data);
  unexpected.add(!passed&&!busy,{op});overload.add(busy,{op});valid.add(passed||busy,{op});
  if(passed&&want<400)success.add(response.timings.duration,{op});
  check(response,{[op+' expected status and JSON']:()=>passed||busy});
@@ -58,13 +58,13 @@ export function setup(){
  if(ready.status!==200||ready.headers['X-Atl-Capacity-Lab']!==fixture.marker)exec.test.abort('Isolated target marker/readiness missing; no workload launched');
  const first=sessions[0],peer=sessions[2];
  const who=req('session','/auth/session',first.token);if(!who.passed||who.data.user_id!==first.id)exec.test.abort('Synthetic identity does not match target');
- const expired=req('expired_session','/auth/session',fixture.expired_token,null,401);if(!expired.passed)exec.test.abort('Expired session was accepted');
+ const expired=req('expired_session','/auth/session',fixture.expired_token,null,401);if(!expired.passed)exec.test.abort('Expired session did not return the required 401');
  const privateCheck=req('outsider_history','/marketplace/conversations/'+first.conversation+'/messages?limit=40&mark_read=false',peer.token,null,404);
  if(!privateCheck.passed)exec.test.abort('Conversation outsider authorization failed');
  return {run_id:fixture.run_id};
 }
 export default function(){
- if(!actor){actor=sessions[exec.vu.idInTest-1];if(!actor)exec.test.abort('Generator requested more VUs than distinct identities');started.add(1);const session=req('session','/auth/session',actor.token);if(!session.passed||session.data.user_id!==actor.id)exec.test.abort('Session binding failed');loggedIn=true;sleep(Math.random()*3);}
+ if(!actor){actor={...sessions[exec.vu.idInTest-1]};if(!actor.id)exec.test.abort('Generator requested more VUs than distinct identities');started.add(1);const login=req('login','/auth/login',null,{email:actor.email,password:fixture.password});if(!login.passed||login.data.user_id!==actor.id||!login.data.access_token)exec.test.abort('Synthetic login failed');actor.token=login.data.access_token;const session=req('session','/auth/session',actor.token);if(!session.passed||session.data.user_id!==actor.id)exec.test.abort('Session binding failed');loggedIn=true;sleep(Math.random()*3);}
  if(!loggedIn)return;
  actions.add(1);cycle++;
  const activity=cycle===1?'chat':chooseActivity(mix,Math.random()*100);

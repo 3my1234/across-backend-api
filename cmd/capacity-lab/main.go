@@ -111,6 +111,8 @@ func main() {
 		must(exportSessions(ctx, db, os.Stdout))
 	case "verify-sessions":
 		must(verifySessions(ctx, db, os.Stdout))
+	case "lifecycle":
+		must(sessionLifecycle(ctx, db, os.Stdout))
 	default:
 		log.Fatal("Expected seed or run")
 	}

@@ -39,6 +39,7 @@ jobs:
           data.pop('sessions')
           Path('session-exchange/run.json').write_text(json.dumps(data))
           PY
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps lifecycle > session-evidence/lifecycle.jsonl
       - name: Run small HTTP session workload and capture resources
         run: |
           (

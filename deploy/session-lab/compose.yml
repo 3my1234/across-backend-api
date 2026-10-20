@@ -1,6 +1,13 @@
 # Overlay on the disposable capacity-lab only. The shared volume holds only
 # synthetic fixtures; never use production mounts or expose ports.
 services:
+  lifecycle:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, lifecycle]
+    environment: {CAPACITY_LAB: disposable-compose-only}
+    networks: [lab]
+    cpus: 0.5
+    mem_limit: 256m
   exporter:
     image: atlxpres-capacity-lab:local
     command: [/app/lab, prepare-sessions]
