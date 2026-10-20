@@ -64,25 +64,30 @@ jobs:
       - name: Check replica failover and recovery in the disposable lab only
         run: |
           docker compose -f deploy/capacity-lab/compose.yml stop api1
-          trap 'docker compose -f deploy/capacity-lab/compose.yml start api1' EXIT
+          trap 'docker start atlxpres-capacity-lab-api1-1' EXIT
           # Measure convergence instead of assuming three seconds exceeds the
           # health-check fall count, connect timeout and request retries.
           recovered=false
+          consecutive=0
+          began=$(date +%s)
           for attempt in $(seq 1 15); do
             if docker compose -f deploy/capacity-lab/compose.yml exec -T api2 curl -fsS --max-time 3 -D - http://gateway:8080/api/v1/ready > session-evidence/failover-attempt.log; then
-              echo "Converged on attempt $attempt (two-second intervals, three-second request bound)" >> session-evidence/failover.log
-              recovered=true
-              break
+              grep -qi 'x-lab-backend: api2' session-evidence/failover-attempt.log
+              cat session-evidence/failover-attempt.log >> session-evidence/failover.log
+              consecutive=$((consecutive + 1))
+              if [ "$consecutive" -eq 3 ]; then
+                echo "Three consecutive survivor responses after $(( $(date +%s) - began )) seconds; attempt $attempt" >> session-evidence/failover.log
+                recovered=true
+                break
+              fi
+            else
+              consecutive=0
             fi
             sleep 2
           done
           test "$recovered" = true
-          for attempt in 1 2 3; do
-            docker compose -f deploy/capacity-lab/compose.yml exec -T api2 curl -fsS --max-time 3 -D - http://gateway:8080/api/v1/ready > session-evidence/failover-attempt.log
-            grep -qi 'x-lab-backend: api2' session-evidence/failover-attempt.log
-            cat session-evidence/failover-attempt.log >> session-evidence/failover.log
-          done
-          docker compose -f deploy/capacity-lab/compose.yml start api1
+          # Start exactly the stopped API; Compose start would also rerun seed.
+          docker start atlxpres-capacity-lab-api1-1
           sleep 4
           docker compose -f deploy/capacity-lab/compose.yml exec -T api2 curl -fsS http://api1:8080/api/v1/ready >> session-evidence/failover.log
       - name: Collect evidence without fixtures or session tokens
