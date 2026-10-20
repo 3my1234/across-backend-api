@@ -58,8 +58,11 @@ sessions remain concurrent sessions. There are zero WebSocket connections.
 Sessions think 3–12 seconds with startup jitter. Initial mixed weights are 40%
 browse/search/details, 30% marketplace chat, 20% admitted Town Hall, 5% Support,
 5% admin overview. `chat-heavy` uses 15/50/30/3/2. These are explicit assumptions,
-not measured production proportions. Polling here samples active-session behavior;
-it does not reproduce every app timer simultaneously. All seeded providers are
+not measured production proportions. Every VU now keeps its conversation polling
+independently at 15-second intervals while thinking or browsing. HTTP operations
+within a VU remain sequential, so a slow request can delay its timer; missed ticks
+produce one current poll rather than a catch-up burst. This does not reproduce
+every browser/native timer simultaneously. All seeded providers are
 mixed; separate lifecycle checks cover product and service onboarding identities.
 
 Every first iteration sends an idempotent marketplace message and verifies an
@@ -87,6 +90,9 @@ larger workloads need reviewed sharded verification rather than silent sampling.
   capacity, not a promised simultaneous-user count.
 - Zero duplicated/missing confirmed database writes. Media/transaction state
   reconciliation is not yet available and is never implied by message counts.
+- Incoming polling observation p95 <17 seconds and p99 <20 seconds, declared
+  around the 15-second timer plus server/generator scheduling budget. These are
+  polling-service gates, not an instant-message or phone-push promise.
 - Aggregate gates abort unhealthy traffic early, and stage-specific evidence must
   pass before ramping further. Do not override thresholds after seeing a failure.
 
@@ -116,15 +122,16 @@ before claiming production-like topology tests. Do not substitute production IPs
 
 ## Outstanding qualification
 
-Upload-heavy mode fails immediately: there is no isolated real object-storage
-transport yet. Do not pretend presign-only requests represent uploads. Workers
+Upload-heavy mode still fails immediately: the separate six-photo correctness
+check below is not a scalable upload workload. Do not pretend presign-only
+requests or six sequential transfers represent media capacity. Workers
 are not started. A separate check exercises the real native-push batch dispatcher
 through an in-memory HTTP transport: upstream 503, durable retry, stale sending
 lease recovery and complete submission to the mock. It does not prove vendor,
 device delivery, full worker-process restart or sustainable queue throughput.
 CI also stops one disposable API, records bounded routing convergence, requires
 three successes on the survivor and checks readiness after restarting the API.
-Cold/warm comparison, real-media size mix, signup/search/upload spikes, fault
+Cold/warm comparison, concurrent media size mix, signup/search/upload spikes, fault
 of dependencies, backup restore and payment sandbox callbacks remain explicit gaps.
 See `docs/LAUNCH_ARCHITECTURE_AND_COVERAGE.md` for route-level coverage and
 `docs/LAUNCH_RELIABILITY_GATE.md` for device and production launch requirements.
@@ -134,3 +141,27 @@ Official tool references:
 - https://grafana.com/docs/k6/latest/using-k6/thresholds/
 - https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/dropped-iterations/
 - https://github.com/grafana/k6/releases/tag/v2.3.0
+
+## Real-byte isolated photo correctness
+
+The **Isolated photo roundtrip** workflow layers `media-compose.yml` on the lab.
+It builds pinned upstream MinIO source at RELEASE.2025-10-15T17-29-55Z and creates
+a one-day disposable TLS identity. Only the internal Docker network resolves the
+synthetic bucket hostname to this server; there are no published ports or runtime
+egress. All credentials and certificates are synthetic. Actual API configuration
+and S3 signing code are exercised unchanged, with normal TLS verification.
+
+`/app/lab media-check` creates only its fixed disposable bucket. It generates
+valid JPEGs at 256, 1,024 and 2,048 pixels square and sends each in both directions:
+presign, actual PUT, message attachment with HEAD validation, recipient history
+and actual signed GET. Recipient hashes must equal upload hashes; message replay
+must be idempotent. Incomplete uploads, wrong-owner keys and unsigned private
+downloads must be rejected. Six confirmations must match six durable messages.
+Signed links, fixtures and TLS private keys are excluded from artifacts.
+
+This proves selected S3-compatible semantics and application roundtrips. It does
+not establish AWS IAM/CORS correctness, mobile/browser transfer latency, concurrent
+media capacity or background notification display. Source references:
+https://github.com/minio/minio/tree/RELEASE.2025-10-15T17-29-55Z
+https://github.com/minio/minio/blob/master/docs/config/README.md
+https://github.com/minio/minio/blob/master/docs/tls/README.md

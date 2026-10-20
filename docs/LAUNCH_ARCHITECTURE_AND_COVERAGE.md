@@ -55,7 +55,7 @@ report. Existing test coverage is correctness coverage, not proof at 12,000 user
 | Provider profile update | PATCH /providers/me | Existing API; not yet in session workload |
 | Service/product create/edit/submit/archive | /providers/me/listings and /products routes | Existing provider policy integration tests; not yet a full session lifecycle under traffic |
 | Admin moderation | /admin/providers, /provider-listings, /merchant-products | Existing correctness tests; session workload currently reads business overview only |
-| Image presign/PUT/GET | /marketplace/chat-images/presign; S3 URLs | Source inspected; isolated real-storage transport is missing; upload-heavy mode is explicitly blocked |
+| Image presign/PUT/GET | /marketplace/chat-images/presign; S3 URLs | Six bidirectional real-byte JPEG roundtrips against internal TLS S3-compatible server; hashes, ownership, incomplete-object and unsigned access checks. AWS/device/concurrent capacity unqualified; upload-heavy mode still blocked |
 | Video complete/limits | POST /providers/me/videos/complete | Existing mocked storage/ffprobe policy tests; no media throughput claim |
 | Inbox/unread | GET /chat/inbox | New session workload; separate unread correctness tests exist |
 | Marketplace send/history | /marketplace/conversations and /providers/me/conversations | New bidirectional activity, retry with same client id, recipient polling observations, DB reconciliation and complete post-run peer visibility |
