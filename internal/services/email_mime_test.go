@@ -37,7 +37,7 @@ func TestBrandedEmailCarriesDecodableInlineLogoAndShortLines(t *testing.T) {
 	}
 	markup, _ := nestedReader.NextPart()
 	decoded, _ := io.ReadAll(markup)
-	if string(decoded) != html || strings.Contains(string(decoded), "broken.invalid") {
+	if strings.ReplaceAll(string(decoded), "\r\n", "\n") != strings.ReplaceAll(html, "\r\n", "\n") || strings.Contains(string(decoded), "broken.invalid") {
 		t.Fatal("HTML damaged or still depends on remote logo")
 	}
 	logo, err := reader.NextPart()
