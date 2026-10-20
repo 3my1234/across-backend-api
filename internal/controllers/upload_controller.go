@@ -158,6 +158,19 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if strings.HasPrefix(key, "private/") || strings.Contains(key, "/verification/") {
 		return fiber.ErrNotFound
 	}
+	avatar := c.Query("avatar") == "1"
+	if avatar {
+		if cached := cachedNotificationAvatar(key); cached != nil {
+			return sendNotificationAvatar(c, key, cached)
+		}
+		select {
+		case avatarFetchSlots <- struct{}{}:
+			defer func() { <-avatarFetchSlots }()
+		default:
+			c.Set("Retry-After", "2")
+			return fiber.NewError(503, "Avatar service is busy")
+		}
+	}
 	isAVIF := strings.EqualFold(filepath.Ext(key), ".avif")
 	getURL, err := u.s3.ObjectGetURL(key, 10*time.Minute)
 	if err != nil {
@@ -176,7 +189,7 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	}
 	// AVIF objects must be fetched whole before transcoding. Forwarding a client
 	// range would leave the decoder with an incomplete image payload.
-	if rangeHeader := c.Get("Range"); rangeHeader != "" && !isAVIF {
+	if rangeHeader := c.Get("Range"); rangeHeader != "" && !isAVIF && !avatar {
 		req.Header.Set("Range", rangeHeader)
 	}
 	client := u.mediaClient
@@ -198,6 +211,9 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		return fiber.NewError(resp.StatusCode, "media unavailable")
 	}
 	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "video/") {
+		if avatar {
+			return fiber.ErrBadRequest
+		}
 		for _, header := range []string{"Content-Type", "Content-Length", "ETag", "Last-Modified", "Accept-Ranges", "Content-Range"} {
 			if value := resp.Header.Get(header); value != "" {
 				c.Set(header, value)
@@ -220,15 +236,35 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		return readErr
 	}
 	if isAVIF || strings.EqualFold(resp.Header.Get("Content-Type"), "image/avif") {
+		if avatar {
+			meta, err := avif.DecodeConfig(bytes.NewReader(data))
+			if err != nil || meta.Width <= 0 || meta.Height <= 0 || int64(meta.Width)*int64(meta.Height) > 16<<20 {
+				return fiber.NewError(502, "Avatar format or dimensions unavailable")
+			}
+		}
 		converted, err := transcodeAVIFToJPEG(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("public AVIF conversion failed: key=%s err=%v", key, err)
 			return fiber.NewError(fiber.StatusBadGateway, "media conversion failed")
 		}
+		if avatar {
+			cropped, err := circularNotificationAvatar(converted)
+			if err != nil {
+				return err
+			}
+			return sendNotificationAvatar(c, key, cropped)
+		}
 		c.Set("Content-Type", "image/jpeg")
 		c.Set("Content-Length", fmt.Sprintf("%d", len(converted)))
 		c.Set("Cache-Control", "public, max-age=2592000, immutable")
 		return c.Send(converted)
+	}
+	if avatar {
+		cropped, err := circularNotificationAvatar(data)
+		if err != nil {
+			return err
+		}
+		return sendNotificationAvatar(c, key, cropped)
 	}
 	for _, header := range []string{"Content-Type", "Content-Length", "ETag", "Last-Modified", "Accept-Ranges", "Content-Range"} {
 		if value := resp.Header.Get(header); value != "" {

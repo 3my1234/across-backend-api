@@ -46,7 +46,7 @@ func (s *MessageReceiptsController) BatchDelivered(c *fiber.Ctx) error {
 	}
 	payload, _ := json.Marshal(in.Messages)
 	_, err = s.db.Exec(ctx, `WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS i(channel text,conversation_id uuid,message_id uuid)),eligible AS (
- SELECT i.* FROM input i JOIN provider_conversation_messages m ON i.channel='business' AND m.id=i.message_id AND m.conversation_id=i.conversation_id JOIN provider_conversations c ON c.id=m.conversation_id
+ SELECT i.* FROM input i JOIN provider_conversation_messages m ON i.channel='business' AND m.id=i.message_id AND m.conversation_id IN (`+businessThreadMembers("i.conversation_id")+`) JOIN provider_conversations c ON c.id=m.conversation_id
  WHERE $3='user' AND (c.user_id=$2::uuid OR EXISTS(SELECT 1 FROM provider_members p WHERE p.provider_id=c.provider_id AND p.user_id=$2::uuid AND p.is_active)) AND m.sender_type<>CASE WHEN c.user_id=$2::uuid THEN 'buyer' ELSE 'provider' END
  UNION ALL SELECT i.* FROM input i JOIN chat_messages m ON i.channel='shared' AND m.id=i.message_id AND m.room_id=i.conversation_id JOIN chat_participants p ON p.room_id=m.room_id AND p.user_id=$2::uuid AND p.state='active' WHERE $3='user' AND m.sender_user_id<>$2::uuid
  UNION ALL SELECT i.* FROM input i JOIN support_messages m ON i.channel='support' AND m.id=i.message_id AND m.ticket_id=i.conversation_id JOIN support_tickets t ON t.id=m.ticket_id WHERE ($3='admin' OR t.user_id=$2::uuid) AND m.sender_type<>$3
@@ -120,7 +120,7 @@ func (s *MessageReceiptsController) source(ctx context.Context, channel, room, k
 		if kind != "user" {
 			return "", "", fiber.ErrForbidden
 		}
-		source = `SELECT id,sender_user_id AS sender_id,'user'::text AS sender_actor_type,sender_type FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND id=ANY($2::uuid[])`
+		source = `SELECT id,sender_user_id AS sender_id,'user'::text AS sender_actor_type,sender_type FROM provider_conversation_messages WHERE conversation_id IN (` + businessThreadMembers("$1::uuid") + `) AND id=ANY($2::uuid[])`
 		err := s.db.QueryRow(ctx, `SELECT CASE WHEN c.user_id=$2::uuid THEN 'buyer' ELSE 'provider' END FROM provider_conversations c WHERE c.id=$1::uuid AND (c.user_id=$2::uuid OR EXISTS(SELECT 1 FROM provider_members p WHERE p.provider_id=c.provider_id AND p.user_id=$2::uuid AND p.is_active))`, room, actor).Scan(&side)
 		if err == pgx.ErrNoRows {
 			return "", "", fiber.ErrForbidden
@@ -224,7 +224,7 @@ func (s *MessageReceiptsController) Status(c *fiber.Ctx) error {
 	rows, err := s.db.Query(ctx, `SELECT m.id::text,count(r.message_id)::int,
  count(r.message_id) FILTER(WHERE r.read_at IS NOT NULL AND COALESCE(reader.read_receipts_enabled,true) AND COALESCE(own.read_receipts_enabled,true))::int
  FROM (`+source+`) m
- LEFT JOIN message_receipts r ON r.channel=$3 AND r.message_id=m.id AND r.conversation_id=$1::uuid
+ LEFT JOIN message_receipts r ON r.channel=$3 AND r.message_id=m.id
  LEFT JOIN messaging_preferences reader ON reader.actor_type=r.recipient_type AND reader.actor_id=r.recipient_id
  LEFT JOIN messaging_preferences own ON own.actor_type=$5 AND own.actor_id=$4::uuid
  WHERE m.sender_id=$4::uuid AND m.sender_actor_type=$5 GROUP BY m.id`, room, ids, channel, actor, kind)

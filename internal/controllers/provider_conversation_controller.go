@@ -30,6 +30,9 @@ func linkRequestConversation(ctx context.Context, tx pgx.Tx, requestID string) (
 	 SELECT $2::uuid,'buyer',user_id,left(initcap(request_type)||' request'||CASE WHEN btrim(message)<>'' THEN ': '||btrim(message) ELSE '' END,2000),created_at,id
 	 FROM provider_requests WHERE id=$1::uuid
 	 ON CONFLICT(source_request_id) WHERE source_request_id IS NOT NULL DO NOTHING`, requestID, conversationID)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT COALESCE(to_jsonb(c)->>'thread_id',c.id::text) FROM provider_conversations c WHERE c.id=$1::uuid`, conversationID).Scan(&conversationID)
+	}
 	return conversationID, err
 }
 
@@ -93,6 +96,17 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	var threadID string
+	var blocked bool
+	if err = tx.QueryRow(c.Context(), `SELECT COALESCE(to_jsonb(c)->>'thread_id',c.id::text),EXISTS(SELECT 1 FROM provider_conversations b WHERE b.id IN (`+businessThreadMembers("c.id")+`) AND b.status='blocked') FROM provider_conversations c WHERE c.id=$1::uuid`, conversationID).Scan(&threadID, &blocked); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if blocked {
+		return fiber.NewError(409, "This conversation is blocked")
+	}
+	if _, err = tx.Exec(c.Context(), `UPDATE provider_conversations SET status='open' WHERE id=$1::uuid AND status<>'blocked'`, threadID); err != nil {
+		return fiber.ErrInternalServerError
+	}
 	messageID, savedAt, fresh, err := insertConversationMessage(c.Context(), tx, conversationID, "buyer", userID, message)
 	if err != nil {
 		return err
@@ -101,7 +115,7 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 		return fiber.ErrInternalServerError
 	}
 	if fresh {
-		if err = queueProviderActivityTx(c.Context(), tx, providerID, c.Params("listing_id"), "conversation_message", map[string]any{"conversation_id": conversationID, "listing_title": listingTitle, "product_id": c.Params("product_id"), "message": body}); err != nil {
+		if err = queueProviderActivityTx(c.Context(), tx, providerID, c.Params("listing_id"), "conversation_message", map[string]any{"conversation_id": threadID, "listing_title": listingTitle, "product_id": c.Params("product_id"), "message": body, "sender_user_id": userID}); err != nil {
 			return fiber.ErrInternalServerError
 		}
 	}
@@ -113,7 +127,7 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 	if fresh {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": conversationID, "message_id": messageID, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys), "location": message.Location})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": threadID, "message_id": messageID, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys), "location": message.Location})
 }
 
 func scanConversationRows(rows pgx.Rows) ([]fiber.Map, error) {
@@ -183,12 +197,16 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 	}
 	c.Set("Cache-Control", "private, no-store")
 	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title),p.business_name,c.status,
-		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
+		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id IN (`+businessThreadMembers("c.id")+`) ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
-		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='provider' AND created_at>COALESCE(c.buyer_last_read_at,'epoch'::timestamptz)),
+		(SELECT count(*)::int FROM provider_conversation_messages msg JOIN provider_conversations physical ON physical.id=msg.conversation_id WHERE physical.id IN (`+businessThreadMembers("c.id")+`) AND msg.sender_type='provider' AND msg.created_at>COALESCE(physical.buyer_last_read_at,'epoch'::timestamptz)),
 		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN provider_organizations p ON p.id=c.provider_id
-		WHERE c.user_id=$1::uuid AND ($8='' OR c.id=NULLIF($8,'')::uuid) AND ($7='' OR c.product_id=NULLIF($7,'')::uuid) AND ($3='' OR l.id=NULLIF($3,'')::uuid) AND ($4::timestamptz IS NULL OR (c.last_message_at,c.id)<($4::timestamptz,NULLIF($5,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $6`, userID, !m.subscriptionsRequired(), listingID, page.CursorTime, page.CursorID, page.Limit+1, productID, lookup)
+		WHERE c.user_id=$1::uuid AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text)
+		AND ($8='' OR NULLIF($8,'')::uuid IN (`+businessThreadMembers("c.id")+`))
+		AND ($7='' OR EXISTS(SELECT 1 FROM provider_conversations linked WHERE linked.id IN (`+businessThreadMembers("c.id")+`) AND linked.product_id=NULLIF($7,'')::uuid))
+		AND ($3='' OR EXISTS(SELECT 1 FROM provider_conversations linked WHERE linked.id IN (`+businessThreadMembers("c.id")+`) AND linked.listing_id=NULLIF($3,'')::uuid))
+		AND ($4::timestamptz IS NULL OR (c.last_message_at,c.id)<($4::timestamptz,NULLIF($5,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $6`, userID, !m.subscriptionsRequired(), listingID, page.CursorTime, page.CursorID, page.Limit+1, productID, lookup)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -220,12 +238,12 @@ func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) 
 		}
 	}
 	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title),u.full_name,c.status,
-		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1),''),
+		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id IN (`+businessThreadMembers("c.id")+`) ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
-		(SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=c.id AND sender_type='buyer' AND created_at>COALESCE(c.provider_last_read_at,'epoch'::timestamptz)),
+		(SELECT count(*)::int FROM provider_conversation_messages msg JOIN provider_conversations physical ON physical.id=msg.conversation_id WHERE physical.id IN (`+businessThreadMembers("c.id")+`) AND msg.sender_type='buyer' AND msg.created_at>COALESCE(physical.provider_last_read_at,'epoch'::timestamptz)),
 		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN users u ON u.id=c.user_id
-		WHERE c.provider_id=$1::uuid AND ($6='' OR c.id=NULLIF($6,'')::uuid) AND ($3::timestamptz IS NULL OR (c.last_message_at,c.id)<($3::timestamptz,NULLIF($4,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $5`, providerID, !m.subscriptionsRequired(), page.CursorTime, page.CursorID, page.Limit+1, lookup)
+		WHERE c.provider_id=$1::uuid AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text) AND ($6='' OR NULLIF($6,'')::uuid IN (`+businessThreadMembers("c.id")+`)) AND ($3::timestamptz IS NULL OR (c.last_message_at,c.id)<($3::timestamptz,NULLIF($4,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $5`, providerID, !m.subscriptionsRequired(), page.CursorTime, page.CursorID, page.Limit+1, lookup)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -252,9 +270,9 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	}
 	var changed int64
 	if provider {
-		err = m.db.QueryRow(ctx, `SELECT COALESCE((to_jsonb(c)->>'history_revision')::bigint,-1) FROM provider_conversations c WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("conversation_id"), providerID).Scan(&changed)
+		err = m.db.QueryRow(ctx, `SELECT (SELECT sum(COALESCE((to_jsonb(peer)->>'history_revision')::bigint,-1))::bigint FROM provider_conversations peer WHERE peer.id IN (`+businessThreadMembers("c.id")+`)) FROM provider_conversations c WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("conversation_id"), providerID).Scan(&changed)
 	} else {
-		err = m.db.QueryRow(ctx, `SELECT COALESCE((to_jsonb(c)->>'history_revision')::bigint,-1) FROM provider_conversations c WHERE id=$1::uuid AND user_id=$2::uuid`, c.Params("conversation_id"), userID).Scan(&changed)
+		err = m.db.QueryRow(ctx, `SELECT (SELECT sum(COALESCE((to_jsonb(peer)->>'history_revision')::bigint,-1))::bigint FROM provider_conversations peer WHERE peer.id IN (`+businessThreadMembers("c.id")+`)) FROM provider_conversations c WHERE id=$1::uuid AND user_id=$2::uuid`, c.Params("conversation_id"), userID).Scan(&changed)
 	}
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
@@ -275,7 +293,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	}
 	c.Set("Cache-Control", "private, no-store")
 	// A five-minute epoch refreshes private signed URLs even without new messages.
-	etag := fmt.Sprintf("\"%x\"", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%d:%d", c.Params("conversation_id"), changed, c.Query("cursor"), page.Limit, time.Now().Unix()/300))))
+	etag := fmt.Sprintf("\"%x\"", sha256.Sum256([]byte(fmt.Sprintf("thread-v1:%s:%d:%s:%d:%d", c.Params("conversation_id"), changed, c.Query("cursor"), page.Limit, time.Now().Unix()/300))))
 	// A rolling deployment with migrations disabled must still load chat. Enable
 	// conditional reads only once migration 074 is present, never cache revision -1.
 	if changed >= 0 {
@@ -284,7 +302,9 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	if changed >= 0 && !c.QueryBool("mark_read", true) && c.Get("If-None-Match") == etag {
 		return c.SendStatus(fiber.StatusNotModified)
 	}
-	rows, err := m.db.Query(ctx, `SELECT id::text,sender_type,body,created_at,media_keys,to_jsonb(provider_conversation_messages)->'location' FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4`, c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(ctx, `SELECT msg.id::text,msg.sender_type,msg.body,msg.created_at,msg.media_keys,to_jsonb(msg)->'location',COALESCE(to_jsonb(msg)->'context','{}'::jsonb)
+	FROM provider_conversation_messages msg
+	WHERE msg.conversation_id IN (`+businessThreadMembers("$1::uuid")+`) AND ($2::timestamptz IS NULL OR (msg.created_at,msg.id)<($2,$3::uuid)) ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4`, c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -294,11 +314,11 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 		var id, senderType, body string
 		var createdAt time.Time
 		var mediaKeys []string
-		var location json.RawMessage
-		if rows.Scan(&id, &senderType, &body, &createdAt, &mediaKeys, &location) != nil {
+		var location, context json.RawMessage
+		if rows.Scan(&id, &senderType, &body, &createdAt, &mediaKeys, &location, &context) != nil {
 			return fiber.ErrInternalServerError
 		}
-		items = append(items, fiber.Map{"id": id, "sender_type": senderType, "body": body, "created_at": createdAt, "media_urls": m.chatMediaURLs(mediaKeys), "location": location})
+		items = append(items, fiber.Map{"id": id, "sender_type": senderType, "body": body, "created_at": createdAt, "media_urls": m.chatMediaURLs(mediaKeys), "location": location, "context": context})
 	}
 	if rows.Err() != nil {
 		return fiber.ErrInternalServerError
@@ -316,7 +336,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 		if provider {
 			column = "provider_last_read_at"
 		}
-		if _, err = m.db.Exec(ctx, "UPDATE provider_conversations SET "+column+"=GREATEST(COALESCE("+column+",'epoch'::timestamptz),$2) WHERE id=$1::uuid", c.Params("conversation_id"), items[0]["created_at"]); err != nil {
+		if _, err = m.db.Exec(ctx, "UPDATE provider_conversations SET "+column+"=GREATEST(COALESCE("+column+",'epoch'::timestamptz),$2) WHERE id IN ("+businessThreadMembers("$1::uuid")+")", c.Params("conversation_id"), items[0]["created_at"]); err != nil {
 			return fiber.ErrInternalServerError
 		}
 	}
@@ -366,6 +386,14 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	var writeID, threadID string
+	var blocked bool
+	if err = m.db.QueryRow(c.Context(), `SELECT COALESCE(to_jsonb(root)->>'thread_id',root.id::text),COALESCE((SELECT msg.conversation_id::text FROM provider_conversation_messages msg WHERE msg.conversation_id IN (`+businessThreadMembers("root.id")+`) ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1),root.id::text),EXISTS(SELECT 1 FROM provider_conversations b WHERE b.id IN (`+businessThreadMembers("root.id")+`) AND b.status='blocked') FROM provider_conversations root WHERE root.id=$1::uuid`, c.Params("conversation_id")).Scan(&threadID, &writeID, &blocked); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if blocked {
+		return fiber.NewError(409, "This conversation is blocked")
+	}
 	senderType := "buyer"
 	readColumn := "buyer_last_read_at"
 	if provider {
@@ -377,15 +405,15 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 		return fiber.ErrInternalServerError
 	}
 	defer tx.Rollback(c.Context())
-	messageID, savedAt, fresh, err := insertConversationMessage(c.Context(), tx, c.Params("conversation_id"), senderType, userID, message)
+	messageID, savedAt, fresh, err := insertConversationMessage(c.Context(), tx, writeID, senderType, userID, message)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(c.Context(), "UPDATE provider_conversations SET last_message_at=GREATEST(last_message_at,$2::timestamptz),"+readColumn+"=now(),updated_at=now() WHERE id=$1::uuid", c.Params("conversation_id"), savedAt); err != nil {
+	if _, err = tx.Exec(c.Context(), "UPDATE provider_conversations SET last_message_at=GREATEST(last_message_at,$2::timestamptz),"+readColumn+"=now(),updated_at=now() WHERE id=$1::uuid", writeID, savedAt); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if fresh && !provider {
-		if err = queueProviderActivityTx(c.Context(), tx, providerID, listingID, "conversation_message", map[string]any{"conversation_id": c.Params("conversation_id"), "listing_title": listingTitle, "product_id": productID, "message": body}); err != nil {
+		if err = queueProviderActivityTx(c.Context(), tx, providerID, listingID, "conversation_message", map[string]any{"conversation_id": threadID, "listing_title": listingTitle, "product_id": productID, "message": body, "sender_user_id": userID}); err != nil {
 			return fiber.ErrInternalServerError
 		}
 	}
@@ -395,7 +423,7 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	notifyCtx, cancelNotify := context.WithTimeout(c.Context(), 2*time.Second)
 	defer cancelNotify()
 	if fresh && provider {
-		_ = CreateNotificationOnce(notifyCtx, m.db, buyerID, "", nil, "marketplace_message", "New provider message", body, map[string]any{"conversation_id": c.Params("conversation_id"), "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": listingTitle}, "buyer-provider-message:"+messageID.String())
+		_ = CreateNotificationOnce(notifyCtx, m.db, buyerID, "", nil, "marketplace_message", "New provider message", body, map[string]any{"conversation_id": threadID, "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": listingTitle, "sender_user_id": userID, "sender_is_provider": true}, "buyer-provider-message:"+messageID.String())
 	} else if fresh {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}
@@ -437,13 +465,13 @@ func (m *ProviderMarketplaceController) markConversationRead(c *fiber.Ctx, provi
 		column, owner, sender = "provider_last_read_at", "provider_id", "buyer"
 	}
 	var cutoff time.Time
-	query := `UPDATE provider_conversations c SET ` + column + `=GREATEST(COALESCE(c.` + column + `,'epoch'::timestamptz),m.created_at)
- FROM provider_conversation_messages m WHERE c.id=$1::uuid AND c.` + owner + `=$2::uuid AND m.conversation_id=c.id AND m.id=$3::uuid RETURNING c.` + column
+	query := `WITH authorized AS (SELECT m.created_at FROM provider_conversations root JOIN provider_conversation_messages m ON m.conversation_id IN (` + businessThreadMembers("root.id") + `) WHERE root.id=$1::uuid AND root.` + owner + `=$2::uuid AND m.id=$3::uuid),marked AS (
+ UPDATE provider_conversations c SET ` + column + `=GREATEST(COALESCE(c.` + column + `,'epoch'::timestamptz),authorized.created_at) FROM authorized WHERE c.id IN (` + businessThreadMembers("$1::uuid") + `) RETURNING c.` + column + `) SELECT max(` + column + `) FROM marked HAVING count(*)>0`
 	if err := m.db.QueryRow(c.Context(), query, c.Params("conversation_id"), actor, req.MessageID).Scan(&cutoff); err != nil {
 		return fiber.ErrNotFound
 	}
 	var unread int
-	if err := m.db.QueryRow(c.Context(), `SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id=$1::uuid AND sender_type=$2 AND created_at>$3`, c.Params("conversation_id"), sender, cutoff).Scan(&unread); err != nil {
+	if err := m.db.QueryRow(c.Context(), `SELECT count(*)::int FROM provider_conversation_messages WHERE conversation_id IN (`+businessThreadMembers("$1::uuid")+`) AND sender_type=$2 AND created_at>$3`, c.Params("conversation_id"), sender, cutoff).Scan(&unread); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	return c.JSON(fiber.Map{"unread_count": unread})
