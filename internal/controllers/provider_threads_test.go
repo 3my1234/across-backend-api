@@ -43,7 +43,7 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 			t.Fatal(name, e)
 		}
 	}
-	for _, name := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "073_provider_web_push.sql", "076_web_push_destinations.sql", "085_provider_native_notifications.sql", "090_provider_notification_conflict_target.sql"} {
+	for _, name := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql", "073_provider_web_push.sql", "076_web_push_destinations.sql", "085_provider_native_notifications.sql", "090_provider_notification_conflict_target.sql"} {
 		apply(name)
 	}
 	buyer, owner, other, provider := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
