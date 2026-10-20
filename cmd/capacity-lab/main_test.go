@@ -120,6 +120,19 @@ func TestDatabaseCeilingRemainsBounded(t *testing.T) {
 	}
 }
 
+func TestSessionFixtureBounds(t *testing.T) {
+	for _, value := range []string{"", "10", "100", "6000"} {
+		if _, err := actorPairCount(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"0", "9", "11", "6001", "1000000", "NaN", "10;DROP TABLE users"} {
+		if _, err := actorPairCount(value); err == nil {
+			t.Fatalf("unsafe fixture bound accepted: %s", value)
+		}
+	}
+}
+
 func TestBusyRoomOperationsUseAdmittedProviderIdentity(t *testing.T) {
 	a := actor{Buyer: uuid.NewString(), ProviderUser: uuid.NewString(), Room: uuid.NewString(), HotRoom: uuid.NewString()}
 	want := map[string]bool{"busy_room_history": false, "busy_room_send": false, "town_hall_offer": false}

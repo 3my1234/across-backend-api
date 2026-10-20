@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type actor struct{ Buyer, ProviderUser, Provider, Listing, Conversation, Room, T
 
 type fixturePlan struct {
 	Name                                           string
+	Pairs                                          int
 	OlderRooms, ConversationHistory, ExtraListings int
 	Busy                                           bool
 }
@@ -37,7 +39,11 @@ func scenarioPlan(name string) (fixturePlan, error) {
 	if name == "" {
 		name = "standard"
 	}
-	p := fixturePlan{Name: name, OlderRooms: 19, ConversationHistory: 100}
+	pairs, err := actorPairCount(os.Getenv("LAB_ACTOR_PAIRS"))
+	if err != nil {
+		return fixturePlan{}, err
+	}
+	p := fixturePlan{Name: name, Pairs: pairs, OlderRooms: 19, ConversationHistory: 100}
 	switch name {
 	case "standard":
 	case "busy":
@@ -55,6 +61,17 @@ func scenarioPlan(name string) (fixturePlan, error) {
 		return p, fmt.Errorf("LAB_SCENARIO must be standard, busy, large or large-busy")
 	}
 	return p, nil
+}
+
+func actorPairCount(value string) (int, error) {
+	if value == "" {
+		return 100, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 10 || n > 6000 || n%10 != 0 {
+		return 0, fmt.Errorf("LAB_ACTOR_PAIRS must be a multiple of 10 between 10 and 6000")
+	}
+	return n, nil
 }
 
 func databaseCPU(value string) (string, error) {
@@ -87,6 +104,13 @@ func main() {
 		must(seed(ctx, db))
 	case "run":
 		must(run(ctx, db))
+	case "export":
+		must(exportSessions(ctx, db, os.Stdout))
+	case "prepare-sessions":
+		must(prepareSessions(ctx, db))
+		must(exportSessions(ctx, db, os.Stdout))
+	case "verify-sessions":
+		must(verifySessions(ctx, db, os.Stdout))
 	default:
 		log.Fatal("Expected seed or run")
 	}
@@ -112,7 +136,7 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
 	_, err = tx.Exec(ctx, fmt.Sprintf(`CREATE TABLE capacity_lab_identity (marker text PRIMARY KEY,scenario text NOT NULL);
  INSERT INTO capacity_lab_identity VALUES ('disposable-compose-only','%s');
  CREATE TABLE capacity_lab_actors (buyer uuid,provider_user uuid,provider uuid,listing uuid,conversation uuid,room uuid,ticket uuid,slot int UNIQUE,hot_room uuid);
- INSERT INTO capacity_lab_actors SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),i,NULL FROM generate_series(1,100) i;
+ INSERT INTO capacity_lab_actors SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),i,NULL FROM generate_series(1,%d) i;
  INSERT INTO countries_config(country_code,currency_code) VALUES ('NG','NGN') ON CONFLICT(country_code) DO NOTHING;
  INSERT INTO users(id,country_id,email,password_hash,full_name,email_verified)
  SELECT id,(SELECT id FROM countries_config WHERE country_code='NG'),id::text||'@example.invalid','unusable','Synthetic lab actor',true
@@ -153,7 +177,7 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  INSERT INTO chat_messages(room_id,sender_user_id,body,client_message_id) SELECT id,owner_user_id,'Synthetic prior message',gen_random_uuid() FROM chat_rooms CROSS JOIN generate_series(1,10);
  INSERT INTO town_hall_offers(room_id,provider_id,sender_user_id,unit_price,terms) SELECT room,provider,provider_user,1000,'Synthetic prior offer' FROM capacity_lab_actors;
  INSERT INTO support_tickets(id,user_id,subject,message) SELECT ticket,buyer,'Synthetic support','Synthetic support' FROM capacity_lab_actors;
- INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`, plan.Name, plan.ExtraListings, plan.ExtraListings, plan.ConversationHistory, plan.OlderRooms))
+ INSERT INTO support_messages(ticket_id,sender_type,sender_id,message) SELECT ticket,'user',buyer,'Synthetic prior reply' FROM capacity_lab_actors CROSS JOIN generate_series(1,20);`, plan.Name, plan.Pairs, plan.ExtraListings, plan.ExtraListings, plan.ConversationHistory, plan.OlderRooms))
 	if err != nil {
 		return err
 	}
@@ -195,11 +219,11 @@ func checkFixtures(ctx context.Context, db *pgxpool.Pool, plan fixturePlan) (map
 	counts = map[string]int{"products": products, "listings": listings, "rooms": rooms, "hall_messages": hallMessages, "marketplace_messages": marketMessages, "busy_rooms": busyRooms}
 	extraRooms, extraMessages, wantBusy := 0, 0, 0
 	if plan.Busy {
-		extraRooms = 10
-		extraMessages = 5000
-		wantBusy = 10
+		extraRooms = plan.Pairs / 10
+		extraMessages = extraRooms * 500
+		wantBusy = extraRooms
 	}
-	if products != 100*(1+plan.ExtraListings) || listings != products || rooms != 100*(1+plan.OlderRooms)+extraRooms || hallMessages != 100*(1+plan.OlderRooms)*10+extraMessages || marketMessages != 100*plan.ConversationHistory || busyRooms != wantBusy {
+	if products != plan.Pairs*(1+plan.ExtraListings) || listings != products || rooms != plan.Pairs*(1+plan.OlderRooms)+extraRooms || hallMessages != plan.Pairs*(1+plan.OlderRooms)*10+extraMessages || marketMessages != plan.Pairs*plan.ConversationHistory || busyRooms != wantBusy {
 		return counts, fmt.Errorf("synthetic fixture shape mismatch: %v", counts)
 	}
 	return counts, nil

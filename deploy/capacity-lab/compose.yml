@@ -59,6 +59,7 @@ services:
       CAPACITY_LAB: disposable-compose-only
       LAB_SCENARIO: ${LAB_SCENARIO:-standard}
       LAB_DB_CPUS: ${LAB_DB_CPUS:-1}
+      LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-100}
     depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
     networks: [lab]
     cpus: 1
@@ -80,6 +81,7 @@ services:
       LAB_PROFILE: ${LAB_PROFILE:-smoke}
       LAB_SCENARIO: ${LAB_SCENARIO:-standard}
       LAB_DB_CPUS: ${LAB_DB_CPUS:-1}
+      LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-100}
     depends_on: {gateway: {condition: service_started}}
     networks: [lab]
     cpus: 1

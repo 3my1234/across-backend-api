@@ -1,0 +1,37 @@
+# Overlay on the disposable capacity-lab only. The shared volume holds only
+# synthetic fixtures; never use production mounts or expose ports.
+services:
+  exporter:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, prepare-sessions]
+    environment:
+      CAPACITY_LAB: disposable-compose-only
+      LAB_SCENARIO: ${LAB_SCENARIO:-busy}
+      LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-10}
+    depends_on: {gateway: {condition: service_started}}
+    networks: [lab]
+    cpus: 0.5
+    mem_limit: 256m
+  sessions:
+    image: grafana/k6:2.3.0
+    user: '0:0'
+    command: [run, --out, 'json=/exchange/timeseries.json', /suite/sessions.js]
+    environment:
+      K6_NO_USAGE_REPORT: 'true'
+      K6_NO_COLOR: 'true'
+      LAB_SESSION_PROFILE: ${LAB_SESSION_PROFILE:-smoke}
+      LAB_SESSION_TARGET: ${LAB_SESSION_TARGET:-4}
+      LAB_SESSION_MIX: ${LAB_SESSION_MIX:-mixed}
+      LAB_SESSION_APPROVAL: ${LAB_SESSION_APPROVAL:-}
+    volumes: [../session-lab:/suite:ro, '${LAB_EXCHANGE_DIR:?explicit disposable exchange directory required}:/exchange']
+    networks: [lab]
+    cpus: 1
+    mem_limit: 512m
+  verifier:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, verify-sessions]
+    environment: {CAPACITY_LAB: disposable-compose-only}
+    volumes: ['${LAB_EXCHANGE_DIR:?explicit disposable exchange directory required}:/exchange:ro']
+    networks: [lab]
+    cpus: 0.5
+    mem_limit: 256m

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {plan,validateFixture,requireApproval,RAMP,chooseActivity,mixes} from './policy.mjs';
+assert.deepEqual(RAMP,[100,500,1000,2500,5000,10000,12000]);
+for(const n of [0,1,12001.5,15001,NaN])assert.throws(()=>plan('stage',n));
+assert.throws(()=>plan('smoke',100));assert.throws(()=>plan('unknown',4));
+const fresh={schema:1,marker:'disposable-compose-only',origin:'http://gateway:8080',run_id:'00000000-0000-4000-8000-000000000001',expires_at:new Date(Date.now()+3600000).toISOString(),sessions:Array.from({length:4},(_,i)=>({id:'user-'+i,role:i%2?'provider':'buyer',email:i+'@example.invalid'}))};
+validateFixture(fresh,plan());
+for(const origin of ['https://api.atlxpres.com','https://staging.atlxpres.com','http://173.212.219.169','http://127.0.0.1:8080'])assert.throws(()=>validateFixture({...fresh,origin},plan()));
+assert.throws(()=>validateFixture({...fresh,sessions:[fresh.sessions[0],fresh.sessions[0],...fresh.sessions.slice(2)]},plan()));
+assert.throws(()=>validateFixture({...fresh,expires_at:'2000-01-01'},plan()));
+assert.throws(()=>validateFixture(fresh,plan('stage',12000)));
+const stage=plan('sustained',12000);assert.throws(()=>requireApproval(stage));
+const approval={authorized:true,environment:'isolated-staging',profile:'sustained',max_sessions:12000,max_duration_seconds:1800,spending_cap_usd:5,approved_at:new Date().toISOString()};requireApproval(stage,approval);
+for(const change of [{authorized:false},{max_sessions:100},{max_duration_seconds:600},{spending_cap_usd:-1},{approved_at:'bad'},{approved_at:'2000-01-01'},{profile:'soak'}])assert.throws(()=>requireApproval(stage,{...approval,...change}));
+requireApproval(plan(),null);
+assert.equal(chooseActivity(mixes.mixed,0),'browse');assert.equal(chooseActivity(mixes.mixed,99),'admin');
+for(const name of ['mixed','chat-heavy'])assert.equal(Object.values(mixes[name]).reduce((a,b)=>a+b,0),100);
+console.log('Session policy passed: explicit isolated target, unique identities, expiry, bounded smoke, 12000 stage plan and cost-approval gates.');

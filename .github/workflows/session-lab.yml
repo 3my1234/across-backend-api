@@ -1,0 +1,74 @@
+name: Isolated session smoke
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths: ['cmd/capacity-lab/**', 'deploy/session-lab/**', 'deploy/capacity-lab/**', '.github/workflows/session-lab.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LAB_SCENARIO: busy
+      LAB_ACTOR_PAIRS: '10'
+      LAB_SESSION_PROFILE: smoke
+      LAB_SESSION_TARGET: '4'
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.22.x'}
+      - name: Validate safeguards and accounting
+        run: |
+          node deploy/session-lab/test-policy.mjs
+          go test ./cmd/capacity-lab
+      - name: Start isolated application and fixtures
+        run: |
+          mkdir -p session-exchange session-evidence
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml pull sessions
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps exporter > session-exchange/fixtures.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          data.pop('sessions')
+          Path('session-exchange/run.json').write_text(json.dumps(data))
+          PY
+      - name: Run small HTTP session workload and capture resources
+        run: |
+          (
+            while true; do
+              date -u +%FT%TZ
+              docker stats --no-stream --format '{{json .}}'
+              docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -At -c "SELECT count(*) AS clients,count(*) FILTER(WHERE state='active') AS active,count(*) FILTER(WHERE wait_event_type='Lock') AS locks FROM pg_stat_activity WHERE backend_type='client backend';"
+              sleep 5
+            done
+          ) > session-evidence/resources.log 2>&1 &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps sessions > session-evidence/k6.log 2>&1
+      - name: Reconcile confirmed writes even on failed thresholds
+        if: always()
+        run: |
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
+      - name: Collect evidence without fixtures or session tokens
+        if: always()
+        run: |
+          mkdir -p session-evidence
+          test ! -f session-exchange/summary.json || cp session-exchange/summary.json session-evidence/
+          test ! -f session-exchange/timeseries.json || cp session-exchange/timeseries.json session-evidence/
+          docker compose -f deploy/capacity-lab/compose.yml logs --no-color > session-evidence/services.log
+          lscpu > session-evidence/generator-cpu.txt
+          free -h > session-evidence/generator-memory.txt
+          docker version > session-evidence/docker-version.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'session-smoke-${{ github.run_id }}', path: session-evidence/, retention-days: 14}
+      - name: Remove only disposable lab services and data
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml down --volumes --remove-orphans
