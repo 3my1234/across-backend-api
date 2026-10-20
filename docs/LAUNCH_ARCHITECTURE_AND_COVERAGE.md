@@ -58,7 +58,7 @@ report. Existing test coverage is correctness coverage, not proof at 12,000 user
 | Image presign/PUT/GET | /marketplace/chat-images/presign; S3 URLs | Source inspected; isolated real-storage transport is missing; upload-heavy mode is explicitly blocked |
 | Video complete/limits | POST /providers/me/videos/complete | Existing mocked storage/ffprobe policy tests; no media throughput claim |
 | Inbox/unread | GET /chat/inbox | New session workload; separate unread correctness tests exist |
-| Marketplace send/history | /marketplace/conversations and /providers/me/conversations | New bidirectional activity, retry with same client id, recipient polling observations, DB reconciliation |
+| Marketplace send/history | /marketplace/conversations and /providers/me/conversations | New bidirectional activity, retry with same client id, recipient polling observations, DB reconciliation and complete post-run peer visibility |
 | Delivery/read | POST/GET /messaging/receipts | New inbound read/delivery acknowledgement; observing sender status still requires fuller flow coverage |
 | Shared room history/send | /chat/conversations/:id/messages | New session workload; outsider access and full-room membership covered in existing integration tests |
 | Town Hall create/apply/approve/offer | /chat/town-hall routes | Existing Go lab and integration tests; new k6 uses admitted room traffic, not admission lifecycle load |
@@ -67,7 +67,7 @@ report. Existing test coverage is correctness coverage, not proof at 12,000 user
 | Orders/product payments | Legacy routes reject launch checkout | Existing contact-only guards; no sandbox product charge to simulate |
 | Subscriptions/renewal/callbacks | /providers/me/subscription-*, /payments/flutterwave/webhook | Existing mocked integration coverage; test-account sandbox end-to-end run not configured |
 | Admin analytics | GET /admin/business-overview | New mixed workload interleaves small admin reads; frontend rendering remains browser-test scope |
-| External email/SMS/native/browser push | Worker/vendor transports | Suppressed in isolated lab; internal queue row counts are recorded, drain capacity/display not tested |
+| External email/SMS/native/browser push | Worker/vendor transports | Suppressed in isolated lab; native-push dispatcher retry and stale-lease recovery checked with mock HTTP, actual process drain capacity/vendor/display not tested |
 | Backup/restore | Separate DB runbook | Existing procedures; a fresh restore/reconciliation drill remains required |
 
 ## Initial release recommendation

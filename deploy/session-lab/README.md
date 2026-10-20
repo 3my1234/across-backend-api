@@ -69,6 +69,10 @@ to polling observation are measured. This is application polling latency, not a
 native/browser push receipt or phone-render time. Read acknowledgements use real
 receipt endpoints. Final DB counts must exactly match successful writes, including
 after threshold failure. Missing evidence fails reconciliation.
+The verifier then pages real recipient history until every generated marketplace
+message is found with its exact stored body. This post-run completeness check is
+separate from polling latency during load, and is bounded at 10,000 messages;
+larger workloads need reviewed sharded verification rather than silent sampling.
 
 ## Predeclared gates
 
@@ -114,9 +118,14 @@ before claiming production-like topology tests. Do not substitute production IPs
 
 Upload-heavy mode fails immediately: there is no isolated real object-storage
 transport yet. Do not pretend presign-only requests represent uploads. Workers
-are not started; queue rows are observed but external delivery/drain is not tested.
+are not started. A separate check exercises the real native-push batch dispatcher
+through an in-memory HTTP transport: upstream 503, durable retry, stale sending
+lease recovery and complete submission to the mock. It does not prove vendor,
+device delivery, full worker-process restart or sustainable queue throughput.
+CI also stops one disposable API, records bounded routing convergence, requires
+three successes on the survivor and checks readiness after restarting the API.
 Cold/warm comparison, real-media size mix, signup/search/upload spikes, fault
-injection, backup restore and payment sandbox callbacks remain explicit gaps.
+of dependencies, backup restore and payment sandbox callbacks remain explicit gaps.
 See `docs/LAUNCH_ARCHITECTURE_AND_COVERAGE.md` for route-level coverage and
 `docs/LAUNCH_RELIABILITY_GATE.md` for device and production launch requirements.
 

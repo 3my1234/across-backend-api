@@ -8,6 +8,11 @@ export function nextStage(summary,reconciliation){
  if(summary.configuration?.profile==='burst')throw Error('Burst results cannot authorize a sustainable session stage');
  if(summary.configuration?.p95_ms!==500||summary.configuration?.p99_ms!==1500)throw Error('Original latency gates must be preserved');
  const metrics=summary.metrics||{};
+ if(!Number.isInteger(previous)||previous<2)throw Error('Valid planned concurrency required');
+ for(const name of ['successful_latency','unexpected_failure','controlled_overload','content_valid']){
+  const keys=name==='successful_latency'?['p(95)','p(99)']:['rate'];
+  for(const key of keys)if(!Number.isFinite(metrics[name]?.values?.[key]))throw Error('Missing finite evidence for '+name);
+ }
  if((metrics.session_starts?.values.count||0)<previous||(metrics.vus?.values.max||0)<previous)throw Error('Planned concurrent sessions were not achieved');
  if((metrics.dropped_iterations?.values.count||0)>0)throw Error('Generator dropped arrivals');
  for(const metric of Object.values(metrics))for(const threshold of Object.values(metric.thresholds||{}))if(threshold.ok!==true)throw Error('A previous threshold failed');

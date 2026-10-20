@@ -21,3 +21,6 @@ const evidence={run_id:'test',configuration:plan(),metrics:{session_starts:{valu
 const recon={run_id:'test',write_reconciliation_passed:true};assert.equal(nextStage(evidence,recon).next_sessions,100);
 assert.throws(()=>nextStage(evidence,{...recon,run_id:'other'}));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,controlled_overload:{values:{rate:0.1}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,vus:{values:{max:3}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,successful_latency:{values:{'p(95)':700,'p(99)':900}}}},recon));
 console.log('Ramp gate passed: matched evidence, achieved concurrency and unchanged health/latency criteria before next-stage review.');
+for(const name of ['unexpected_failure','successful_latency','content_valid','controlled_overload']){
+ const metrics={...evidence.metrics};delete metrics[name];assert.throws(()=>nextStage({...evidence,metrics},recon));
+}

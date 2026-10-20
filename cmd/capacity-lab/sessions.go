@@ -175,6 +175,9 @@ func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 	if !passed {
 		return fmt.Errorf("confirmed/stored writes differ or duplicated messages")
 	}
+	if err = verifyRecipientVisibility(ctx, db, prefix, out); err != nil {
+		return err
+	}
 	// Queue aggregates include generated work, without sending external messages.
 	for _, table := range []string{"email_outbox", "notification_push_deliveries", "web_push_deliveries"} {
 		var n int64
