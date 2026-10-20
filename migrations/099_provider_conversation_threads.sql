@@ -44,8 +44,8 @@ END $$;
 CREATE TRIGGER provider_conversation_thread_message AFTER INSERT ON provider_conversation_messages
 FOR EACH ROW EXECUTE FUNCTION touch_provider_conversation_thread();
 WITH aggregate AS (
- SELECT thread_id,max(last_message_at) AS latest,bool_or(status='blocked') AS blocked
+ SELECT thread_id,max(last_message_at) AS latest,bool_or(status='blocked') AS blocked,bool_or(status='open') AS opened
  FROM provider_conversations GROUP BY thread_id
 ) UPDATE provider_conversations c SET last_message_at=a.latest,
- status=CASE WHEN a.blocked THEN 'blocked' ELSE c.status END
+ status=CASE WHEN a.blocked THEN 'blocked' WHEN a.opened THEN 'open' ELSE 'closed' END
  FROM aggregate a WHERE c.id=a.thread_id;

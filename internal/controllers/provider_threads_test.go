@@ -60,6 +60,9 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(ctx, `UPDATE provider_conversations SET status='closed' WHERE id=$1::uuid`, oldA); err != nil {
+		t.Fatal(err)
+	}
 	apply("099_provider_conversation_threads.sql")
 	apply("100_notification_sender_identity.sql")
 	installPublicIdentityFixture(t, db)
@@ -96,6 +99,9 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	inbox := call("GET", "/inbox", buyer, "", 200)["items"].([]any)
 	if len(inbox) != 1 || inbox[0].(map[string]any)["id"] != oldA {
 		t.Fatal("historical products were not grouped", inbox)
+	}
+	if inbox[0].(map[string]any)["status"] != "open" {
+		t.Fatal("an open product conversation was closed by grouping")
 	}
 	for _, actor := range []string{buyer, owner} {
 		rows := call("GET", "/community-inbox?conversation_id="+oldB, actor, "", 200)["items"].([]any)
