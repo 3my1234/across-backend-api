@@ -104,6 +104,9 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 	if blocked {
 		return fiber.NewError(409, "This conversation is blocked")
 	}
+	if _, err = tx.Exec(c.Context(), `UPDATE provider_conversations SET status='open' WHERE id=$1::uuid AND status<>'blocked'`, threadID); err != nil {
+		return fiber.ErrInternalServerError
+	}
 	messageID, savedAt, fresh, err := insertConversationMessage(c.Context(), tx, conversationID, "buyer", userID, message)
 	if err != nil {
 		return err
@@ -290,7 +293,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	}
 	c.Set("Cache-Control", "private, no-store")
 	// A five-minute epoch refreshes private signed URLs even without new messages.
-	etag := fmt.Sprintf("\"%x\"", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%d:%d", c.Params("conversation_id"), changed, c.Query("cursor"), page.Limit, time.Now().Unix()/300))))
+	etag := fmt.Sprintf("\"%x\"", sha256.Sum256([]byte(fmt.Sprintf("thread-v1:%s:%d:%s:%d:%d", c.Params("conversation_id"), changed, c.Query("cursor"), page.Limit, time.Now().Unix()/300))))
 	// A rolling deployment with migrations disabled must still load chat. Enable
 	// conditional reads only once migration 074 is present, never cache revision -1.
 	if changed >= 0 {
