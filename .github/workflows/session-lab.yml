@@ -47,6 +47,8 @@ jobs:
               date -u +%FT%TZ
               docker stats --no-stream --format '{{json .}}'
               docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -At -c "SELECT count(*) AS clients,count(*) FILTER(WHERE state='active') AS active,count(*) FILTER(WHERE wait_event_type='Lock') AS locks FROM pg_stat_activity WHERE backend_type='client backend';"
+              docker compose -f deploy/capacity-lab/compose.yml exec -T redis redis-cli INFO memory
+              docker compose -f deploy/capacity-lab/compose.yml exec -T redis redis-cli INFO stats
               sleep 5
             done
           ) > session-evidence/resources.log 2>&1 &
@@ -57,6 +59,18 @@ jobs:
         if: always()
         run: |
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
+      - name: Check durable push retry and stale-worker-lease recovery with mock transport
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps queue-check > session-evidence/queue-recovery.jsonl
+      - name: Check replica failover and recovery in the disposable lab only
+        run: |
+          docker compose -f deploy/capacity-lab/compose.yml stop api1
+          sleep 3
+          for attempt in 1 2 3; do
+            docker compose -f deploy/capacity-lab/compose.yml exec -T api2 curl -fsS -D - http://gateway:8080/api/v1/ready >> session-evidence/failover.log
+          done
+          docker compose -f deploy/capacity-lab/compose.yml start api1
+          sleep 4
+          docker compose -f deploy/capacity-lab/compose.yml exec -T api2 curl -fsS http://api1:8080/api/v1/ready >> session-evidence/failover.log
       - name: Collect evidence without fixtures or session tokens
         if: always()
         run: |

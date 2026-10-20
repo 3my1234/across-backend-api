@@ -113,6 +113,8 @@ func main() {
 		must(verifySessions(ctx, db, os.Stdout))
 	case "lifecycle":
 		must(sessionLifecycle(ctx, db, os.Stdout))
+	case "queue-check":
+		must(sessionQueueCheck(ctx, db, os.Stdout))
 	default:
 		log.Fatal("Expected seed or run")
 	}

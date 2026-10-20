@@ -77,6 +77,10 @@ func prepareSessions(ctx context.Context, db *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
+	_, err = tx.Exec(ctx, `INSERT INTO user_push_tokens(user_id,expo_push_token,platform) SELECT id,'ExpoPushToken['||id::text||']','android' FROM users WHERE id IN(SELECT buyer FROM capacity_lab_actors UNION ALL SELECT provider_user FROM capacity_lab_actors)`)
+	if err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 

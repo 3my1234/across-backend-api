@@ -26,6 +26,7 @@ export const options={scenarios:{sessions:cfg.executor==='constant-vus'?{executo
 let actor=null,loggedIn=false,cycle=0;const observed=new Set();
 function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=true){
  const params={headers:{'Content-Type':'application/json','X-Real-IP':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op},redirects:0,timeout:'12s'};
+ params.responseCallback=http.expectedStatuses(want);
  if(token)params.headers.Authorization=`Bearer ${token}`;
  const response=http.request(method,fixture.origin+'/api/v1'+path,body?JSON.stringify(body):null,params);
  if(response.headers['X-Lab-Backend'])backends.add(1,{backend:response.headers['X-Lab-Backend']});
