@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image/jpeg"
 	"io"
@@ -19,9 +20,24 @@ import (
 
 const maxImageProxyBytes = 20 << 20
 
+var publicMediaClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 10 * time.Second
+	return &http.Client{Transport: transport}
+}()
+
 type UploadController struct {
-	s3 *storage.S3
+	s3          *storage.S3
+	mediaClient *http.Client
 }
+
+// Streaming video owns the cancellation until Fiber finishes or closes it.
+type publicMediaBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *publicMediaBody) Close() error { b.cancel(); return b.ReadCloser.Close() }
 
 func NewUploadController(cfg config.Config) *UploadController {
 	return &UploadController{s3: storage.NewS3(cfg)}
@@ -147,7 +163,14 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "media storage is not configured")
 	}
-	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, getURL, nil)
+	ctx, cancel := context.WithCancel(c.UserContext())
+	streamed := false
+	defer func() {
+		if !streamed {
+			cancel()
+		}
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
 	if err != nil {
 		return err
 	}
@@ -156,12 +179,16 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	if rangeHeader := c.Get("Range"); rangeHeader != "" && !isAVIF {
 		req.Header.Set("Range", rangeHeader)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := u.mediaClient
+	if client == nil {
+		client = publicMediaClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("public image view failed: key=%s err=%v", key, err)
+		// An http error may contain the signed S3 URL; never log that URL.
+		log.Printf("public image view failed: request_id=%s", c.GetRespHeader("X-Request-ID"))
 		return fiber.NewError(fiber.StatusBadGateway, "media unavailable")
 	}
-	streamed := false
 	defer func() {
 		if !streamed {
 			resp.Body.Close()
@@ -179,13 +206,21 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
 		c.Status(resp.StatusCode)
 		streamed = true
+		body := &publicMediaBody{ReadCloser: resp.Body, cancel: cancel}
 		if resp.ContentLength >= 0 {
-			return c.SendStream(resp.Body, int(resp.ContentLength))
+			return c.SendStream(body, int(resp.ContentLength))
 		}
-		return c.SendStream(resp.Body)
+		return c.SendStream(body)
+	}
+	// Limit both the wait and memory consumed by slow or unexpectedly large
+	// objects. Do not send successful headers for an incomplete upstream image.
+	data, readErr := readPublicImage(resp, cancel, 15*time.Second)
+	if readErr != nil {
+		log.Printf("public image read incomplete or oversized: request_id=%s", c.GetRespHeader("X-Request-ID"))
+		return readErr
 	}
 	if isAVIF || strings.EqualFold(resp.Header.Get("Content-Type"), "image/avif") {
-		converted, err := transcodeAVIFToJPEG(io.LimitReader(resp.Body, maxImageProxyBytes+1))
+		converted, err := transcodeAVIFToJPEG(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("public AVIF conversion failed: key=%s err=%v", key, err)
 			return fiber.NewError(fiber.StatusBadGateway, "media conversion failed")
@@ -202,8 +237,20 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 	}
 	c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
 	c.Status(resp.StatusCode)
-	_, err = io.Copy(c.Response().BodyWriter(), resp.Body)
-	return err
+	return c.Send(data)
+}
+
+func readPublicImage(resp *http.Response, cancel context.CancelFunc, timeout time.Duration) ([]byte, error) {
+	timer := time.AfterFunc(timeout, cancel)
+	defer timer.Stop()
+	if resp.ContentLength > maxImageProxyBytes {
+		return nil, fiber.NewError(fiber.StatusBadGateway, "media exceeds image size limit")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageProxyBytes+1))
+	if err != nil || len(data) > maxImageProxyBytes || (resp.ContentLength >= 0 && int64(len(data)) != resp.ContentLength) {
+		return nil, fiber.NewError(fiber.StatusBadGateway, "media unavailable or incomplete")
+	}
+	return data, nil
 }
 
 func transcodeAVIFToJPEG(reader io.Reader) ([]byte, error) {

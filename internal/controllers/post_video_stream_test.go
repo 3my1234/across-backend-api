@@ -12,17 +12,15 @@ import (
 )
 
 func TestPostVideoStreamAndPrivateDocumentDenial(t *testing.T) {
-	original := http.DefaultTransport
-	defer func() { http.DefaultTransport = original }()
 	calls := 0
-	http.DefaultTransport = paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 		if req.Header.Get("Range") != "bytes=0-3" {
 			t.Fatal("range was not forwarded")
 		}
 		return &http.Response{StatusCode: 206, ContentLength: 4, Header: http.Header{"Content-Type": []string{"video/mp4"}, "Content-Range": []string{"bytes 0-3/10"}, "Accept-Ranges": []string{"bytes"}}, Body: io.NopCloser(strings.NewReader("test"))}, nil
-	})
-	controller := &UploadController{s3: storage.NewS3(config.Config{AWSRegion: "us-east-1", S3BucketName: "synthetic", AWSAccessKeyID: "synthetic", AWSSecretAccessKey: "synthetic"})}
+	})}
+	controller := &UploadController{mediaClient: client, s3: storage.NewS3(config.Config{AWSRegion: "us-east-1", S3BucketName: "synthetic", AWSAccessKeyID: "synthetic", AWSSecretAccessKey: "synthetic"})}
 	app := fiber.New()
 	app.Get("/media/*", controller.PublicImageView)
 	for _, key := range []string{"private/providers/a/verification/evidence/x.jpg", "user-uploads/providers/a/verification/x.jpg"} {
