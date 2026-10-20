@@ -2,17 +2,21 @@ package services
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
 	"net/textproto"
 	"strings"
 	"time"
 
+	"across/backend/internal/branding"
 	"across/backend/internal/config"
 )
 
@@ -153,10 +157,7 @@ func (e *EmailService) sendMarketplaceActivityEmail(toEmail string, values map[s
 }
 
 func (e *EmailService) layout(title, preheader, content string) string {
-	logo := `<div style="font-size:22px;font-weight:800;color:#0F3D35;">Atlantic Express</div>`
-	if value := strings.TrimSpace(e.cfg.BrandLogoURL); value != "" {
-		logo = `<img src="` + html.EscapeString(value) + `" width="190" alt="Atlantic Express" style="display:block;max-width:190px;width:100%;height:auto;border:0;">`
-	}
+	logo := `<img src="cid:` + branding.EmailLogoCID + `" width="190" alt="Atlantic Express" style="display:block;max-width:190px;width:100%;height:auto;border:0;"><div style="font-size:20px;font-weight:800;color:#0F3D35;">Atlantic Express</div>`
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>` + html.EscapeString(title) + `</title></head>
 <body style="margin:0;padding:0;background:#F3F7F6;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">` + html.EscapeString(preheader) + `</div>
@@ -201,37 +202,95 @@ func (e *EmailService) sendHTMLWithText(toEmail, subject, textBody, htmlBody, me
 	if replyTo := strings.TrimSpace(e.cfg.SMTPReplyTo); replyTo != "" {
 		headers = append(headers, "Reply-To: "+replyTo)
 	}
-	var body strings.Builder
-	writer := multipart.NewWriter(&body)
-	headers = append(headers, "MIME-Version: 1.0", "Content-Type: multipart/alternative; boundary="+writer.Boundary())
-	plainHeader := textproto.MIMEHeader{}
-	plainHeader.Set("Content-Type", "text/plain; charset=UTF-8")
-	plainHeader.Set("Content-Transfer-Encoding", "8bit")
-	plainPart, err := writer.CreatePart(plainHeader)
+	messageBody, contentType, err := emailMIMEBody(textBody, htmlBody)
 	if err != nil {
 		return err
+	}
+	headers = append(headers, "MIME-Version: 1.0", "Content-Type: "+contentType)
+	message := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + messageBody)
+	return e.sendSMTP(toEmail, message)
+}
+
+func emailMIMEBody(textBody, htmlBody string) (string, string, error) {
+	var body strings.Builder
+	outer := multipart.NewWriter(&body)
+	writer := outer
+	contentType := "multipart/alternative; boundary=" + outer.Boundary()
+	inline := strings.Contains(htmlBody, "cid:"+branding.EmailLogoCID)
+	if inline {
+		contentType = "multipart/related; boundary=" + outer.Boundary()
+		boundary := multipart.NewWriter(io.Discard).Boundary()
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Type", "multipart/alternative; boundary="+boundary)
+		part, err := outer.CreatePart(header)
+		if err != nil {
+			return "", "", err
+		}
+		writer = multipart.NewWriter(part)
+		if err := writer.SetBoundary(boundary); err != nil {
+			return "", "", err
+		}
+	}
+	plainHeader := textproto.MIMEHeader{}
+	plainHeader.Set("Content-Type", "text/plain; charset=UTF-8")
+	plainHeader.Set("Content-Transfer-Encoding", "quoted-printable")
+	plainPart, err := writer.CreatePart(plainHeader)
+	if err != nil {
+		return "", "", err
 	}
 	if strings.TrimSpace(textBody) == "" {
 		textBody = "Please view this message in an HTML-capable email client."
 	}
-	if _, err := plainPart.Write([]byte(textBody)); err != nil {
-		return err
+	plainEncoder := quotedprintable.NewWriter(plainPart)
+	if _, err := plainEncoder.Write([]byte(textBody)); err != nil {
+		return "", "", err
+	}
+	if err := plainEncoder.Close(); err != nil {
+		return "", "", err
 	}
 	htmlHeader := textproto.MIMEHeader{}
 	htmlHeader.Set("Content-Type", "text/html; charset=UTF-8")
-	htmlHeader.Set("Content-Transfer-Encoding", "8bit")
+	htmlHeader.Set("Content-Transfer-Encoding", "quoted-printable")
 	htmlPart, err := writer.CreatePart(htmlHeader)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	if _, err := htmlPart.Write([]byte(htmlBody)); err != nil {
-		return err
+	htmlEncoder := quotedprintable.NewWriter(htmlPart)
+	if _, err := htmlEncoder.Write([]byte(htmlBody)); err != nil {
+		return "", "", err
+	}
+	if err := htmlEncoder.Close(); err != nil {
+		return "", "", err
 	}
 	if err := writer.Close(); err != nil {
-		return err
+		return "", "", err
 	}
-	message := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + body.String())
-	return e.sendSMTP(toEmail, message)
+	if inline {
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Type", "image/png; name=\"atlantic-express.png\"")
+		header.Set("Content-ID", "<"+branding.EmailLogoCID+">")
+		header.Set("Content-Disposition", "inline; filename=\"atlantic-express.png\"")
+		header.Set("Content-Transfer-Encoding", "base64")
+		part, err := outer.CreatePart(header)
+		if err != nil {
+			return "", "", err
+		}
+		encoded := base64.StdEncoding.EncodeToString(branding.Logo)
+		for len(encoded) > 0 {
+			n := 76
+			if len(encoded) < n {
+				n = len(encoded)
+			}
+			if _, err = part.Write([]byte(encoded[:n] + "\r\n")); err != nil {
+				return "", "", err
+			}
+			encoded = encoded[n:]
+		}
+		if err := outer.Close(); err != nil {
+			return "", "", err
+		}
+	}
+	return body.String(), contentType, nil
 }
 
 func (e *EmailService) sendSMTP(toEmail string, message []byte) error {

@@ -2,10 +2,10 @@ package routes
 
 import (
 	"context"
-	_ "embed"
 	"strings"
 	"time"
 
+	"across/backend/internal/branding"
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
@@ -14,9 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
-
-//go:embed atlantic-express-logo.png
-var atlanticExpressLogo []byte
 
 func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config) {
 	payments := controllers.NewPaymentController(db, cfg)
@@ -129,7 +126,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 		// caching. Avoid immutable here because email image proxies cache hard.
 		c.Set(fiber.HeaderCacheControl, "public, max-age=3600")
 		c.Type("png")
-		return c.Send(atlanticExpressLogo)
+		return c.Send(branding.Logo)
 	})
 	v1.Get("/products/:product_id/recommendations", catalog.ListRecommendations)
 	v1.Get("/products/:product_id", catalog.GetProduct)

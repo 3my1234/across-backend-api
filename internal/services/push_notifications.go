@@ -273,6 +273,16 @@ func sendPushDeliveries(ctx context.Context, db *pgxpool.Pool, client *http.Clie
 			"to": item.Token, "title": item.Title, "body": item.Body,
 			"channelId": "orders-silent", "priority": "high", "data": data,
 		}
+		avatar, _ := data["sender_avatar_url"].(string)
+		if safe := notificationAvatar(avatar); safe != "" {
+			data["sender_avatar_url"] = safe
+			message["richContent"] = map[string]string{"image": safe}
+		} else {
+			delete(data, "sender_avatar_url")
+		}
+		if name, _ := data["sender_name"].(string); name != "" && (item.NotificationType == "marketplace_message" || item.NotificationType == "social_message" || item.NotificationType == "provider_activity") {
+			message["title"] = name
+		}
 		if item.SoundEnabled {
 			message["sound"] = "default"
 			message["channelId"] = item.NotificationChannel

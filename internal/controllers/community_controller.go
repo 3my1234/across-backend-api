@@ -495,11 +495,11 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
  UNION ALL
  SELECT c.id,'business','legacy',c.last_message_at,CASE WHEN c.user_id=$1::uuid THEN p.business_name ELSE COALESCE(u.full_name,'Customer') END,CASE WHEN c.user_id=$1::uuid THEN p.owner_user_id::text ELSE c.user_id::text END,c.provider_id::text,
  CASE WHEN c.user_id=$1::uuid THEN 'buyer' ELSE 'provider' END,c.status,
- (SELECT count(*)::int FROM provider_conversation_messages msg WHERE msg.conversation_id=c.id AND msg.sender_type=CASE WHEN c.user_id=$1::uuid THEN 'provider' ELSE 'buyer' END AND msg.created_at>COALESCE(CASE WHEN c.user_id=$1::uuid THEN c.buyer_last_read_at ELSE c.provider_last_read_at END,'epoch'::timestamptz)),
+ (SELECT count(*)::int FROM provider_conversation_messages msg JOIN provider_conversations physical ON physical.id=msg.conversation_id WHERE physical.id IN (`+businessThreadMembers("c.id")+`) AND msg.sender_type=CASE WHEN c.user_id=$1::uuid THEN 'provider' ELSE 'buyer' END AND msg.created_at>COALESCE(CASE WHEN c.user_id=$1::uuid THEN physical.buyer_last_read_at ELSE physical.provider_last_read_at END,'epoch'::timestamptz)),
  jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'title',COALESCE(l.title,pr.title))
  FROM provider_conversations c JOIN provider_organizations p ON p.id=c.provider_id JOIN users u ON u.id=c.user_id LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
- WHERE c.user_id=$1::uuid OR c.provider_id=NULLIF($2,'')::uuid
- ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context,COALESCE((SELECT u.avatar_url FROM users u WHERE u.id=NULLIF(inbox.peer_id,'')::uuid),''),COALESCE(CASE WHEN source='shared' THEN (SELECT jsonb_build_object('id',msg.id,'body',msg.body,'is_mine',msg.sender_user_id=$1::uuid) FROM chat_messages msg WHERE msg.room_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) ELSE (SELECT jsonb_build_object('id',msg.id,'body',to_jsonb(msg)->>'body','is_mine',msg.sender_type=inbox.actor_role) FROM provider_conversation_messages msg WHERE msg.conversation_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) END,'{}'::jsonb) FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
+ WHERE (c.user_id=$1::uuid OR c.provider_id=NULLIF($2,'')::uuid) AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text)
+ ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,unread_count,context,COALESCE((SELECT u.avatar_url FROM users u WHERE u.id=NULLIF(inbox.peer_id,'')::uuid),''),COALESCE(CASE WHEN source='shared' THEN (SELECT jsonb_build_object('id',msg.id,'body',msg.body,'is_mine',msg.sender_user_id=$1::uuid) FROM chat_messages msg WHERE msg.room_id=inbox.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) ELSE (SELECT jsonb_build_object('id',msg.id,'body',to_jsonb(msg)->>'body','is_mine',msg.sender_type=inbox.actor_role) FROM provider_conversation_messages msg WHERE msg.conversation_id IN (`+businessThreadMembers("inbox.id")+`) ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) END,'{}'::jsonb) FROM inbox WHERE ($3::timestamptz IS NULL OR (last_message_at,id)<($3,$4::uuid)) AND ($6='' OR id=NULLIF($6,'')::uuid OR (source='legacy' AND NULLIF($6,'')::uuid IN (`+businessThreadMembers("inbox.id")+`))) ORDER BY last_message_at DESC,id DESC LIMIT $5`, actor, provider, page.CursorTime, nullID(page.CursorID), page.Limit+1, c.Query("conversation_id"))
 	if err != nil {
 		return communityError(err)
 	}
@@ -716,7 +716,7 @@ func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, a
 		body = string([]rune(body)[:180]) + "..."
 	}
 	for _, id := range ids {
-		if err = insertNotification(ctx, tx, id, "", nil, "social_message", title, "Open your chat to read the message.", map[string]any{"view": "messages", "chat_room_id": room}, "shared-chat:"+message+":"+id); err != nil {
+		if err = insertNotification(ctx, tx, id, "", nil, "social_message", title, "Open your chat to read the message.", map[string]any{"view": "messages", "chat_room_id": room, "sender_user_id": actor}, "shared-chat:"+message+":"+id); err != nil {
 			return err
 		}
 	}

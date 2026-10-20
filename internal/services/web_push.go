@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/elliptic"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -124,6 +125,13 @@ func RunWebPushBatch(ctx context.Context, db *pgxpool.Pool, cfg config.Config, c
 			status, message := "failed", "Invalid browser push subscription"
 			code := 0
 			if ValidWebPushEndpoint(j.endpoint) && ValidWebPushKeys(j.public, j.auth) && j.vapid == cfg.WebPushPublicKey {
+				var payload map[string]any
+				if json.Unmarshal(j.payload, &payload) == nil {
+					if avatar, _ := payload["sender_avatar_url"].(string); avatar != "" {
+						payload["sender_avatar_url"] = notificationAvatar(avatar)
+						j.payload, _ = json.Marshal(payload)
+					}
+				}
 				sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				response, sendErr := webpush.SendNotificationWithContext(sendCtx, j.payload, &webpush.Subscription{Endpoint: j.endpoint, Keys: webpush.Keys{P256dh: j.public, Auth: j.auth}}, &webpush.Options{HTTPClient: client, Subscriber: cfg.WebPushSubject, VAPIDPublicKey: cfg.WebPushPublicKey, VAPIDPrivateKey: cfg.WebPushPrivateKey, TTL: 3600, Urgency: webpush.UrgencyHigh})
 				cancel()
