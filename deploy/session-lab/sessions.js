@@ -20,10 +20,24 @@ const confirmed=new Counter('confirmed_writes'),unexpected=new Rate('unexpected_
 const perOperation=['session','catalogue','services','product_detail','service_detail','market_history','market_send','hall_history','hall_send','hall_offer','support_history','admin_overview','receipts','inbox'];
 const threshold={unexpected_failure:[{threshold:'rate<0.01',abortOnFail:true,delayAbortEval:'10s'}],content_valid:[{threshold:'rate==1',abortOnFail:true,delayAbortEval:'10s'}],controlled_overload:cfg.profile==='burst'?['rate<=1']:[{threshold:'rate==0',abortOnFail:true,delayAbortEval:'10s'}],successful_latency:[{threshold:'p(95)<500',abortOnFail:true,delayAbortEval:'15s'},'p(99)<1500'],confirmed_writes:['count>0']};
 threshold['backend_responses{backend:api1}']=['count>0'];threshold['backend_responses{backend:api2}']=['count>0'];
+if(cfg.executor==='constant-vus'){
+ threshold.recipient_observations=['count>0'];
+ threshold.poll_delivery_latency=[`p(95)<${cfg.poll_p95_ms}`,`p(99)<${cfg.poll_p99_ms}`];
+}
 for(const op of perOperation)threshold[`successful_latency{op:${op}}`]=['p(95)<500','p(99)<1500'];
 if(cfg.executor!=='constant-arrival-rate')threshold.session_starts=[`count>=${cfg.target}`];else threshold.dropped_iterations=['count==0'];
 export const options={scenarios:{sessions:cfg.executor==='constant-vus'?{executor:'constant-vus',vus:cfg.target,duration:`${cfg.seconds}s`,gracefulStop:'15s'}:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:`${cfg.seconds}s`,preAllocatedVUs:Math.min(cfg.target,100),maxVUs:cfg.target,gracefulStop:'15s'}},thresholds:threshold,summaryTrendStats:['min','med','p(95)','p(99)','max'],systemTags:['status','method','name','scenario','expected_response'],maxRedirects:0,discardResponseBodies:false};
-let actor=null,loggedIn=false,cycle=0;const observed=new Set();
+let actor=null,loggedIn=false,cycle=0,nextPollAt=0;const observed=new Set();
+// An active conversation continues polling while its user thinks or browses.
+// Do not wait for the random activity selector to choose chat again. Missed
+// intervals produce one current poll, never a catch-up burst.
+function waitWithPolling(seconds){
+ const until=Date.now()+seconds*1000;
+ while(Date.now()<until){
+  if(Date.now()>=nextPollAt){history();nextPollAt=Date.now()+cfg.poll_every_ms;}
+  sleep(Math.max(0.001,Math.min(until-Date.now(),nextPollAt-Date.now())/1000));
+ }
+}
 function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=true){
  const params={headers:{'Content-Type':'application/json','X-Real-IP':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op},redirects:0,timeout:'12s'};
  params.responseCallback=http.expectedStatuses(want);
@@ -67,6 +81,7 @@ export function setup(){
 export default function(){
  if(!actor){actor={...sessions[exec.vu.idInTest-1]};if(!actor.id)exec.test.abort('Generator requested more VUs than distinct identities');started.add(1);const login=req('login','/auth/login',null,{email:actor.email,password:fixture.password});if(!login.passed||login.data.user_id!==actor.id||!login.data.access_token)exec.test.abort('Synthetic login failed');actor.token=login.data.access_token;const session=req('session','/auth/session',actor.token);if(!session.passed||session.data.user_id!==actor.id)exec.test.abort('Session binding failed');loggedIn=true;sleep(Math.random()*3);}
  if(!loggedIn)return;
+ if(!nextPollAt||Date.now()>=nextPollAt){history();nextPollAt=Date.now()+cfg.poll_every_ms;}
  actions.add(1);cycle++;
  const activity=cycle===1?'chat':chooseActivity(mix,Math.random()*100);
  if(activity==='browse'){
@@ -85,10 +100,10 @@ export default function(){
  }else if(activity==='support'){
   if(actor.role==='buyer')req('support_history','/support/tickets/'+actor.ticket+'/messages?limit=40',actor.token);else req('session','/providers/me',actor.token);
  }else if(activity==='admin')req('admin_overview','/admin/business-overview',fixture.admin_token);
- if(cfg.reconnect&&cycle%3===0){sleep(5+Math.random()*15);req('session','/auth/session',actor.token);}
- sleep(cfg.think_min+Math.random()*(cfg.think_max-cfg.think_min));
+ if(cfg.reconnect&&cycle%3===0){sleep(5+Math.random()*15);req('session','/auth/session',actor.token);nextPollAt=Date.now();}
+ waitWithPolling(cfg.think_min+Math.random()*(cfg.think_max-cfg.think_min));
 }
 export function handleSummary(data){
- const evidence={...data,run_id:fixture.run_id,configuration:cfg,mix,limitations:['internal Docker network','generator shares CI host','no real media or worker drain','seeded sessions; signup/login not qualified','VU session counts differ from requests in flight','no native rendering qualification']};
+ const evidence={...data,run_id:fixture.run_id,configuration:cfg,mix,limitations:['internal Docker network','generator shares CI host','all sessions keep an active conversation polling at 15s','no real media or full worker process drain in this workload','signup/login spikes not qualified','VU session counts differ from requests in flight','no native rendering qualification']};
  return {'/exchange/summary.json':JSON.stringify(evidence,null,2),stdout:JSON.stringify({run_id:fixture.run_id,profile:cfg.profile,planned_concurrent_sessions:cfg.target,session_starts:data.metrics.session_starts?.values.count,actions:data.metrics.session_actions?.values.count,confirmed_writes:data.metrics.confirmed_writes?.values.count,recipient_observations:data.metrics.recipient_observations?.values.count,scope:'isolated HTTP/polling session smoke only'})+'\n'};
 }

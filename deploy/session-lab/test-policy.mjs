@@ -18,7 +18,11 @@ assert.equal(chooseActivity(mixes.mixed,0),'browse');assert.equal(chooseActivity
 for(const name of ['mixed','chat-heavy'])assert.equal(Object.values(mixes[name]).reduce((a,b)=>a+b,0),100);
 console.log('Session policy passed: explicit isolated target, unique identities, expiry, bounded smoke, 12000 stage plan and cost-approval gates.');
 const evidence={run_id:'test',configuration:plan(),metrics:{session_starts:{values:{count:4}},vus:{values:{max:4}},successful_latency:{values:{'p(95)':10,'p(99)':20},thresholds:{latency:{ok:true}}},unexpected_failure:{values:{rate:0}},controlled_overload:{values:{rate:0}},content_valid:{values:{rate:1}}}};
+evidence.metrics.poll_delivery_latency={values:{'p(95)':14000,'p(99)':15000}};
+evidence.metrics.recipient_observations={values:{count:3}};
 const recon={run_id:'test',write_reconciliation_passed:true};assert.equal(nextStage(evidence,recon).next_sessions,100);
+assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,poll_delivery_latency:{values:{'p(95)':18000,'p(99)':19000}}}},recon));
+assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,recipient_observations:{values:{count:0}}}},recon));
 assert.throws(()=>nextStage(evidence,{...recon,run_id:'other'}));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,controlled_overload:{values:{rate:0.1}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,vus:{values:{max:3}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,successful_latency:{values:{'p(95)':700,'p(99)':900}}}},recon));
 console.log('Ramp gate passed: matched evidence, achieved concurrency and unchanged health/latency criteria before next-stage review.');
 for(const name of ['unexpected_failure','successful_latency','content_valid','controlled_overload']){

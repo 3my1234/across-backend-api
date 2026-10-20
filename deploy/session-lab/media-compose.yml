@@ -1,0 +1,47 @@
+# Overlay only on the disposable lab. DNS resolves this synthetic AWS-shaped
+# hostname to the isolated S3-compatible server. There is no runtime egress.
+services:
+  storage:
+    build: {context: ../.., dockerfile: deploy/session-lab/Dockerfile.storage}
+    command: [server, /data, --address, ':443', --console-address, ':9001', --certs-dir, /certs]
+    environment:
+      MINIO_ROOT_USER: lab-access-key-only
+      MINIO_ROOT_PASSWORD: lab-secret-key-only-never-production
+      MINIO_DOMAIN: s3.us-east-1.amazonaws.com
+      MINIO_SITE_REGION: us-east-1
+      MINIO_BROWSER: 'off'
+      MINIO_UPDATE: 'off'
+    volumes: ['${LAB_CERT_DIR:?disposable cert directory required}:/certs:ro', 'media-data:/data']
+    networks:
+      lab:
+        aliases: [capacity-lab-media.s3.us-east-1.amazonaws.com]
+    cpus: 1
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, curl, --cacert, /certs/public.crt, -fsS, https://localhost/minio/health/live]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+  api1: &media-api
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: lab-access-key-only
+      AWS_SECRET_ACCESS_KEY: lab-secret-key-only-never-production
+      S3_BUCKET_NAME: capacity-lab-media
+      SSL_CERT_FILE: /lab-certs/public.crt
+    volumes: ['${LAB_CERT_DIR:?disposable cert directory required}:/lab-certs:ro']
+    depends_on:
+      storage: {condition: service_healthy}
+  api2: *media-api
+  media-check:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, media-check]
+    environment:
+      CAPACITY_LAB: disposable-compose-only
+      SSL_CERT_FILE: /lab-certs/public.crt
+    volumes: ['${LAB_CERT_DIR:?disposable cert directory required}:/lab-certs:ro']
+    networks: [lab]
+    cpus: 1
+    mem_limit: 256m
+volumes:
+  media-data:

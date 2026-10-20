@@ -1,0 +1,47 @@
+name: Isolated photo roundtrip
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths: ['cmd/capacity-lab/**', 'deploy/session-lab/**', 'deploy/capacity-lab/**', '.github/workflows/media-lab.yml']
+permissions:
+  contents: read
+jobs:
+  photos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LAB_SCENARIO: busy
+      LAB_ACTOR_PAIRS: '10'
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/media-exchange
+      LAB_CERT_DIR: ${{ github.workspace }}/media-certs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.22.x'}
+      - name: Unit-check lab storage boundary and valid photo fixtures
+        run: go test ./cmd/capacity-lab
+      - name: Generate disposable TLS identity and start internal services
+        run: |
+          mkdir -p media-certs media-exchange media-evidence
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=capacity-lab-media' \
+            -addext 'subjectAltName=DNS:localhost,DNS:storage,DNS:capacity-lab-media.s3.us-east-1.amazonaws.com' \
+            -keyout media-certs/private.key -out media-certs/public.crt 2>/dev/null
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/session-lab/media-compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/session-lab/media-compose.yml run --rm --no-deps exporter > media-exchange/fixtures.json
+      - name: Transfer valid photos in both directions and reconcile recipient bytes
+        run: |
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/session-lab/media-compose.yml run --rm --no-deps media-check > media-evidence/photo-results.jsonl
+      - name: Collect synthetic evidence without TLS keys or session fixtures
+        if: always()
+        run: |
+          mkdir -p media-evidence
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/session-lab/media-compose.yml logs --no-color > media-evidence/services.log
+          docker stats --no-stream --format '{{json .}}' > media-evidence/resources.jsonl
+          lscpu > media-evidence/cpu.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: 'photo-roundtrip-${{ github.run_id }}', path: media-evidence/, retention-days: 14}
+      - name: Remove only disposable containers and media data
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/session-lab/media-compose.yml down --volumes --remove-orphans
