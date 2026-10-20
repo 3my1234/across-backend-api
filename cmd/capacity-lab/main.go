@@ -115,6 +115,8 @@ func main() {
 		must(sessionLifecycle(ctx, db, os.Stdout))
 	case "queue-check":
 		must(sessionQueueCheck(ctx, db, os.Stdout))
+	case "media-check":
+		must(sessionMediaCheck(ctx, db, os.Stdout))
 	default:
 		log.Fatal("Expected seed or run")
 	}
