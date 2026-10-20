@@ -163,6 +163,13 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		if cached := cachedNotificationAvatar(key); cached != nil {
 			return sendNotificationAvatar(c, key, cached)
 		}
+		select {
+		case avatarFetchSlots <- struct{}{}:
+			defer func() { <-avatarFetchSlots }()
+		default:
+			c.Set("Retry-After", "2")
+			return fiber.NewError(503, "Avatar service is busy")
+		}
 	}
 	isAVIF := strings.EqualFold(filepath.Ext(key), ".avif")
 	getURL, err := u.s3.ObjectGetURL(key, 10*time.Minute)
@@ -229,6 +236,12 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		return readErr
 	}
 	if isAVIF || strings.EqualFold(resp.Header.Get("Content-Type"), "image/avif") {
+		if avatar {
+			meta, err := avif.DecodeConfig(bytes.NewReader(data))
+			if err != nil || meta.Width <= 0 || meta.Height <= 0 || int64(meta.Width)*int64(meta.Height) > 16<<20 {
+				return fiber.NewError(502, "Avatar format or dimensions unavailable")
+			}
+		}
 		converted, err := transcodeAVIFToJPEG(bytes.NewReader(data))
 		if err != nil {
 			log.Printf("public AVIF conversion failed: key=%s err=%v", key, err)

@@ -2,10 +2,13 @@ package controllers
 
 import (
 	"bytes"
+	"github.com/gofiber/fiber/v2"
 	"image"
 	"image/color"
 	"image/png"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCircularNotificationAvatarHasTransparentCorners(t *testing.T) {
@@ -37,5 +40,50 @@ func TestCircularNotificationAvatarHasTransparentCorners(t *testing.T) {
 	}
 	if _, err = circularNotificationAvatar([]byte("not an image")); err == nil {
 		t.Fatal("invalid image accepted")
+	}
+}
+
+func TestCircularNotificationAvatarBoundsFetchAndKeepsPrivateAssetsPrivate(t *testing.T) {
+	avatarFetchSlots <- struct{}{}
+	avatarFetchSlots <- struct{}{}
+	defer func() { <-avatarFetchSlots; <-avatarFetchSlots }()
+	controller := &UploadController{}
+	app := fiber.New()
+	app.Get("/images/*", controller.PublicImageView)
+	response, err := app.Test(httptest.NewRequest("GET", "/images/user-uploads/profile/test.png?avatar=1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 503 || response.Header.Get("Retry-After") != "2" {
+		t.Fatal("fetch pressure did not fail fast")
+	}
+	key := "user-uploads/profile/cached.png"
+	private := "private/providers/verification.png"
+	avatarCache.Lock()
+	avatarCache.items[key] = cachedAvatar{[]byte("cached"), time.Now().Add(time.Minute)}
+	avatarCache.items[private] = cachedAvatar{[]byte("private"), time.Now().Add(time.Minute)}
+	avatarCache.Unlock()
+	defer func() {
+		avatarCache.Lock()
+		delete(avatarCache.items, key)
+		delete(avatarCache.items, private)
+		avatarCache.Unlock()
+	}()
+	response, err = app.Test(httptest.NewRequest("GET", "/images/"+key+"?avatar=1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal("cached avatar should not need a fetch slot")
+	}
+	response, err = app.Test(httptest.NewRequest("GET", "/images/"+private+"?avatar=1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 404 {
+		t.Fatal("cache bypassed private-media protection")
 	}
 }

@@ -19,13 +19,15 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,full_name text,email text,is_active boolean DEFAULT true,avatar_url text DEFAULT '');
- CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,logo_url text DEFAULT '',verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
+ CREATE TABLE provider_organizations(id uuid PRIMARY KEY,business_name text,logo_url text DEFAULT '',owner_user_id uuid,verification_status text DEFAULT 'approved',is_active boolean DEFAULT true);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,is_active boolean DEFAULT true,role text,created_at timestamptz DEFAULT now());
  CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,title text,status text DEFAULT 'approved',plan_slot integer DEFAULT 1);
  CREATE TABLE products(id uuid PRIMARY KEY,provider_id uuid,title text,is_active boolean DEFAULT true,moderation_status text DEFAULT 'approved',plan_slot integer DEFAULT 1);
  CREATE TABLE provider_subscriptions(provider_id uuid,status text,current_period_end timestamptz);
  CREATE TABLE provider_marketplace_events(id uuid DEFAULT gen_random_uuid(),provider_id uuid,listing_id uuid,event_type text,metadata jsonb);
- CREATE TABLE chat_messages(id uuid PRIMARY KEY);CREATE TABLE chat_rooms(id uuid PRIMARY KEY);
+ CREATE TABLE chat_messages(id uuid PRIMARY KEY,room_id uuid,sender_user_id uuid,body text,created_at timestamptz DEFAULT now());
+ CREATE TABLE chat_rooms(id uuid PRIMARY KEY,kind text,last_message_at timestamptz,title text,state text,context jsonb);
+ CREATE TABLE chat_participants(room_id uuid,user_id uuid,state text,last_read_at timestamptz);
  CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text);
  CREATE UNIQUE INDEX notifications_event_key_unique ON notifications(event_key) WHERE event_key IS NOT NULL;
  CREATE TABLE messaging_preferences(actor_type text,actor_id uuid,read_receipts_enabled boolean,PRIMARY KEY(actor_type,actor_id));
@@ -66,6 +68,8 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("X-User")); return c.Next() })
 	app.Get("/inbox", controller.ListBuyerConversations)
+	community := &CommunityController{db: db, market: controller}
+	app.Get("/community-inbox", community.Inbox)
 	app.Get("/history/:conversation_id", controller.BuyerConversationMessages)
 	app.Post("/product/:product_id", controller.StartProductConversation)
 	app.Post("/service/:listing_id", controller.StartProviderConversation)
@@ -92,6 +96,15 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	inbox := call("GET", "/inbox", buyer, "", 200)["items"].([]any)
 	if len(inbox) != 1 || inbox[0].(map[string]any)["id"] != oldA {
 		t.Fatal("historical products were not grouped", inbox)
+	}
+	for _, actor := range []string{buyer, owner} {
+		rows := call("GET", "/community-inbox?conversation_id="+oldB, actor, "", 200)["items"].([]any)
+		if len(rows) != 1 || rows[0].(map[string]any)["id"] != oldA {
+			t.Fatal("unified inbox alias or provider-side grouping failed", rows)
+		}
+	}
+	if rows := call("GET", "/community-inbox?conversation_id="+oldB, other, "", 200)["items"].([]any); len(rows) != 0 {
+		t.Fatal("community inbox leaked another customer's thread")
 	}
 	for _, id := range []string{oldA, oldB} {
 		items := call("GET", "/history/"+id+"?mark_read=false&limit=40", buyer, "", 200)["items"].([]any)
@@ -160,4 +173,8 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	if root == "" {
 		t.Fatal("no concurrent contacts completed")
 	}
+	if _, err = db.Exec(ctx, `UPDATE provider_conversations SET status='blocked' WHERE id=$1::uuid`, oldB); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", "/product/"+first, buyer, `{"message":"Must remain blocked","client_message_id":"`+uuid.NewString()+`"}`, 409)
 }

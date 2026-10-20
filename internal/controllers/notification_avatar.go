@@ -12,6 +12,7 @@ import (
 )
 
 var avatarSlots = make(chan struct{}, 2)
+var avatarFetchSlots = make(chan struct{}, 2)
 var avatarCache = struct {
 	sync.Mutex
 	items map[string]cachedAvatar
