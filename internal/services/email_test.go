@@ -21,7 +21,7 @@ func TestEmailLayoutUsesBrandingAndEscapesMetadata(t *testing.T) {
 		`Products, trusted services and delivery in one place`,
 		`Operated by ATLANTIC SHANSU LOGISTICS LIMITED`,
 		`ATLANTIC SHANSU LOGISTICS LIMITED`,
-		`src="cid:atlantic-express-logo"`,
+		`src="cid:atlantic-express-logo@atlxpres.com"`,
 		`&lt;Welcome&gt;`,
 		`Preview &amp; details`,
 		`<p>Body</p>`,

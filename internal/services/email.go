@@ -275,7 +275,7 @@ func emailMIMEBody(textBody, htmlBody string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		encoded := base64.StdEncoding.EncodeToString(branding.Logo)
+		encoded := base64.StdEncoding.EncodeToString(branding.EmailLogo)
 		for len(encoded) > 0 {
 			n := 76
 			if len(encoded) < n {

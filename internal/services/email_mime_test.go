@@ -48,7 +48,7 @@ func TestBrandedEmailCarriesDecodableInlineLogoAndShortLines(t *testing.T) {
 		t.Fatal("logo CID not linked")
 	}
 	image, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, logo))
-	if err != nil || !bytes.Equal(image, branding.Logo) {
+	if err != nil || !bytes.Equal(image, branding.EmailLogo) || len(image) >= len(branding.Logo) {
 		t.Fatal("inline logo damaged", err)
 	}
 	for _, line := range strings.Split(body, "\r\n") {

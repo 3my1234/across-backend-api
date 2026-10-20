@@ -32,7 +32,7 @@ no physical-device appearance has been certified by source/unit tests.
 
 ## Email changes and deliverability evidence
 
-Transactional emails attach the bundled PNG using a CID multipart/related MIME
+Transactional emails attach an optimized 380-pixel copy of the bundled PNG using a CID multipart/related MIME
 part, with plain text and HTML alternatives and a visible text brand fallback.
 The public logo endpoint serves the same embedded asset. Remote image loading
 is no longer required to display the email logo in clients supporting inline
