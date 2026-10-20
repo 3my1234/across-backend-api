@@ -51,7 +51,7 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
 	buyer, owner, other, provider := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	first, second, service, oldA, oldB := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	_, err = db.Exec(ctx, `INSERT INTO users(id,full_name,email,avatar_url)VALUES($1,'Customer','buyer@example.invalid','user-uploads/buyer/avatar.png'),($2,'Owner','owner@example.invalid',''),($3,'Other','other@example.invalid','');
- INSERT INTO provider_organizations(id,business_name,logo_url)VALUES($4,'Business','user-uploads/providers/logo/photo.png');
+ INSERT INTO provider_organizations(id,business_name,logo_url,owner_user_id)VALUES($4,'Business','user-uploads/providers/logo/photo.png',$2);
  INSERT INTO provider_members(provider_id,user_id,role)VALUES($4,$2,'owner');
  INSERT INTO products(id,provider_id,title,payment_mode)VALUES($5,$4,'Rice','contact'),($6,$4,'Shoes','contact');
  INSERT INTO provider_listings(id,provider_id,title)VALUES($7,$4,'Delivery');
