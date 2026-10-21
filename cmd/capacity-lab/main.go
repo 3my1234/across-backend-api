@@ -377,7 +377,7 @@ func request(c *http.Client, op operation, index int) sample {
 	req.Header.Set("Content-Type", "application/json")
 	// Synthetic distinct clients through the lab-only proxy; real Redis rate
 	// limits remain enabled. Production proxy trust is not modified here.
-	req.Header.Set("X-Forwarded-For", fmt.Sprintf("192.0.2.%d", index+1))
+	req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.18.%d.%d", (index/254)%256, index%254+1))
 	began := time.Now()
 	res, err := c.Do(req)
 	s := sample{Name: op.Name, Write: op.Write}

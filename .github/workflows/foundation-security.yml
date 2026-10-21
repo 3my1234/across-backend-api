@@ -20,7 +20,7 @@ jobs:
           go test -race ./internal/config ./internal/middleware ./internal/buildinfo ./cmd/worker
           python3 scripts/test_restore_drill.py
       - name: Reachable Go vulnerability gate
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -show verbose ./...
       - name: Build offline preflight and check embedded revision
         run: |
           go build -ldflags="-X across/backend/internal/buildinfo.Revision=${{ github.sha }}" -o /tmp/atl-config-check ./cmd/config-check

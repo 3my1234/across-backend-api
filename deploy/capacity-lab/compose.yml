@@ -18,6 +18,8 @@ x-api: &api
     DB_MIN_CONNS: "1"
     HTTP_MAX_IN_FLIGHT: "64"
     RATE_LIMIT_PER_MINUTE: "600"
+    # Only the lab proxy and synthetic-client generator own this chain.
+    TRUSTED_PROXY_CIDRS: 172.29.248.10/32,172.29.248.20/32
   depends_on: {seed: {condition: service_completed_successfully}}
   networks: [lab]
   cpus: 0.75
@@ -71,7 +73,8 @@ services:
     image: haproxy:3.0-alpine
     volumes: [./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro]
     depends_on: {api1: {condition: service_healthy}, api2: {condition: service_healthy}}
-    networks: [lab]
+    networks:
+      lab: {ipv4_address: 172.29.248.10}
     cpus: 0.25
     mem_limit: 128m
   runner:
@@ -84,8 +87,12 @@ services:
       LAB_DB_CPUS: ${LAB_DB_CPUS:-1}
       LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-100}
     depends_on: {gateway: {condition: service_started}}
-    networks: [lab]
+    networks:
+      lab: {ipv4_address: 172.29.248.20}
     cpus: 1
     mem_limit: 512m
 networks:
-  lab: {internal: true}
+  lab:
+    internal: true
+    ipam:
+      config: [{subnet: 172.29.248.0/24}]
