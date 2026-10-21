@@ -15,6 +15,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	cfg := config.Load()
+	if err := cfg.Validate("migrate"); err != nil {
+		log.Fatal(err)
+	}
 	pool, err := db.NewPostgresPool(ctx, cfg.MigrationDatabaseURL, 2, 1)
 	if err != nil {
 		log.Fatal(err)

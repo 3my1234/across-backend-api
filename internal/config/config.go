@@ -23,10 +23,12 @@ type Config struct {
 	WebPushSubject    string
 
 	AppEnv                        string
+	EnableDevLogin                bool
 	HTTPAddr                      string
 	HTTPMaxInFlight               int
 	WorkerHealthAddr              string
 	AllowedOrigins                string
+	TrustedProxyCIDRs             string
 	DatabaseURL                   string
 	DatabaseReadURL               string
 	MigrationDatabaseURL          string
@@ -111,11 +113,13 @@ func Load() Config {
 		WebPushPublicKey:              env("WEB_PUSH_VAPID_PUBLIC_KEY", ""),
 		WebPushPrivateKey:             env("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
 		WebPushSubject:                env("WEB_PUSH_SUBJECT", "mailto:support@atlxpres.com"),
-		AppEnv:                        env("APP_ENV", "development"),
+		AppEnv:                        strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		EnableDevLogin:                envBool("ENABLE_DEV_LOGIN", false),
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
 		HTTPMaxInFlight:               envInt("HTTP_MAX_IN_FLIGHT", 128),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),
 		AllowedOrigins:                env("ALLOWED_ORIGINS", defaultAllowedOrigins),
+		TrustedProxyCIDRs:             env("TRUSTED_PROXY_CIDRS", ""),
 		DatabaseURL:                   databaseURL(),
 		DatabaseReadURL:               env("DATABASE_READ_URL", ""),
 		MigrationDatabaseURL:          env("MIGRATION_DATABASE_URL", databaseURL()),

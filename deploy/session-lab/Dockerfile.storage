@@ -1,10 +1,10 @@
 # Disposable CI only: build the pinned upstream S3-compatible server ourselves.
 # No public bucket, production credentials or exposed host ports.
-FROM golang:1.24-alpine AS build
+FROM golang:1.27.3-alpine3.23 AS build
 RUN apk add --no-cache git
 ENV CGO_ENABLED=0
 RUN go install github.com/minio/minio@RELEASE.2025-10-15T17-29-55Z
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates curl
 COPY --from=build /go/bin/minio /usr/local/bin/minio
 ENTRYPOINT ["minio"]

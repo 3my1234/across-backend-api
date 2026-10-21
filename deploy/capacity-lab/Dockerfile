@@ -1,10 +1,10 @@
-FROM golang:1.22-alpine AS build
+FROM golang:1.27.3-alpine3.23 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/api ./cmd/api && CGO_ENABLED=0 go build -o /out/lab ./cmd/capacity-lab
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates curl
 WORKDIR /app
 COPY --from=build /out/ /app/

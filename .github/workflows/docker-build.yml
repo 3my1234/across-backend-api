@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.27.3'
       - name: Verify contact-only checkout, permanent Free capacity and paid discovery
         env:
           DATABASE_URL: postgres://postgres:ci-provider-tests@127.0.0.1:5432/provider_tests?sslmode=disable
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.27.3'
       - name: Check worker health and heartbeat concurrency
         run: CGO_ENABLED=1 go test -race ./cmd/worker ./internal/workers
       - name: Check API admission and connection budget
@@ -67,4 +67,4 @@ jobs:
           python3 scripts/test_replica_release.py
           docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:3.0-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: Build production image
-        run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .
+        run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .

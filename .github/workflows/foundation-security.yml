@@ -1,0 +1,63 @@
+name: Foundation security and recovery
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Unit and concurrency regressions
+        run: |
+          go test ./...
+          go test -race ./internal/config ./internal/middleware ./internal/buildinfo ./cmd/worker
+          python3 scripts/test_restore_drill.py
+      - name: Reachable Go vulnerability gate
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Build offline preflight and check embedded revision
+        run: |
+          go build -ldflags="-X across/backend/internal/buildinfo.Revision=${{ github.sha }}" -o /tmp/atl-config-check ./cmd/config-check
+          /tmp/atl-config-check --build-info > /tmp/build-info.json
+          python3 -c 'import json; assert json.load(open("/tmp/build-info.json"))["revision"] == "${{ github.sha }}"'
+  recovery-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: foundation_recovery_fixture
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make synthetic archive from disposable CI data
+        env:
+          FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "$FIXTURE_CONTAINER" psql -X -U postgres -d foundation_recovery_fixture -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE users(id integer PRIMARY KEY);
+          CREATE TABLE providers(id integer PRIMARY KEY,user_id integer REFERENCES users(id));
+          INSERT INTO users VALUES (1),(2);
+          INSERT INTO providers VALUES (1,1);
+          SQL
+          docker exec "$FIXTURE_CONTAINER" pg_dump -U postgres -d foundation_recovery_fixture -Fc > /tmp/synthetic-recovery.dmp
+      - name: Exercise isolated restore and structural verification
+        run: |
+          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16
+          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --execute | tee /tmp/recovery-evidence.jsonl
+          python3 -c 'import json; rows=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")]; assert rows[-1]["isolated_restore_passed"] and rows[-1]["counts"] == {"users":2,"providers":1}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-recovery-evidence
+          path: /tmp/recovery-evidence.jsonl

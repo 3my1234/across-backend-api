@@ -5,7 +5,8 @@ x-api: &api
   image: atlxpres-capacity-lab:local
   command: [/app/api]
   environment:
-    APP_ENV: staging
+    # Synthetic no-egress fixture, not a production-like security environment.
+    APP_ENV: test
     DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=disable
     DATABASE_READ_URL: ""
     REDIS_ADDR: redis:6379

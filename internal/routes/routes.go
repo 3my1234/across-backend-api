@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"across/backend/internal/branding"
+	"across/backend/internal/buildinfo"
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
@@ -15,7 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config) {
+func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config, runtimeSnapshots ...func() map[string]any) {
 	payments := controllers.NewPaymentController(db, cfg)
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db, cfg.FlutterwaveCustomerPaysFees, func() bool { return cfg.ProviderSubscriptionsRequired(time.Now().UTC()) })
@@ -138,6 +139,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
+	// Keep a terminating 404 rather than allowing the path to fall through to
+	// authenticated route middleware. Controller also guards direct use.
 	v1.Post("/dev/login", dev.Login)
 	v1.Post("/auth/signup", authRateLimit, authController.Signup)
 	v1.Post("/auth/login", authRateLimit, authController.Login)
@@ -166,6 +169,15 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/business-overview", catalogOnly, admin.BusinessOverview)
 	adminRoutes.Get("/subscribers", catalogOnly, admin.Subscribers)
 	adminRoutes.Get("/ops/queue-health", allAdmins, ops.QueueHealth)
+	adminRoutes.Get("/ops/runtime", superOnly, func(c *fiber.Ctx) error {
+		c.Set("Cache-Control", "private, no-store")
+		var httpMetrics map[string]any
+		if len(runtimeSnapshots) > 0 {
+			httpMetrics = runtimeSnapshots[0]()
+		}
+		pool := db.Stat()
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
+	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
 	adminRoutes.Delete("/admins/:admin_id", superOnly, admin.DeleteAdmin)

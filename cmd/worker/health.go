@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"across/backend/internal/buildinfo"
 	"across/backend/internal/workers"
 )
 
@@ -21,7 +22,7 @@ func workerHealthHandler(monitor *workers.Monitor, dependencies func(context.Con
 		if !healthy {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": healthy, "service": "worker", "loops": checks})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": healthy, "service": "worker", "loops": checks, "build": buildinfo.Snapshot("worker")})
 	}
 	mux.HandleFunc("/", live)
 	mux.HandleFunc("/api/v1/health", live)

@@ -35,6 +35,7 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: SOURCE_COMMIT=${{ github.sha }}
           tags: ${{ inputs.repository_uri }}:${{ github.sha }}
           provenance: false
       - name: Record immutable deployment image

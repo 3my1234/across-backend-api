@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"across/backend/internal/buildinfo"
 	"across/backend/internal/config"
 	"across/backend/internal/db"
 	"across/backend/internal/workers"
@@ -18,6 +19,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	cfg := config.Load()
+	if err := cfg.Validate("worker"); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("build_identity %v", buildinfo.Snapshot("worker"))
 	store, err := db.New(ctx, cfg)
 	if err != nil {
 		log.Fatal(err)

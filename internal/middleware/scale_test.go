@@ -31,18 +31,20 @@ func TestPublicCacheablePathExcludesUserSpecificData(t *testing.T) {
 	}
 }
 
-func TestScaleClientIPPrefersCloudflareValidatedIP(t *testing.T) {
+func TestScaleClientIPIgnoresUnverifiedForwardingHeaders(t *testing.T) {
 	app := fiber.New()
+	app.Use(TrustedClientIP(""))
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString(scaleClientIP(c)) })
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("CF-Connecting-IP", "203.0.113.15")
 	req.Header.Set("X-Forwarded-For", "198.51.100.20")
+	req.Header.Set("X-Real-IP", "192.0.2.25")
 	response, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(response.Body)
-	if string(body) != "203.0.113.15" {
+	if string(body) == "203.0.113.15" || string(body) == "198.51.100.20" || string(body) == "192.0.2.25" || len(body) == 0 {
 		t.Fatalf("client IP = %q", body)
 	}
 }

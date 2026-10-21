@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"across/backend/internal/buildinfo"
 	"across/backend/internal/config"
 	"across/backend/internal/db"
 	appmiddleware "across/backend/internal/middleware"
@@ -27,6 +28,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	cfg := config.Load()
+	if err := cfg.Validate("api"); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("build_identity %v", buildinfo.Snapshot("api"))
 	store, err := db.New(ctx, cfg)
 	if err != nil {
 		log.Fatal(err)
@@ -46,8 +51,11 @@ func main() {
 		IdleTimeout:  30 * time.Second,
 	})
 	admission := appmiddleware.NewAdmission(cfg.HTTPMaxInFlight)
+	metrics := appmiddleware.NewRequestMetrics()
+	app.Use(metrics.Handler)
 	app.Use(requestid.New())
 	app.Use(recover.New())
+	app.Use(appmiddleware.TrustedClientIP(cfg.TrustedProxyCIDRs))
 	// CORS must also apply to early overload/draining rejections so browser
 	// clients can distinguish a retryable 503 from a network failure.
 	app.Use(cors.New(cors.Config{
@@ -64,7 +72,7 @@ func main() {
 	app.Use(logger.New(logger.Config{
 		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${locals:requestid} error=${error}\n",
 	}))
-	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg)
+	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg, metrics.Snapshot)
 
 	// Backward-compatible single-resource mode. At scale, set this false and
 	// run one or more /app/across-worker services independently.

@@ -27,7 +27,7 @@ func TestNormalizedCountryCode(t *testing.T) {
 	}
 }
 
-func TestAllowedCountryUsesCloudflareCountryBeforeClientHint(t *testing.T) {
+func TestAllowedCountryDoesNotTrustSpoofedCloudflareAllow(t *testing.T) {
 	app := fiber.New()
 	app.Get("/", RequireAllowedCountry(config.Config{
 		AllowedCountries: "NG",
@@ -41,12 +41,12 @@ func TestAllowedCountryUsesCloudflareCountryBeforeClientHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	if response.StatusCode != fiber.StatusNoContent {
-		t.Fatalf("status = %d, want %d", response.StatusCode, fiber.StatusNoContent)
+	if response.StatusCode != fiber.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.StatusCode, fiber.StatusForbidden)
 	}
 }
 
-func TestAllowedCountryRejectsExplicitCloudflareCountry(t *testing.T) {
+func TestAllowedCountryDoesNotTrustSpoofedCloudflareDeny(t *testing.T) {
 	app := fiber.New()
 	app.Get("/", RequireAllowedCountry(config.Config{
 		AllowedCountries: "NG",
@@ -60,7 +60,7 @@ func TestAllowedCountryRejectsExplicitCloudflareCountry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	if response.StatusCode != fiber.StatusForbidden {
-		t.Fatalf("status = %d, want %d", response.StatusCode, fiber.StatusForbidden)
+	if response.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.StatusCode, fiber.StatusNoContent)
 	}
 }
