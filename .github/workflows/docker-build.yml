@@ -41,7 +41,7 @@ jobs:
           SETTLEMENT_TEST_LOCAL: 'true'
         run: |
           command -v ffprobe || (sudo apt-get update && sudo apt-get install -y ffmpeg)
-          go test ./internal/controllers -v -count=1 -run 'Test(BrowserPush|ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderPostRules|ProviderChat|BuyerConversation|RequestConversation|Chat|MessageReceipt|CircularNotificationAvatar|PublicPostMedia|PostVideo|NewPassword|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
+          go test ./internal/controllers -v -count=1 -run 'Test(BrowserPush|ProviderBrowserPush|ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderPostRules|ProviderChat|BuyerConversation|RequestConversation|Chat|MessageReceipt|CircularNotificationAvatar|PublicPostMedia|PostVideo|NewPassword|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
           go test ./internal/services ./internal/routes
   docker-build:
     runs-on: ubuntu-latest
