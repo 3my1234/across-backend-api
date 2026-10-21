@@ -47,6 +47,15 @@ func communityTestDB(t *testing.T, skipExpiry ...bool) *pgxpool.Pool {
 			t.Fatalf("%s: %v", file, err)
 		}
 	}
+	if len(skipExpiry) == 0 || !skipExpiry[0] {
+		raw, err := os.ReadFile("../../migrations/101_town_hall_lifetime.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(ctx, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return db
 }
 func communityApp(db *pgxpool.Pool) *fiber.App {

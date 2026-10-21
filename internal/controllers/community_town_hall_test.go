@@ -164,11 +164,8 @@ func TestCommunityTownHallAdmissionExpiryAndHandoff(t *testing.T) {
 		t.Fatal("selected offer was not recorded exactly once")
 	}
 	communityCall(t, app, "GET", "/hall/"+room, users[11], "", 404)
-	retained := communityCall(t, app, "GET", "/hall/"+room, buyer, "", 200)
-	if len(retained["offers"].([]any)) != 1 {
-		t.Fatal("buyer lost offer record")
-	}
-	communityCall(t, app, "GET", "/rooms/"+room+"/messages", buyer, "", 200)
+	communityCall(t, app, "GET", "/hall/"+room, buyer, "", 404)
+	communityCall(t, app, "GET", "/rooms/"+room+"/messages", buyer, "", 410)
 	communityCall(t, app, "GET", "/rooms/"+room+"/messages", users[10], "", 403)
 	communityCall(t, app, "POST", "/rooms/"+handed["id"].(string)+"/messages", users[0], `{"message":"Continue privately","client_message_id":"`+uuid.NewString()+`"}`, 201)
 }

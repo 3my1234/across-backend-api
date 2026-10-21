@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,4 +69,63 @@ func (w *WebPushController) Unregister(c *fiber.Ctx) error {
 		return fiber.ErrInternalServerError
 	}
 	return c.SendStatus(204)
+}
+
+// Test only the authenticated user's current browser; never accept recipients
+// or message contents from the client. Repeated taps reuse the latest test.
+func (w *WebPushController) Test(c *fiber.Ctx) error {
+	if !services.WebPushConfigured(w.cfg) {
+		return fiber.NewError(503, "Phone notifications are not configured")
+	}
+	var in struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if c.BodyParser(&in) != nil || !services.ValidWebPushEndpoint(in.Endpoint) {
+		return fiber.ErrUnprocessableEntity
+	}
+	actor, _ := c.Locals("user_id").(string)
+	tx, err := w.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer tx.Rollback(c.Context())
+	var subscription string
+	err = tx.QueryRow(c.Context(), `SELECT id::text FROM web_push_subscriptions WHERE user_id=$1::uuid AND endpoint=$2 AND disabled_at IS NULL AND vapid_public_key=$3 FOR UPDATE`, actor, in.Endpoint, w.cfg.WebPushPublicKey).Scan(&subscription)
+	if err == pgx.ErrNoRows {
+		return fiber.NewError(409, "Reconnect phone notifications, then retry the test")
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	var id string
+	err = tx.QueryRow(c.Context(), `SELECT id::text FROM web_push_deliveries WHERE subscription_id=$1::uuid AND source_key LIKE 'browser-test:%' AND created_at>now()-interval '30 seconds' ORDER BY created_at DESC LIMIT 1`, subscription).Scan(&id)
+	if err == pgx.ErrNoRows {
+		id = uuid.NewString()
+		_, err = tx.Exec(c.Context(), `INSERT INTO web_push_deliveries(id,subscription_id,source_key,payload) VALUES($1::uuid,$2::uuid,'browser-test:'||$1::text,jsonb_build_object('title','Atlantic Express notification test','body','If you can see this phone notification, browser push reached this device.','view','overview','tag','atl-browser-test'))`, id, subscription)
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.Status(202).JSON(fiber.Map{"id": id})
+}
+
+func (w *WebPushController) TestStatus(c *fiber.Ctx) error {
+	if _, err := uuid.Parse(c.Params("delivery_id")); err != nil {
+		return fiber.ErrBadRequest
+	}
+	actor, _ := c.Locals("user_id").(string)
+	var status string
+	err := w.db.QueryRow(c.Context(), `SELECT d.status FROM web_push_deliveries d JOIN web_push_subscriptions s ON s.id=d.subscription_id WHERE d.id=$1::uuid AND s.user_id=$2::uuid AND d.source_key LIKE 'browser-test:%'`, c.Params("delivery_id"), actor).Scan(&status)
+	if err == pgx.ErrNoRows {
+		return fiber.ErrNotFound
+	}
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.JSON(fiber.Map{"status": status})
 }

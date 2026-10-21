@@ -104,9 +104,9 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"id": id})
 }
 
-const hallPreviewSQL = `SELECT jsonb_build_object('id',r.id,'title',r.title,'state',CASE WHEN h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp() AND r.state='open' THEN 'closed' ELSE r.state END,'created_at',r.created_at,
- 'expired',h.expired_at IS NOT NULL OR (r.state='open' AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()),
- 'expires_at',CASE WHEN r.state='open' AND h.first_provider_engaged_at IS NULL THEN h.engagement_deadline END,
+const hallPreviewSQL = `SELECT jsonb_build_object('id',r.id,'title',r.title,'state',CASE WHEN h.engagement_deadline<=clock_timestamp() AND r.state='open' THEN 'closed' ELSE r.state END,'created_at',r.created_at,
+ 'expired',h.expired_at IS NOT NULL OR (r.state='open' AND h.engagement_deadline<=clock_timestamp()),
+ 'expires_at',h.engagement_deadline,
  'provider_engaged',h.first_provider_engaged_at IS NOT NULL,'is_owner',r.owner_user_id=$1::uuid,
  'buyer_name',buyer.full_name, 'buyer_avatar_url',buyer.avatar_url,
  'description',h.description,'message_only',h.message_only,'category',h.category,'location',h.location,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'target_unit_price',h.target_unit_price,
@@ -122,10 +122,10 @@ func (s *CommunityController) HallList(c *fiber.Ctx) error {
 	}
 	mine := c.Query("mine") == "true"
 	// Literal, server-selected predicates let PostgreSQL use the partial feed
-	// indexes even for prepared plans; buyer history still includes closed rooms.
-	filter := `r.kind='town_hall' AND r.state='open' AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())`
+	// indexes even for prepared plans. Closed/expired requests leave the feed.
+	filter := `r.kind='town_hall' AND r.state='open' AND h.engagement_deadline>clock_timestamp()`
 	if mine {
-		filter = `r.kind='town_hall' AND r.owner_user_id=$1::uuid`
+		filter += ` AND r.owner_user_id=$1::uuid`
 	}
 	rows, err := s.db.Query(c.Context(), hallPreviewSQL+` WHERE `+filter+`
  AND ($2::timestamptz IS NULL OR (r.created_at,r.id)<($2,$3::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $4`, communityActor(c), page.CursorTime, nullID(page.CursorID), page.Limit+1)
@@ -178,7 +178,7 @@ func (s *CommunityController) HallActivity(c *fiber.Ctx) error {
 		return communityError(err)
 	}
 	var count int
-	err := s.db.QueryRow(c.Context(), `SELECT count(*) FROM (SELECT r.id FROM chat_rooms r WHERE r.kind='town_hall' AND r.state='open' AND EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())) AND COALESCE((SELECT m.sender_user_id FROM chat_messages m WHERE m.room_id=r.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),r.owner_user_id)<>$1::uuid AND r.last_message_at>(SELECT town_hall_seen_at FROM social_profiles WHERE user_id=$1::uuid) LIMIT 100) recent`, communityActor(c)).Scan(&count)
+	err := s.db.QueryRow(c.Context(), `SELECT count(*) FROM (SELECT r.id FROM chat_rooms r WHERE r.kind='town_hall' AND r.state='open' AND EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.engagement_deadline>clock_timestamp()) AND COALESCE((SELECT m.sender_user_id FROM chat_messages m WHERE m.room_id=r.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),r.owner_user_id)<>$1::uuid AND r.last_message_at>(SELECT town_hall_seen_at FROM social_profiles WHERE user_id=$1::uuid) LIMIT 100) recent`, communityActor(c)).Scan(&count)
 	if err != nil {
 		return communityError(err)
 	}
@@ -191,7 +191,7 @@ func (s *CommunityController) HallDetail(c *fiber.Ctx) error {
 	}
 	actor := communityActor(c)
 	var raw []byte
-	err = s.db.QueryRow(c.Context(), hallPreviewSQL+` WHERE r.id=$2::uuid AND (r.owner_user_id=$1::uuid OR (r.state='open' AND (h.first_provider_engaged_at IS NOT NULL OR h.engagement_deadline>clock_timestamp())))`, actor, id).Scan(&raw)
+	err = s.db.QueryRow(c.Context(), hallPreviewSQL+` WHERE r.id=$2::uuid AND r.state='open' AND h.engagement_deadline>clock_timestamp()`, actor, id).Scan(&raw)
 	if err != nil {
 		return communityError(err)
 	}
@@ -236,7 +236,7 @@ func paidHallProvider(ctx context.Context, tx pgx.Tx, provider string) error {
 }
 func lockHallOwner(ctx context.Context, tx pgx.Tx, id, actor string) error {
 	var owner, state string
-	err := tx.QueryRow(ctx, `SELECT owner_user_id::text,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid AND kind='town_hall' FOR UPDATE`, id).Scan(&owner, &state)
+	err := tx.QueryRow(ctx, `SELECT owner_user_id::text,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid AND kind='town_hall' FOR UPDATE`, id).Scan(&owner, &state)
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,7 @@ func (s *CommunityController) HallApply(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback(c.Context())
 	var state, owner string
-	err = tx.QueryRow(c.Context(), `SELECT CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END,owner_user_id::text FROM chat_rooms WHERE id=$1::uuid AND kind='town_hall' FOR UPDATE`, id).Scan(&state, &owner)
+	err = tx.QueryRow(c.Context(), `SELECT CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END,owner_user_id::text FROM chat_rooms WHERE id=$1::uuid AND kind='town_hall' FOR UPDATE`, id).Scan(&state, &owner)
 	if err != nil {
 		return communityError(err)
 	}
