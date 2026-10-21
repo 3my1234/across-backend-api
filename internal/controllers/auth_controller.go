@@ -157,7 +157,7 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"message": "Account created. Check your email shortly to activate it.", "requires_email_verification": true,
+		"message": "Account created. Check your inbox and Spam/Junk folder shortly to activate it.", "requires_email_verification": true,
 		"verification_delivery_pending": true, "user_id": userID,
 	})
 }
@@ -909,7 +909,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		WHERE email = $1
 	`, email).Scan(&userID, &fullName, &emailVerified, &sentAt, &resendCount)
 	if err != nil {
-		return c.JSON(fiber.Map{"message": "if the email exists, a verification message will be sent"})
+		return c.JSON(fiber.Map{"message": "If the email exists, a verification message will be sent. Check your inbox and Spam/Junk folder."})
 	}
 	if emailVerified {
 		return c.JSON(fiber.Map{"message": "account is already verified"})
@@ -919,7 +919,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		retryAfterSeconds := int((remaining + time.Second - 1) / time.Second)
 		c.Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
-			"message":             "Your verification email is still being delivered. Please wait before requesting another.",
+			"message":             "Your verification email is still being delivered. Check your inbox and Spam/Junk folder, and wait before requesting another.",
 			"retry_after_seconds": retryAfterSeconds,
 		})
 	}
@@ -943,7 +943,7 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 	}
 	if err := services.QueueVerificationEmail(c.Context(), tx, userID, verificationToken, a.cfg.PublicBaseURL); err != nil {
 		if errors.Is(err, services.ErrRecipientSuppressed) {
-			return c.JSON(fiber.Map{"message": "if the email exists, a verification message will be sent"})
+			return c.JSON(fiber.Map{"message": "If the email exists, a verification message will be sent. Check your inbox and Spam/Junk folder."})
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not queue verification email")
 	}
@@ -951,11 +951,11 @@ func (a *AuthController) ResendVerification(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not resend verification")
 	}
 
-	return c.JSON(fiber.Map{"message": "verification email queued"})
+	return c.JSON(fiber.Map{"message": "Verification email queued. Check your inbox and Spam/Junk folder."})
 }
 
 func (a *AuthController) ForgotPassword(c *fiber.Ctx) error {
-	const responseMessage = "If an account exists for that email, a password reset link will be sent shortly."
+	const responseMessage = "If an account exists for that email, a password reset link will be sent shortly. Check your inbox and Spam/Junk folder."
 	var req struct {
 		Email string `json:"email"`
 	}
