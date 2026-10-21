@@ -48,6 +48,7 @@ func CommunitySchemaReady(ctx context.Context, db *pgxpool.Pool) bool {
 	 AND to_regclass('social_statuses') IS NOT NULL AND to_regclass('social_promotion_jobs') IS NOT NULL
 	 AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('town_hall_requests') AND attname='message_only' AND NOT attisdropped)
  AND to_regprocedure('expire_unengaged_town_hall_requests(integer)') IS NOT NULL
+ AND to_regprocedure('purge_ended_town_hall_requests(integer)') IS NOT NULL
  AND to_regclass('provider_driver_presence') IS NOT NULL AND to_regprocedure('valid_chat_location(jsonb)') IS NOT NULL`).Scan(&ready)
 	return err == nil && ready
 }
@@ -424,7 +425,7 @@ func (s *CommunityController) StartDirect(c *fiber.Ctx) error {
 // same room lock, so a delayed sender cannot rely on stale admission state.
 func (s *CommunityController) lockMember(ctx context.Context, tx pgx.Tx, room, actor string) (string, string, string, error) {
 	var kind, state, role, provider string
-	err := tx.QueryRow(ctx, `SELECT kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid FOR UPDATE`, room).Scan(&kind, &state)
+	err := tx.QueryRow(ctx, `SELECT kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid FOR UPDATE`, room).Scan(&kind, &state)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -492,6 +493,7 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
  COALESCE((SELECT o.id::text FROM provider_organizations o JOIN chat_participants peer ON peer.user_id=o.owner_user_id WHERE peer.room_id=r.id AND peer.user_id<>$1::uuid AND r.kind='direct' AND o.is_active LIMIT 1),'') AS provider_id,'member'::text AS actor_role,r.state,
  (SELECT count(*)::int FROM chat_messages msg WHERE msg.room_id=r.id AND msg.sender_user_id<>$1::uuid AND msg.created_at>COALESCE(member.last_read_at,'epoch'::timestamptz)) AS unread_count,r.context
  FROM chat_rooms r JOIN chat_participants member ON member.room_id=r.id AND member.user_id=$1::uuid AND member.state='active'
+ WHERE r.kind<>'town_hall' OR (r.state='open' AND EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.engagement_deadline>clock_timestamp()))
  UNION ALL
  SELECT c.id,'business','legacy',c.last_message_at,CASE WHEN c.user_id=$1::uuid THEN p.business_name ELSE COALESCE(u.full_name,'Customer') END,CASE WHEN c.user_id=$1::uuid THEN p.owner_user_id::text ELSE c.user_id::text END,c.provider_id::text,
  CASE WHEN c.user_id=$1::uuid THEN 'buyer' ELSE 'provider' END,c.status,
@@ -564,9 +566,12 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	var revision int64
 	var kind, state, role string
 	var owner string
-	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.first_provider_engaged_at IS NULL AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE r.state END,p.role,r.owner_user_id::text FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid AND p.state='active' WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner)
+	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE r.state END,p.role,r.owner_user_id::text FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid AND p.state='active' WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner)
 	if err != nil {
 		return fiber.ErrForbidden
+	}
+	if kind == "town_hall" && state != "open" {
+		return fiber.NewError(410, "This Town Hall request has ended or expired")
 	}
 	canSend := state == "open"
 	if role == "provider" {

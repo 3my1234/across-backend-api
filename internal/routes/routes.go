@@ -274,6 +274,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/notifications/web-push/key", webPush.PublicKey)
 	authed.Post("/notifications/web-push", webPush.Register)
 	authed.Delete("/notifications/web-push", webPush.Unregister)
+	authed.Post("/notifications/web-push/test", webPush.Test)
+	authed.Get("/notifications/web-push/test/:delivery_id", webPush.TestStatus)
 	authed.Post("/notifications/test-push", notifications.TestPush)
 	authed.Delete("/notifications/push-token", notifications.UnregisterPushToken)
 
