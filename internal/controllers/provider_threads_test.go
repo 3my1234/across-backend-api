@@ -28,6 +28,7 @@ func TestProductChatGroupedHistoryMigrationAndReceipts(t *testing.T) {
  CREATE TABLE chat_messages(id uuid PRIMARY KEY,room_id uuid,sender_user_id uuid,body text,created_at timestamptz DEFAULT now());
  CREATE TABLE chat_rooms(id uuid PRIMARY KEY,kind text,last_message_at timestamptz,title text,state text,context jsonb);
  CREATE TABLE chat_participants(room_id uuid,user_id uuid,state text,last_read_at timestamptz);
+ CREATE TABLE town_hall_requests(room_id uuid,engagement_deadline timestamptz);
  CREATE TABLE notifications(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,order_id uuid,batch_id uuid,type text,title text,body text,data jsonb,event_key text);
  CREATE UNIQUE INDEX notifications_event_key_unique ON notifications(event_key) WHERE event_key IS NOT NULL;
  CREATE TABLE messaging_preferences(actor_type text,actor_id uuid,read_receipts_enabled boolean,PRIMARY KEY(actor_type,actor_id));
