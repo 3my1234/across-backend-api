@@ -27,7 +27,10 @@ PHASE = 'preflight'
 
 
 def docker(*args, stdin=None):
-    result = subprocess.run(['docker', *args], stdin=stdin, stdout=subprocess.PIPE,
+    # subprocess requires a real file descriptor for stdin; in-memory SQL must
+    # use input=bytes. File-backed archives/executables remain streamed.
+    source = {'input': stdin.getvalue()} if isinstance(stdin, io.BytesIO) else {'stdin': stdin}
+    result = subprocess.run(['docker', *args], **source, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=180)
     if result.returncode:
         raise RuntimeError('isolated Docker operation failed (output withheld to protect archive data)')
