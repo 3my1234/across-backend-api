@@ -59,6 +59,7 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/recovery-read-check ./cmd/recovery-read-check
       - name: Exercise isolated restore, business aggregates and real read handlers
         run: |
+          set -euo pipefail
           python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16
           python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --read-check /tmp/recovery-read-check --execute | tee /tmp/recovery-evidence.jsonl
           python3 -c 'import json; r=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")][-1]; e=r["extended_validation"]; assert r["isolated_restore_passed"] and r["migration_inventory_matched"] and r["owned_container_removed"] and r["counts"]["users"] == 2 and e["application_reads"]["application_reads_passed"] and not e["findings_require_review"]; assert e["aggregate_counts"]["subscription_payments"] == 1 and e["aggregate_counts"]["ordinary_messages"] == 1 and e["aggregate_counts"]["town_hall_offers"] == 1; assert all(x["status"]=="pass" for x in e["application_reads"]["checks"])'

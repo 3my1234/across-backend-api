@@ -23,6 +23,8 @@ REQUIRED_TABLES = ('users', 'provider_organizations', 'provider_members',
                    'chat_rooms', 'chat_participants', 'chat_messages',
                    'town_hall_requests', 'town_hall_offers', 'schema_migrations')
 
+PHASE = 'preflight'
+
 
 def docker(*args, stdin=None):
     result = subprocess.run(['docker', *args], stdin=stdin, stdout=subprocess.PIPE,
@@ -58,6 +60,8 @@ def verify_target(name, nonce):
 
 def extended_checks(name, nonce, executable):
     """Run bundled aggregate SQL and sampled real handlers before cleanup."""
+    global PHASE
+    PHASE = 'extended-role'
     verify_target(name, nonce)
     # This role exists only in the freshly restored, network-none test target.
     # No password or production role is copied into the handler harness.
@@ -71,6 +75,7 @@ ALTER ROLE recovery_reader SET lock_timeout='1s';
 '''
     docker('exec', '-i', name, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
            '-U', 'postgres', '-d', 'recovery_drill', stdin=io.BytesIO(role_sql))
+    PHASE = 'aggregate-validation'
     sql = Path(__file__).with_name('recovery-validation.sql').read_bytes()
     raw = docker('exec', '-i', name, 'psql', '-X', '-q', '-t', '--csv', '-v', 'ON_ERROR_STOP=1',
                  '-U', 'recovery_reader', '-d', 'recovery_drill', stdin=io.BytesIO(sql))
@@ -90,9 +95,11 @@ ALTER ROLE recovery_reader SET lock_timeout='1s';
             raise RuntimeError('unexpected aggregate output')
     if len(aggregates) < 35:
         raise RuntimeError('incomplete aggregate validation')
+    PHASE = 'application-check-upload'
     with executable.open('rb') as binary:
         docker('exec', '-i', name, 'sh', '-c',
                'umask 077; cat > /tmp/atl-recovery-read-check && chmod 500 /tmp/atl-recovery-read-check', stdin=binary)
+    PHASE = 'application-reads'
     application = json.loads(docker('exec', name, '/tmp/atl-recovery-read-check'))
     if application.get('application_reads_passed') is not True:
         raise RuntimeError('application reads failed')
@@ -107,6 +114,7 @@ ALTER ROLE recovery_reader SET lock_timeout='1s';
 
 
 def main():
+    global PHASE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', required=True, type=Path)
     parser.add_argument('--postgres-major', required=True, choices=['15', '16', '17', '18'])
@@ -136,14 +144,18 @@ def main():
     created = False
     began = time.monotonic()
     try:
+        PHASE = 'container-create'
         docker('create', '--pull=never', '--name', name, '--label', 'atl.restore-drill=' + nonce,
                '--network', 'none', '--user', 'postgres', '--cap-drop', 'ALL',
                '--security-opt', 'no-new-privileges', '--memory', '1g', '--cpus', '1',
                '--pids-limit', '128', '--tmpfs', '/var/lib/postgresql:rw,mode=1777,size=536870912',
+               '--tmpfs', '/var/lib/postgresql/data:rw,mode=1777,size=1048576',
                '-e', 'PGDATA=/var/lib/postgresql/drill', '-e', 'POSTGRES_DB=recovery_drill',
                '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', image)
         created = True
+        PHASE = 'isolation-verification'
         verify_target(name, nonce)
+        PHASE = 'database-start'
         docker('start', name)
         for _ in range(60):
             try:
@@ -158,10 +170,12 @@ def main():
             raise RuntimeError('isolated database did not start')
         # The archive is streamed; no production file or directory is mounted.
         with path.open('rb') as archive:
+            PHASE = 'archive-restore'
             docker('exec', '-i', name, 'pg_restore', '-U', 'postgres', '-d', 'recovery_drill',
                    '--no-owner', '--no-privileges', '--exit-on-error', '--single-transaction', stdin=archive)
         # Only aggregate counts, never row contents. Names below are fixed source code.
         checks = {}
+        PHASE = 'structural-validation'
         for table in REQUIRED_TABLES:
             raw = docker('exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
                          '-d', 'recovery_drill', '-Atc', 'SELECT count(*) FROM public.' + table)
@@ -190,8 +204,12 @@ def main():
                           'scope': 'structural restore; extended mode samples read handlers and aggregate invariants, not live integrations or complete recovery objectives'}
     finally:
         if created:
+            # Preserve the failing stage if cleanup itself succeeds.
+            failed_phase = PHASE
+            PHASE = 'cleanup'
             verify_target(name, nonce)
             docker('rm', '-f', '-v', name)
+            PHASE = failed_phase
     report['owned_container_removed'] = True
     print(json.dumps(report))
 
@@ -200,4 +218,4 @@ if __name__ == '__main__':
     try:
         main()
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
-        raise SystemExit('STOPPED: restore drill did not complete; no production target was used. Check local image, archive format/version, size limits and isolated environment.')
+        raise SystemExit('STOPPED: restore drill did not complete at stage ' + PHASE + '; no production target was used. Output withheld to protect archive data.')
