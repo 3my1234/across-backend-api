@@ -23,6 +23,10 @@ const evidence={run_id:'test',configuration:plan(),metrics:{session_starts:{valu
 evidence.metrics.poll_delivery_latency={values:{'p(95)':14000,'p(99)':15000}};
 evidence.metrics.recipient_observations={values:{count:3}};
 const recon={run_id:'test',write_reconciliation_passed:true};assert.equal(nextStage(evidence,recon).next_sessions,100);
+for(const [index,target] of RAMP.entries()){
+ const staged={...evidence,configuration:plan('stage',target),metrics:{...evidence.metrics,session_starts:{values:{count:target}},vus:{values:{max:target}}}};
+ assert.equal(nextStage(staged,recon).next_sessions,RAMP[index+1]||null);
+}
 for(const change of [{poll_every_ms:undefined},{seconds:1},{profile:'unknown'},{think_min:0}])assert.throws(()=>nextStage({...evidence,configuration:{...evidence.configuration,...change}},recon));
 for(const name of ['session_starts','vus']){const metrics={...evidence.metrics};delete metrics[name];assert.throws(()=>nextStage({...evidence,metrics},recon));}
 assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,poll_delivery_latency:{values:{'p(95)':18000,'p(99)':19000}}}},recon));
