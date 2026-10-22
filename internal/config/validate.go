@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/redis/go-redis/v9"
 )
 
 // Validate is offline: it never connects, rotates secrets or logs their values.
@@ -101,15 +100,9 @@ func (c Config) Validate(role string) error {
 		}
 	}
 	if role != "migrate" {
-		var options *redis.Options
-		var err error
-		if c.RedisURL != "" {
-			options, err = redis.ParseURL(c.RedisURL)
-		} else {
-			options = &redis.Options{Addr: c.RedisAddr, Password: c.RedisPassword}
-		}
+		options, err := c.RedisOptions()
 		if err != nil || options == nil {
-			add("REDIS_URL is invalid")
+			add("Redis URL or TLS CA configuration is invalid")
 		} else {
 			host, _, splitErr := net.SplitHostPort(options.Addr)
 			ip, _ := netip.ParseAddr(host)

@@ -88,22 +88,9 @@ func NewPostgresPool(ctx context.Context, databaseURL string, configuredMax, con
 }
 
 func redisOptions(cfg config.Config) (*redis.Options, error) {
-	var (
-		options *redis.Options
-		err     error
-	)
-
-	if cfg.RedisURL != "" {
-		options, err = redis.ParseURL(cfg.RedisURL)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		options = &redis.Options{
-			Addr:     cfg.RedisAddr,
-			Password: cfg.RedisPassword,
-			DB:       cfg.RedisDB,
-		}
+	options, err := cfg.RedisOptions()
+	if err != nil {
+		return nil, err
 	}
 
 	options.MinIdleConns = cfg.RedisMinIdleConns

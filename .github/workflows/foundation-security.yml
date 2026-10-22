@@ -6,6 +6,38 @@ on:
 permissions:
   contents: read
 jobs:
+  redis-tls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: redis_tls_fixture
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Prepare disposable Redis matching observed production version
+        run: docker pull redis:7.2.16
+      - name: Qualify TLS, credentials, shared stores and listener rollback
+        env:
+          REDIS_TLS_LAB: '1'
+        run: |
+          set -euo pipefail
+          go test -v -count=1 -timeout=3m ./internal/db -run '^TestRedisTLSCompatibility$' | tee /tmp/redis-tls-evidence.txt
+          test -z "$(docker ps -aq --filter label=atl.redis-tls-lab)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: redis-tls-compatibility-evidence
+          path: /tmp/redis-tls-evidence.txt
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 15
