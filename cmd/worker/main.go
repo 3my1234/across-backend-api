@@ -28,7 +28,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	monitor := workers.NewMonitor()
+	roles, err := cfg.WorkerRoleNames()
+	if err != nil {
+		log.Fatal(err)
+	}
+	monitor, err := workers.NewMonitorForRoles(roles)
+	if err != nil {
+		log.Fatal(err)
+	}
 	ctx = workers.WithMonitor(ctx, monitor)
 	healthServer := &http.Server{Addr: cfg.WorkerHealthAddr, ReadHeaderTimeout: 3 * time.Second,
 		Handler: workerHealthHandler(monitor, func(checkCtx context.Context) bool {
@@ -71,7 +78,7 @@ func main() {
 			}
 		}
 	}()
-	log.Println("Atlantic Express background worker started")
+	log.Printf("Atlantic Express background worker started; selected roles=%v", roles)
 	workers.Run(ctx, store.PG, cfg, store.Redis)
 	log.Println("Atlantic Express background worker stopped")
 }
