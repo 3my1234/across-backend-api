@@ -9,10 +9,12 @@ validateFixture(fresh,plan());
 for(const origin of ['https://api.atlxpres.com','https://staging.atlxpres.com','http://173.212.219.169','http://127.0.0.1:8080'])assert.throws(()=>validateFixture({...fresh,origin},plan()));
 assert.throws(()=>validateFixture({...fresh,sessions:[fresh.sessions[0],fresh.sessions[0],...fresh.sessions.slice(2)]},plan()));
 assert.throws(()=>validateFixture({...fresh,expires_at:'2000-01-01'},plan()));
+assert.throws(()=>validateFixture({...fresh,expires_at:'invalid'},plan()));
 assert.throws(()=>validateFixture(fresh,plan('stage',12000)));
 const stage=plan('sustained',12000);assert.throws(()=>requireApproval(stage));
 const approval={authorized:true,environment:'isolated-staging',profile:'sustained',max_sessions:12000,max_duration_seconds:1800,spending_cap_usd:5,approved_at:new Date().toISOString()};requireApproval(stage,approval);
 for(const change of [{authorized:false},{max_sessions:100},{max_duration_seconds:600},{spending_cap_usd:-1},{approved_at:'bad'},{approved_at:'2000-01-01'},{profile:'soak'}])assert.throws(()=>requireApproval(stage,{...approval,...change}));
+for(const key of ['max_sessions','max_duration_seconds'])for(const value of [undefined,null,'12000',NaN,Infinity])assert.throws(()=>requireApproval(stage,{...approval,[key]:value}));
 requireApproval(plan(),null);
 assert.equal(chooseActivity(mixes.mixed,0),'browse');assert.equal(chooseActivity(mixes.mixed,99),'admin');
 for(const name of ['mixed','chat-heavy'])assert.equal(Object.values(mixes[name]).reduce((a,b)=>a+b,0),100);
@@ -21,6 +23,8 @@ const evidence={run_id:'test',configuration:plan(),metrics:{session_starts:{valu
 evidence.metrics.poll_delivery_latency={values:{'p(95)':14000,'p(99)':15000}};
 evidence.metrics.recipient_observations={values:{count:3}};
 const recon={run_id:'test',write_reconciliation_passed:true};assert.equal(nextStage(evidence,recon).next_sessions,100);
+for(const change of [{poll_every_ms:undefined},{seconds:1},{profile:'unknown'},{think_min:0}])assert.throws(()=>nextStage({...evidence,configuration:{...evidence.configuration,...change}},recon));
+for(const name of ['session_starts','vus']){const metrics={...evidence.metrics};delete metrics[name];assert.throws(()=>nextStage({...evidence,metrics},recon));}
 assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,poll_delivery_latency:{values:{'p(95)':18000,'p(99)':19000}}}},recon));
 assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,recipient_observations:{values:{count:0}}}},recon));
 assert.throws(()=>nextStage(evidence,{...recon,run_id:'other'}));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,controlled_overload:{values:{rate:0.1}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,vus:{values:{max:3}}}},recon));assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,successful_latency:{values:{'p(95)':700,'p(99)':900}}}},recon));
