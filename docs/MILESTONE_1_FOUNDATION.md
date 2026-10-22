@@ -20,7 +20,7 @@ No production deployment, migration, restart, firewall/DNS change or restore is 
 
 | Work | Exact source/configuration area | Acceptance evidence |
 |---|---|---|
-| Fail closed on unsafe production/staging settings | `internal/config`, API/worker entry points, new offline configuration-check command | Tests reject unsafe secrets/bootstrap/mock payment and insecure transport without logging credential values; check works without connecting to dependencies |
+| Fail closed on unsafe production/staging settings | `internal/config`, API/worker entry points, new offline configuration-check command | Tests reject unsafe secrets/bootstrap/mock payment and insecure transport without logging credential values; accept only verified TLS or an independently verified, explicitly pinned private VPN peer; check works without connecting to dependencies |
 | Disable development login by default | `internal/controllers/dev_controller.go`, configuration and security tests | No environment can use demo login without explicit development/test opt-in; production/staging reject before database access |
 | Explicit trusted proxy handling | `internal/middleware/scale.go`, `country.go`, new client-IP middleware and API wiring | Direct spoofed forwarding headers ignored; trusted chain resolved from right to left; malformed/untrusted chains cannot choose arbitrary client IP |
 | Dependency maintenance | `go.mod`, `go.sum`, Dockerfiles, CI workflows | Supported Go image and CI toolchain; reachable vulnerability scan, full tests and Linux builds; unresolved findings explicitly reported |

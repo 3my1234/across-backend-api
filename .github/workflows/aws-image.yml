@@ -42,4 +42,5 @@ jobs:
         env:
           REPOSITORY_URI: ${{ inputs.repository_uri }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: printf 'Deployment image: `%s@%s`\n' "$REPOSITORY_URI" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          printf 'Deployment image: `%s@%s`\n' "$REPOSITORY_URI" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

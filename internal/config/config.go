@@ -30,6 +30,7 @@ type Config struct {
 	AllowedOrigins                string
 	TrustedProxyCIDRs             string
 	DatabaseURL                   string
+	DatabaseVerifiedVPNHost       string
 	DatabaseReadURL               string
 	MigrationDatabaseURL          string
 	RedisURL                      string
@@ -121,6 +122,7 @@ func Load() Config {
 		AllowedOrigins:                env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		TrustedProxyCIDRs:             env("TRUSTED_PROXY_CIDRS", ""),
 		DatabaseURL:                   databaseURL(),
+		DatabaseVerifiedVPNHost:       env("DB_VERIFIED_VPN_HOST", ""),
 		DatabaseReadURL:               env("DATABASE_READ_URL", ""),
 		MigrationDatabaseURL:          env("MIGRATION_DATABASE_URL", databaseURL()),
 		RedisURL:                      env("REDIS_URL", ""),

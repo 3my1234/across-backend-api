@@ -81,6 +81,14 @@ func (c Config) Validate(role string) error {
 		add("DB_READ_MIN_CONNS/DB_READ_MAX_CONNS must define a bounded valid read pool")
 	}
 	urls := []struct{ name, value string }{{"DATABASE_URL", c.DatabaseURL}, {"DATABASE_READ_URL", c.DatabaseReadURL}}
+	vpnHost := strings.TrimSpace(c.DatabaseVerifiedVPNHost)
+	if vpnHost != "" {
+		ip, err := netip.ParseAddr(vpnHost)
+		if err != nil || !ip.IsPrivate() || ip.Zone() != "" {
+			add("DB_VERIFIED_VPN_HOST must be the exact private IP of an independently verified encrypted tunnel peer")
+			vpnHost = ""
+		}
+	}
 	if role == "migrate" {
 		urls = []struct{ name, value string }{{"MIGRATION_DATABASE_URL", c.MigrationDatabaseURL}}
 	}
@@ -88,8 +96,8 @@ func (c Config) Validate(role string) error {
 		if item.value == "" && item.name == "DATABASE_READ_URL" {
 			continue
 		}
-		if !verifiedPostgresTLS(item.value) {
-			add(item.name + " must use certificate-verified TLS without plaintext fallback (sslmode=verify-full)")
+		if !verifiedPostgresTLS(item.value) && !pinnedVPNDatabase(item.value, vpnHost) {
+			add(item.name + " must use verified TLS (sslmode=verify-full) or exactly match DB_VERIFIED_VPN_HOST on an independently verified encrypted tunnel")
 		}
 	}
 	if role != "migrate" {
@@ -127,6 +135,24 @@ func verifiedPostgresTLS(raw string) bool {
 	}
 	for _, fallback := range c.Fallbacks {
 		if fallback.TLSConfig == nil || fallback.TLSConfig.InsecureSkipVerify || fallback.TLSConfig.ServerName == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// This validates an operator-approved transport policy, not the host's live VPN.
+// Exact literal IP matching avoids DNS changes or fallback hosts bypassing it.
+func pinnedVPNDatabase(raw, peer string) bool {
+	if peer == "" {
+		return false
+	}
+	c, err := pgconn.ParseConfig(raw)
+	if err != nil || c.Host != peer {
+		return false
+	}
+	for _, fallback := range c.Fallbacks {
+		if fallback.Host != peer {
 			return false
 		}
 	}

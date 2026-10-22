@@ -16,7 +16,7 @@ jobs:
           go-version: '1.27.3'
       - name: Unit and concurrency regressions
         run: |
-          go test ./...
+          go test -v ./...
           go test -race ./internal/config ./internal/middleware ./internal/buildinfo ./cmd/worker
           python3 scripts/test_restore_drill.py
       - name: Reachable Go vulnerability gate

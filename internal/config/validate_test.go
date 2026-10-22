@@ -79,3 +79,28 @@ func TestConfigPreflightRolesAndTransport(t *testing.T) {
 		t.Fatal("unused API switches must not reject dedicated worker")
 	}
 }
+
+func TestDatabaseVerifiedVPNRequiresExactPrivatePeer(t *testing.T) {
+	c := safeConfig()
+	c.DatabaseVerifiedVPNHost = "10.77.0.2"
+	c.DatabaseURL = "postgres://app:private-value@10.77.0.2/app?sslmode=disable"
+	if err := c.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"10.77.0.3", "db.example.invalid", "203.0.113.2"} {
+		other := c
+		other.DatabaseURL = "postgres://app:private-value@" + target + "/app?sslmode=disable"
+		if other.Validate("api") == nil {
+			t.Fatalf("unapproved host accepted: %s", target)
+		}
+	}
+	c.DatabaseURL = "host=10.77.0.2,203.0.113.2 user=app password=private-value dbname=app sslmode=disable"
+	if c.Validate("api") == nil {
+		t.Fatal("public fallback must not bypass the pinned VPN peer")
+	}
+	c = safeConfig()
+	c.DatabaseVerifiedVPNHost = "203.0.113.2"
+	if c.Validate("api") == nil {
+		t.Fatal("public IP cannot be declared a private VPN peer")
+	}
+}
