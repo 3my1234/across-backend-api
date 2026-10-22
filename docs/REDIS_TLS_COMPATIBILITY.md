@@ -12,6 +12,20 @@ no Redis host port publication. This does not prove firewall policy, ACL scope,
 persistence or all client identities. Existing DB inter-host transport is
 WireGuard, independently verified; preserve it.
 
+Subsequent operator inventory at 2026-10-22 14:29:50 CEST identifies the Redis
+image ID as `sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c`.
+The only reported mount is named volume
+`redis-data-rxys19f7r5rc8g7cmlb9wkg6`, mounted read/write at `/data` from
+`/var/lib/docker/volumes/redis-data-rxys19f7r5rc8g7cmlb9wkg6/_data`.
+Preserve that exact volume; never initialize a replacement empty volume.
+Reported settings: appendonly=yes, appendfsync=everysec,
+save=`3600 1 300 100 60 10000`, maxmemory=0, maxmemory-policy=noeviction.
+The first lab used temporary storage; the follow-up uses owned named volumes
+and these persistence settings to test graceful replacement and old-startup
+rollback. It does not establish crash-loss tolerance or real-data durability.
+maxmemory=0 is not a bounded memory budget: review growth/host limits separately;
+do not change eviction or persistence policy incidentally during TLS work.
+
 The proposed mode is server-authenticated TLS plus the existing Redis password
 (or separately reviewed ACL credentials), with `tls-auth-clients no`. This means
 client *certificates* are not required; Redis password authentication remains
@@ -37,6 +51,9 @@ PostgreSQL 16 on an isolated CI runner. It exercises:
 - Independent API/worker shared Store constructors, synthetic key exchange and
   Pub/Sub. No live jobs, notifications, payments, emails or production DB access.
 - TLS-only listener cutover and legacy-listener rollback preserving a test key.
+- Graceful container replacement from durable TLS-only startup configuration,
+  retaining an owned named volume/AOF and test key, then replacement using the
+  old plaintext startup configuration with the same volume and retained key.
 - New candidate preflight still rejects off-loopback plaintext rollback config.
 - Owned Redis test-container cleanup, with job assertion that none remain.
 
@@ -46,6 +63,7 @@ release rollback remain staging gates. The transport test uses AppEnv=test
 against disposable loopback PostgreSQL; it is not production-config proof.
 Certificates/keys are synthetic runner-temporary files, not uploaded artifacts.
 Only the Go test log is retained. No production load test is performed.
+The lab asserts both owned containers and owned named volumes were removed.
 
 ## Exact intended configuration shape (NOT applied)
 
@@ -107,6 +125,16 @@ to the current Docker container may require recreation, and current Coolify
 startup/persistence details are not fully collected. A single Redis instance
 can have a connection interruption. No defensible duration is available yet;
 measure it in staging before scheduling the production maintenance window.
+
+The existing `/data` volume also permits a reviewed certificate/configuration
+subdirectory without adding another Docker mount, but files/runtime CONFIG SET
+alone do not change Coolify's startup command. Do not adopt this route unless
+startup/permissions/secret retention and persistence across managed recreation
+are qualified. The synthetic graceful-replacement duration excludes certificate
+preparation, application rollouts, real AOF loading and Coolify scheduling, and
+must not be presented as a production downtime promise. Existing plaintext
+connections can survive listener closure; confirm every client has moved to TLS
+rather than equating `port 0` with termination of all old sessions.
 
 Before any authorized production release: record immutable old API/worker/Redis
 images, sanitized startup configuration, certificate fingerprints, data-volume

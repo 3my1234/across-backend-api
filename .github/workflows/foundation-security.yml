@@ -33,6 +33,7 @@ jobs:
           set -euo pipefail
           go test -v -count=1 -timeout=3m ./internal/db -run '^TestRedisTLSCompatibility$' | tee /tmp/redis-tls-evidence.txt
           test -z "$(docker ps -aq --filter label=atl.redis-tls-lab)"
+          test -z "$(docker volume ls -q --filter label=atl.redis-tls-lab)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
