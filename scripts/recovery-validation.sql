@@ -99,5 +99,6 @@ SELECT payment_status,currency_code,count(*) AS records,sum(amount) AS amount_to
 FROM payments GROUP BY payment_status,currency_code ORDER BY payment_status,currency_code;
 SELECT status,billing_mode,duration_months,count(*) AS records
 FROM provider_subscriptions GROUP BY status,billing_mode,duration_months;
-SELECT processing_status,count(*) AS records FROM payment_webhook_events GROUP BY processing_status;
+SELECT 'webhook_status',processing_status,count(*) AS records,0 AS reserved
+FROM payment_webhook_events GROUP BY processing_status;
 COMMIT;

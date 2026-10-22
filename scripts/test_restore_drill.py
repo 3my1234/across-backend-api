@@ -13,6 +13,18 @@ spec.loader.exec_module(drill)
 
 
 class RestoreSafety(unittest.TestCase):
+    def test_grouped_status_is_not_a_data_integrity_finding(self):
+        raw = '\n'.join(key+',0' for key in sorted(drill.INVENTORY | drill.FINDINGS))
+        raw += '\nwebhook_status,processed,1,0\nsucceeded,NGN,1,500.00'
+        result = drill.parse_aggregates(raw)
+        self.assertTrue(all(result[key] == 0 for key in drill.FINDINGS))
+        self.assertNotIn('processed', result)
+        for extra in ('\nprocessed,1', '\nproviders,1'):
+            with self.assertRaises(RuntimeError):
+                drill.parse_aggregates(raw+extra)
+        with self.assertRaises(RuntimeError):
+            drill.parse_aggregates('providers,0')
+
     def test_in_memory_sql_uses_subprocess_input_not_fileno(self):
         with patch.object(drill.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=b'OK')) as run:
             self.assertEqual(drill.docker('exec', 'fixture', stdin=io.BytesIO(b'SELECT 1;')), 'OK')

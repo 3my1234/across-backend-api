@@ -25,6 +25,38 @@ REQUIRED_TABLES = ('users', 'provider_organizations', 'provider_members',
 
 PHASE = 'preflight'
 
+INVENTORY = frozenset(('providers', 'members', 'documents', 'listings', 'products', 'subscriptions',
+                       'subscription_payments', 'payments', 'payment_webhooks', 'conversations',
+                       'ordinary_messages', 'rooms', 'participants', 'shared_messages',
+                       'town_hall_requests', 'town_hall_offers', 'town_hall_applications',
+                       'renewal_preferences', 'renewal_cancellations'))
+FINDINGS = frozenset(('provider_missing_owner', 'provider_missing_owner_membership',
+    'listing_missing_provider', 'subscription_missing_provider_or_plan', 'subscription_period_invalid',
+    'subscription_payment_invalid_reference_or_amount', 'payment_purpose_link_invalid',
+    'payment_idempotency_duplicate_groups', 'payment_transaction_duplicate_groups', 'webhook_duplicate_groups',
+    'conversation_thread_pair_mismatch', 'ordinary_message_missing_conversation_or_sender',
+    'ordinary_message_retry_duplicate_groups', 'shared_message_missing_room_or_sender',
+    'shared_message_retry_duplicate_groups', 'town_hall_wrong_room_kind',
+    'town_hall_over_ten_active_provider_seats', 'unvalidated_public_constraints', 'invalid_public_indexes',
+    'subscription_ledger_amount_mismatch', 'subscription_payment_identity_mismatch',
+    'town_hall_offer_missing_request_or_provider', 'chat_reply_crosses_room'))
+
+
+def parse_aggregates(raw):
+    aggregates = {}
+    for row in csv.reader(io.StringIO(raw)):
+        if len(row) == 2 and row[0] in INVENTORY | FINDINGS and re.fullmatch(r'\d+', row[1]):
+            if row[0] in aggregates:
+                raise RuntimeError('duplicate aggregate label')
+            aggregates[row[0]] = int(row[1])
+        elif len(row) == 4:
+            continue  # Grouped summaries are exercised but never emitted.
+        else:
+            raise RuntimeError('unexpected aggregate output')
+    if set(aggregates) != INVENTORY | FINDINGS:
+        raise RuntimeError('incomplete aggregate validation')
+    return aggregates
+
 
 def docker(*args, stdin=None):
     # subprocess requires a real file descriptor for stdin; in-memory SQL must
@@ -82,22 +114,9 @@ ALTER ROLE recovery_reader SET lock_timeout='1s';
     sql = Path(__file__).with_name('recovery-validation.sql').read_bytes()
     raw = docker('exec', '-i', name, 'psql', '-X', '-q', '-t', '--csv', '-v', 'ON_ERROR_STOP=1',
                  '-U', 'recovery_reader', '-d', 'recovery_drill', stdin=io.BytesIO(sql))
-    aggregates = {}
     # Only fixed label/numeric output from the bundled SQL is accepted. Never
     # expose a database error, raw row or a currency/status string from data.
-    for row in csv.reader(io.StringIO(raw)):
-        if len(row) == 2 and re.fullmatch(r'[a-z_]{1,80}', row[0]) and re.fullmatch(r'\d+', row[1]):
-            if row[0] in aggregates:
-                raise RuntimeError('duplicate aggregate label')
-            aggregates[row[0]] = int(row[1])
-        elif len(row) == 4:
-            # Grouped summaries are read/exercised but not emitted; source data
-            # must never supply arbitrary report labels or row text.
-            continue
-        else:
-            raise RuntimeError('unexpected aggregate output')
-    if len(aggregates) < 35:
-        raise RuntimeError('incomplete aggregate validation')
+    aggregates = parse_aggregates(raw)
     PHASE = 'application-check-upload'
     with executable.open('rb') as binary:
         docker('exec', '-i', name, 'sh', '-c',
@@ -106,13 +125,8 @@ ALTER ROLE recovery_reader SET lock_timeout='1s';
     application = json.loads(docker('exec', name, '/tmp/atl-recovery-read-check'))
     if application.get('application_reads_passed') is not True:
         raise RuntimeError('application reads failed')
-    inventory = set(('providers', 'members', 'documents', 'listings', 'products', 'subscriptions',
-                     'subscription_payments', 'payments', 'payment_webhooks', 'conversations',
-                     'ordinary_messages', 'rooms', 'participants', 'shared_messages',
-                     'town_hall_requests', 'town_hall_offers', 'town_hall_applications',
-                     'renewal_preferences', 'renewal_cancellations'))
-    findings = {key: value for key, value in aggregates.items() if key not in inventory}
-    return {'aggregate_counts': {key: aggregates[key] for key in inventory}, 'findings': findings,
+    findings = {key: aggregates[key] for key in FINDINGS}
+    return {'aggregate_counts': {key: aggregates[key] for key in INVENTORY}, 'findings': findings,
             'findings_require_review': any(findings.values()), 'application_reads': application}
 
 
