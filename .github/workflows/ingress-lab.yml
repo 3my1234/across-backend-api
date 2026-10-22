@@ -1,0 +1,37 @@
+name: Isolated ingress identity qualification
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths: ['cmd/ingress-lab/**', 'scripts/ingress-lab.py', 'internal/middleware/client_ip*', 'deploy/scaling/haproxy.cfg', '.github/workflows/ingress-lab.yml']
+permissions:
+  contents: read
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Build explicit-test-only probe
+        run: CGO_ENABLED=0 go build -o /tmp/atl-ingress-probe ./cmd/ingress-lab
+      - name: Prepare disposable proxy images
+        run: |
+          docker pull traefik:v3.6.25
+          docker pull haproxy:3.0-alpine
+          docker pull alpine:3.23
+      - name: Exercise actual middleware through both forwarding modes
+        env:
+          ATL_INGRESS_LAB: '1'
+          INGRESS_LAB_BINARY: /tmp/atl-ingress-probe
+        run: |
+          set -euo pipefail
+          python3 scripts/ingress-lab.py | tee /tmp/ingress-evidence.json
+          test -z "$(docker ps -aq --filter label=atl.ingress)"
+          test -z "$(docker network ls -q --filter label=atl.ingress)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ingress-identity-evidence
+          path: /tmp/ingress-evidence.json
