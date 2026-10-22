@@ -28,7 +28,7 @@ jobs:
           python3 -c 'import json; assert json.load(open("/tmp/build-info.json"))["revision"] == "${{ github.sha }}"'
   recovery-fixture:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -53,24 +53,15 @@ jobs:
         env:
           FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
         run: |
-          docker exec -i "$FIXTURE_CONTAINER" psql -X -U postgres -d foundation_recovery_fixture -v ON_ERROR_STOP=1 <<'SQL'
-          INSERT INTO countries_config(country_code,currency_code) VALUES ('NG','NGN') ON CONFLICT(country_code) DO NOTHING;
-          INSERT INTO users(country_id,email,password_hash,full_name)
-          SELECT c.id,v.email,'synthetic-not-a-login',v.name
-          FROM countries_config c CROSS JOIN (VALUES ('owner@example.invalid','Synthetic Owner'),('customer@example.invalid','Synthetic Customer')) v(email,name)
-          WHERE c.country_code='NG';
-          INSERT INTO provider_organizations(owner_user_id,business_name,slug,contact_email,contact_phone)
-          SELECT id,'Synthetic Provider','recovery-fixture','owner@example.invalid','synthetic-phone'
-          FROM users WHERE email='owner@example.invalid';
-          INSERT INTO provider_members(provider_id,user_id,role)
-          SELECT id,owner_user_id,'owner' FROM provider_organizations WHERE slug='recovery-fixture';
-          SQL
+          docker exec -i "$FIXTURE_CONTAINER" psql -X -U postgres -d foundation_recovery_fixture -v ON_ERROR_STOP=1 < scripts/recovery-fixture.sql
           docker exec "$FIXTURE_CONTAINER" pg_dump -U postgres -d foundation_recovery_fixture -Fc > /tmp/synthetic-recovery.dmp
-      - name: Exercise isolated restore and structural verification
+      - name: Build isolated application read checker
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/recovery-read-check ./cmd/recovery-read-check
+      - name: Exercise isolated restore, business aggregates and real read handlers
         run: |
           python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16
-          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --execute | tee /tmp/recovery-evidence.jsonl
-          python3 -c 'import json; r=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")][-1]; assert r["isolated_restore_passed"] and r["migration_inventory_matched"] and r["counts"]["users"] == 2 and r["counts"]["provider_organizations"] == 1 and r["counts"]["provider_members"] == 1'
+          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --read-check /tmp/recovery-read-check --execute | tee /tmp/recovery-evidence.jsonl
+          python3 -c 'import json; r=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")][-1]; e=r["extended_validation"]; assert r["isolated_restore_passed"] and r["migration_inventory_matched"] and r["owned_container_removed"] and r["counts"]["users"] == 2 and e["application_reads"]["application_reads_passed"] and not e["findings_require_review"]; assert e["aggregate_counts"]["subscription_payments"] == 1 and e["aggregate_counts"]["ordinary_messages"] == 1 and e["aggregate_counts"]["town_hall_offers"] == 1; assert all(x["status"]=="pass" for x in e["application_reads"]["checks"])'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -32,6 +32,14 @@ class RestoreSafety(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 drill.verify_target('generated', 'nonce')
 
+    def test_host_mount_or_privilege_rejected(self):
+        for unsafe in ({'Binds': ['/data:/data']}, {'Privileged': True}):
+            target = {'Config': {'Labels': {'atl.restore-drill': 'nonce'}, 'User': 'postgres'},
+                      'HostConfig': {'NetworkMode': 'none', **unsafe}}
+            with patch.object(drill, 'docker', return_value=json.dumps([target])):
+                with self.assertRaises(RuntimeError):
+                    drill.verify_target('generated', 'nonce')
+
 
 if __name__ == '__main__':
     unittest.main()

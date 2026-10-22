@@ -5,7 +5,9 @@ No production URI/host option exists. Preview is default. Images must be local.
 Never prints archive contents, SQL errors, credentials or personal records.
 """
 import argparse
+import csv
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -47,8 +49,61 @@ def verify_target(name, nonce):
     if (target['Config'].get('Labels', {}).get('atl.restore-drill') != nonce or
             target['HostConfig']['NetworkMode'] != 'none' or
             target['HostConfig'].get('PortBindings') or
+            target['HostConfig'].get('Binds') or
+            any(mount.get('Type') != 'tmpfs' for mount in target.get('Mounts', [])) or
+            target['HostConfig'].get('Privileged') or
             target['Config'].get('User') != 'postgres'):
         raise RuntimeError('STOPPED: isolation/ownership check failed')
+
+
+def extended_checks(name, nonce, executable):
+    """Run bundled aggregate SQL and sampled real handlers before cleanup."""
+    verify_target(name, nonce)
+    # This role exists only in the freshly restored, network-none test target.
+    # No password or production role is copied into the handler harness.
+    role_sql = b'''CREATE ROLE recovery_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+GRANT CONNECT ON DATABASE recovery_drill TO recovery_reader;
+GRANT USAGE ON SCHEMA public TO recovery_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO recovery_reader;
+ALTER ROLE recovery_reader SET default_transaction_read_only=on;
+ALTER ROLE recovery_reader SET statement_timeout='5s';
+ALTER ROLE recovery_reader SET lock_timeout='1s';
+'''
+    docker('exec', '-i', name, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+           '-U', 'postgres', '-d', 'recovery_drill', stdin=io.BytesIO(role_sql))
+    sql = Path(__file__).with_name('recovery-validation.sql').read_bytes()
+    raw = docker('exec', '-i', name, 'psql', '-X', '-q', '-t', '--csv', '-v', 'ON_ERROR_STOP=1',
+                 '-U', 'recovery_reader', '-d', 'recovery_drill', stdin=io.BytesIO(sql))
+    aggregates = {}
+    # Only fixed label/numeric output from the bundled SQL is accepted. Never
+    # expose a database error, raw row or a currency/status string from data.
+    for row in csv.reader(io.StringIO(raw)):
+        if len(row) == 2 and re.fullmatch(r'[a-z_]{1,80}', row[0]) and re.fullmatch(r'\d+', row[1]):
+            if row[0] in aggregates:
+                raise RuntimeError('duplicate aggregate label')
+            aggregates[row[0]] = int(row[1])
+        elif len(row) == 4:
+            # Grouped summaries are read/exercised but not emitted; source data
+            # must never supply arbitrary report labels or row text.
+            continue
+        else:
+            raise RuntimeError('unexpected aggregate output')
+    if len(aggregates) < 35:
+        raise RuntimeError('incomplete aggregate validation')
+    with executable.open('rb') as binary:
+        docker('exec', '-i', name, 'sh', '-c',
+               'umask 077; cat > /tmp/atl-recovery-read-check && chmod 500 /tmp/atl-recovery-read-check', stdin=binary)
+    application = json.loads(docker('exec', name, '/tmp/atl-recovery-read-check'))
+    if application.get('application_reads_passed') is not True:
+        raise RuntimeError('application reads failed')
+    inventory = set(('providers', 'members', 'documents', 'listings', 'products', 'subscriptions',
+                     'subscription_payments', 'payments', 'payment_webhooks', 'conversations',
+                     'ordinary_messages', 'rooms', 'participants', 'shared_messages',
+                     'town_hall_requests', 'town_hall_offers', 'town_hall_applications',
+                     'renewal_preferences', 'renewal_cancellations'))
+    findings = {key: value for key, value in aggregates.items() if key not in inventory}
+    return {'aggregate_counts': {key: aggregates[key] for key in inventory}, 'findings': findings,
+            'findings_require_review': any(findings.values()), 'application_reads': application}
 
 
 def main():
@@ -56,11 +111,22 @@ def main():
     parser.add_argument('--archive', required=True, type=Path)
     parser.add_argument('--postgres-major', required=True, choices=['15', '16', '17', '18'])
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--read-check', type=Path,
+                        help='reviewed static Linux recovery-read-check executable; enables extended SQL/handler checks')
     args = parser.parse_args()
     path, checksum = inspect_archive(args.archive)
+    executable = args.read_check.resolve(strict=True) if args.read_check else None
+    binary_checksum = None
+    if executable:
+        with executable.open('rb') as stream:
+            if stream.read(4) != b'\x7fELF':
+                raise ValueError('a reviewed Linux ELF read-check executable is required')
+            stream.seek(0)
+            binary_checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
     print(json.dumps({'archive_sha256': checksum, 'bytes': path.stat().st_size,
                       'target': 'new isolated recovery_drill database; no production connection',
-                      'execute': args.execute}))
+                      'execute': args.execute, 'extended_checks': executable is not None,
+                      'read_check_sha256': binary_checksum}))
     if not args.execute:
         return
     nonce = uuid.uuid4().hex
@@ -115,15 +181,19 @@ def main():
                              "SELECT count(*) FROM pg_constraint WHERE connamespace='public'::regnamespace AND NOT convalidated")
         if constraints != '0':
             raise RuntimeError('unvalidated constraints require review before recovery can pass')
-        print(json.dumps({'isolated_restore_passed': True, 'counts': checks,
+        extended = extended_checks(name, nonce, executable) if executable else None
+        report = {'isolated_restore_passed': True, 'counts': checks,
                           'migration_inventory_matched': True, 'migration_count': len(applied),
                           'elapsed_seconds': round(time.monotonic() - began, 2),
                           'archive_sha256': checksum,
-                          'scope': 'archive restored and structural checks passed; application/payment checks and recovery objectives still require review'}))
+                          'extended_validation': extended,
+                          'scope': 'structural restore; extended mode samples read handlers and aggregate invariants, not live integrations or complete recovery objectives'}
     finally:
         if created:
             verify_target(name, nonce)
             docker('rm', '-f', '-v', name)
+    report['owned_container_removed'] = True
+    print(json.dumps(report))
 
 
 if __name__ == '__main__':
