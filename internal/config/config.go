@@ -23,6 +23,7 @@ type Config struct {
 	WebPushSubject    string
 
 	AppEnv                        string
+	EnableDevLogin                bool
 	HTTPAddr                      string
 	HTTPMaxInFlight               int
 	WorkerHealthAddr              string
@@ -79,6 +80,12 @@ type Config struct {
 	ProviderSubscriptionPolicy    *ProviderSubscriptionPolicy
 }
 
+// DevLoginAllowed is opt-in and never permits production, staging or unknown environments.
+func (c Config) DevLoginAllowed() bool {
+	env := strings.ToLower(strings.TrimSpace(c.AppEnv))
+	return c.EnableDevLogin && (env == "development" || env == "test")
+}
+
 func Load() Config {
 	loadDotEnv(".env")
 	publicBaseURL := strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/")
@@ -112,6 +119,7 @@ func Load() Config {
 		WebPushPrivateKey:             env("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
 		WebPushSubject:                env("WEB_PUSH_SUBJECT", "mailto:support@atlxpres.com"),
 		AppEnv:                        env("APP_ENV", "development"),
+		EnableDevLogin:                envBool("ENABLE_DEV_LOGIN", false),
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
 		HTTPMaxInFlight:               envInt("HTTP_MAX_IN_FLIGHT", 128),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),

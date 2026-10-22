@@ -66,5 +66,12 @@ jobs:
           python3 scripts/test_replica_discovery.py
           python3 scripts/test_replica_release.py
           docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:3.0-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
-      - name: Build production image
+      - name: Reject development login before database access
+        run: CGO_ENABLED=0 go test -p 1 ./internal/controllers -run '^TestDevLoginRejectedBeforeDatabaseAccess$' -count=1
+      - name: Verify registered production route rejects development login
+        # Security-only backport: verify the registered route before building.
+        # No production configuration or service calls are made by these tests.
+        run: |
+          CGO_ENABLED=0 go test -p 1 ./internal/routes -run '^TestRegisteredDevelopmentLoginCannotTouchProductionDatabase$' -count=1
+      - name: Build unchanged production image definition
         run: docker build --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .
