@@ -35,27 +35,42 @@ jobs:
         env:
           POSTGRES_PASSWORD: disposable-ci-only
           POSTGRES_DB: foundation_recovery_fixture
+        ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Build disposable fixture from actual application migrations
+        env:
+          APP_ENV: test
+          DATABASE_URL: postgres://postgres:disposable-ci-only@127.0.0.1:5432/foundation_recovery_fixture?sslmode=disable
+        run: go run ./cmd/migrate
       - name: Make synthetic archive from disposable CI data
         env:
           FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           docker exec -i "$FIXTURE_CONTAINER" psql -X -U postgres -d foundation_recovery_fixture -v ON_ERROR_STOP=1 <<'SQL'
-          CREATE TABLE users(id integer PRIMARY KEY);
-          CREATE TABLE providers(id integer PRIMARY KEY,user_id integer REFERENCES users(id));
-          INSERT INTO users VALUES (1),(2);
-          INSERT INTO providers VALUES (1,1);
+          INSERT INTO countries_config(country_code,currency_code) VALUES ('NG','NGN') ON CONFLICT(country_code) DO NOTHING;
+          INSERT INTO users(country_id,email,password_hash,full_name)
+          SELECT c.id,v.email,'synthetic-not-a-login',v.name
+          FROM countries_config c CROSS JOIN (VALUES ('owner@example.invalid','Synthetic Owner'),('customer@example.invalid','Synthetic Customer')) v(email,name)
+          WHERE c.country_code='NG';
+          INSERT INTO provider_organizations(owner_user_id,business_name,slug,contact_email,contact_phone)
+          SELECT id,'Synthetic Provider','recovery-fixture','owner@example.invalid','synthetic-phone'
+          FROM users WHERE email='owner@example.invalid';
+          INSERT INTO provider_members(provider_id,user_id,role)
+          SELECT id,owner_user_id,'owner' FROM provider_organizations WHERE slug='recovery-fixture';
           SQL
           docker exec "$FIXTURE_CONTAINER" pg_dump -U postgres -d foundation_recovery_fixture -Fc > /tmp/synthetic-recovery.dmp
       - name: Exercise isolated restore and structural verification
         run: |
           python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16
           python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --execute | tee /tmp/recovery-evidence.jsonl
-          python3 -c 'import json; rows=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")]; assert rows[-1]["isolated_restore_passed"] and rows[-1]["counts"] == {"users":2,"providers":1}'
+          python3 -c 'import json; r=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")][-1]; assert r["isolated_restore_passed"] and r["migration_inventory_matched"] and r["counts"]["users"] == 2 and r["counts"]["provider_organizations"] == 1 and r["counts"]["provider_members"] == 1'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

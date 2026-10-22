@@ -13,6 +13,14 @@ import subprocess
 import time
 import uuid
 
+REQUIRED_TABLES = ('users', 'provider_organizations', 'provider_members',
+                   'provider_verification_documents', 'provider_listings', 'products',
+                   'provider_subscription_plans', 'provider_subscriptions',
+                   'provider_subscription_payments', 'payments', 'payment_webhook_events',
+                   'provider_conversations', 'provider_conversation_messages',
+                   'chat_rooms', 'chat_participants', 'chat_messages',
+                   'town_hall_requests', 'town_hall_offers', 'schema_migrations')
+
 
 def docker(*args, stdin=None):
     result = subprocess.run(['docker', *args], stdin=stdin, stdout=subprocess.PIPE,
@@ -88,18 +96,27 @@ def main():
                    '--no-owner', '--no-privileges', '--exit-on-error', '--single-transaction', stdin=archive)
         # Only aggregate counts, never row contents. Names below are fixed source code.
         checks = {}
-        for table in ('users', 'providers'):
+        for table in REQUIRED_TABLES:
             raw = docker('exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
                          '-d', 'recovery_drill', '-Atc', 'SELECT count(*) FROM public.' + table)
             if not re.fullmatch(r'\d+', raw):
                 raise RuntimeError('required data check failed')
             checks[table] = int(raw)
+        migrations = Path(__file__).resolve().parents[1] / 'migrations'
+        expected = {entry.name for entry in migrations.glob('*.sql')}
+        if not expected:
+            raise RuntimeError('reviewed migration source is required for completeness checks')
+        applied = set(docker('exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
+                             '-d', 'recovery_drill', '-Atc', 'SELECT name FROM public.schema_migrations').splitlines())
+        if expected != applied:
+            raise RuntimeError('restored migration inventory differs from reviewed source; assess archive/release compatibility')
         constraints = docker('exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
                              '-d', 'recovery_drill', '-Atc',
                              "SELECT count(*) FROM pg_constraint WHERE connamespace='public'::regnamespace AND NOT convalidated")
         if constraints != '0':
             raise RuntimeError('unvalidated constraints require review before recovery can pass')
         print(json.dumps({'isolated_restore_passed': True, 'counts': checks,
+                          'migration_inventory_matched': True, 'migration_count': len(applied),
                           'elapsed_seconds': round(time.monotonic() - began, 2),
                           'archive_sha256': checksum,
                           'scope': 'archive restored and structural checks passed; application/payment checks and recovery objectives still require review'}))
