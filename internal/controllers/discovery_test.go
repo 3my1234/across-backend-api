@@ -98,7 +98,9 @@ func TestDiscoveryPostgresEligibilityControlsAndMetrics(t *testing.T) {
 		}
 		exec(`INSERT INTO products(id,provider_id,title,category_path,is_active,moderation_status,published_at) VALUES($1,$2,'Phone for sale',ARRAY['Electronics','Phones'],true,'approved',now())`, product, pid)
 		exec(`INSERT INTO product_delivery_areas(product_id,country_code) VALUES($1,'NG')`, product)
-		exec(`INSERT INTO provider_listings(id,provider_id,title,category,status,published_at) VALUES($1,$2,'Phone repair','Phones','approved',CASE WHEN $3 THEN now() ELSE NULL END)`, service, pid, i > 0)
+		if i > 0 {
+			exec(`INSERT INTO provider_listings(id,provider_id,title,category,status,published_at) VALUES($1,$2,'Phone repair','Phones','approved',CASE WHEN $3 THEN now() ELSE NULL END)`, service, pid, i > 0)
+		}
 
 	}
 	session := uuid.NewString()
