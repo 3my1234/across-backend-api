@@ -37,6 +37,13 @@ func referralFixture(t *testing.T) (*pgxpool.Pool, string, string) {
 	if _, err = db.Exec(ctx, string(sql)); err != nil {
 		t.Fatal(err)
 	}
+	var enabled bool
+	if err = db.QueryRow(ctx, `SELECT enabled FROM referral_program_settings WHERE id=true`).Scan(&enabled); err != nil || enabled {
+		t.Fatal("new referral program must start paused until coordinated release")
+	}
+	if _, err = db.Exec(ctx, `UPDATE referral_program_settings SET enabled=true`); err != nil {
+		t.Fatal(err)
+	}
 	inviter, newUser := uuid.NewString(), uuid.NewString()
 	if _, err = db.Exec(ctx, `INSERT INTO users(id,email,is_active,email_verified)VALUES($1,'inviter@example.test',true,true),($2,'new@example.test',false,false);INSERT INTO referral_codes(user_id,code)VALUES($1,'ABCDEF123456')`, pgx.QueryExecModeSimpleProtocol, inviter, newUser); err != nil {
 		t.Fatal(err)

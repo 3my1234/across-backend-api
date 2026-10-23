@@ -1,8 +1,8 @@
 CREATE TABLE referral_program_settings (
  id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id),
- enabled BOOLEAN NOT NULL DEFAULT true
+ enabled BOOLEAN NOT NULL DEFAULT false
 );
-INSERT INTO referral_program_settings(id,enabled) VALUES(true,true);
+INSERT INTO referral_program_settings(id,enabled) VALUES(true,false);
 CREATE TABLE referral_codes (
  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  code TEXT NOT NULL UNIQUE CHECK (code ~ '^[A-Z0-9]{12}$'),

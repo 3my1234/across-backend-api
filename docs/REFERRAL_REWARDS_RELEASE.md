@@ -37,9 +37,9 @@ Local compilation/security guards are separate from real PostgreSQL evidence. Is
 ## Release and rollback
 
 1. Obtain approval for the reviewed API/worker/replica release and migration102. Keep automatic rollouts gated. Preserve a successful recoverable backup and the current images.
-2. Apply migration102 once using the existing controlled migration mechanism; retain database advisory-lock/migration records. API/worker compatibility and replica alignment must be checked together.
+2. Migration102 starts the reward program PAUSED. Apply it once using the existing controlled migration mechanism; retain database advisory-lock/migration records. API/worker compatibility and replica alignment must be checked together.
 3. Deploy only the approved source, retaining existing environment and secret settings. Verify readiness, legacy-route guards, authenticated referral code/stats and a designated new-account journey. Do not send real payments merely as a health check.
-4. Only then produce the next normal EAS APK with the reviewed mobile commit. Do not retire the PWA.
+4. After every serving replica and worker is verified on the approved source, the approved operator enables the program with UPDATE referral_program_settings SET enabled=true WHERE id=true. Only then produce the next normal EAS APK with the reviewed mobile commit. Do not retire the PWA.
 5. To pause a faulty reward rollout, an explicitly approved operator can run UPDATE referral_program_settings SET enabled=false WHERE id=true. Validation/code issuance then fail closed and triggers stop awarding; existing balances/history remain. Registration without a code and ordinary login remain available.
 6. Preserve attribution, payment records and XP ledger. Do not drop migration102/tables or delete credits as rollback. Keep authentication guards. Re-enabling after a pause requires a bounded, reviewed reconciliation of eligible pending referrals; do not run an unbounded payout/backfill job against production.
 
