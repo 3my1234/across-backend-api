@@ -13,20 +13,9 @@ import (
 	"time"
 )
 
-func (s *CommunityController) canCreateHall(ctx context.Context, actor string) (bool, error) {
-	var provider bool
-	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_members WHERE user_id=$1::uuid AND is_active) OR EXISTS(SELECT 1 FROM provider_organizations WHERE owner_user_id=$1::uuid)`, actor).Scan(&provider)
-	return !provider, err
-}
 func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
-	allowed, permissionErr := s.canCreateHall(c.Context(), communityActor(c))
-	if permissionErr != nil {
-		return communityError(permissionErr)
-	}
-	if !allowed {
-		return fiber.NewError(403, "Only customers can create Town Hall requests. Providers can join and respond to customer requests.")
-	}
-
+	// Every authenticated account can request as a buyer. Provider permissions
+	// apply to responding, not to owning a request; workspace is never authority.
 	var in struct {
 		Message     string  `json:"message"`
 		ClientID    string  `json:"client_request_id"`
@@ -156,11 +145,7 @@ func (s *CommunityController) HallList(c *fiber.Ctx) error {
 	}
 	rows.Close()
 	_, _ = s.db.Exec(c.Context(), `UPDATE social_profiles SET town_hall_seen_at=now() WHERE user_id=$1::uuid`, communityActor(c))
-	canCreate, permissionErr := s.canCreateHall(c.Context(), communityActor(c))
-	if permissionErr != nil {
-		return communityError(permissionErr)
-	}
-	payload, err := json.Marshal(fiber.Map{"items": items, "next_cursor": next, "can_create": canCreate})
+	payload, err := json.Marshal(fiber.Map{"items": items, "next_cursor": next, "can_create": true})
 	if err != nil {
 		return communityError(err)
 	}
@@ -234,6 +219,25 @@ func paidHallProvider(ctx context.Context, tx pgx.Tx, provider string) error {
 	}
 	return nil
 }
+
+// Reject the request owner's own business, including a different staff account.
+// Call under the room lock and recheck on admission, sending and selection so
+// stale applications/offers or a later membership change cannot bypass it.
+func independentHallProvider(ctx context.Context, tx pgx.Tx, room, provider string) error {
+	var ownBusiness bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM provider_organizations p WHERE p.id=$2::uuid AND (
+ p.owner_user_id=r.owner_user_id OR EXISTS(SELECT 1 FROM provider_members pm
+ WHERE pm.provider_id=p.id AND pm.user_id=r.owner_user_id AND pm.is_active)))
+ FROM chat_rooms r WHERE r.id=$1::uuid AND r.kind='town_hall'`, room, provider).Scan(&ownBusiness)
+	if err != nil {
+		return err
+	}
+	if ownBusiness {
+		return fiber.NewError(403, "Your business cannot respond to or fulfill your own Town Hall request")
+	}
+	return nil
+}
 func lockHallOwner(ctx context.Context, tx pgx.Tx, id, actor string) error {
 	var owner, state string
 	err := tx.QueryRow(ctx, `SELECT owner_user_id::text,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid AND kind='town_hall' FOR UPDATE`, id).Scan(&owner, &state)
@@ -273,6 +277,9 @@ func (s *CommunityController) HallApply(c *fiber.Ctx) error {
 	}
 	if state != "open" {
 		return fiber.NewError(409, "This request is closed")
+	}
+	if err = independentHallProvider(c.Context(), tx, id, provider); err != nil {
+		return communityError(err)
 	}
 	if err = paidHallProvider(c.Context(), tx, provider); err != nil {
 		return communityError(err)
@@ -329,6 +336,12 @@ func (s *CommunityController) HallMembership(c *fiber.Ctx) error {
 		return communityError(err)
 	}
 	if in.Action == "approve" {
+		if err = independentHallProvider(c.Context(), tx, id, provider); err != nil {
+			return communityError(err)
+		}
+		if user == communityActor(c) {
+			return fiber.ErrForbidden
+		}
 		if state == "admitted" {
 			return c.SendStatus(204)
 		}
@@ -529,10 +542,16 @@ func (s *CommunityController) HallChoose(c *fiber.Ctx) error {
 	if err = lockHallOwner(c.Context(), tx, id, actor); err != nil {
 		return communityError(err)
 	}
-	var peer string
+	var peer, offerProvider string
 	var raw []byte
-	err = tx.QueryRow(c.Context(), `SELECT p.user_id::text,jsonb_build_object('town_hall_request_id',r.id,'title',r.title,'offer_id',o.id,'unit_price',o.unit_price,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'terms',o.terms) FROM town_hall_offers o JOIN chat_rooms r ON r.id=o.room_id JOIN town_hall_requests h ON h.room_id=r.id JOIN chat_participants p ON p.room_id=r.id AND p.provider_id=o.provider_id AND p.state='active' WHERE o.id=$2::uuid AND r.id=$1::uuid`, id, in.Offer).Scan(&peer, &raw)
+	err = tx.QueryRow(c.Context(), `SELECT p.user_id::text,o.provider_id::text,jsonb_build_object('town_hall_request_id',r.id,'title',r.title,'offer_id',o.id,'unit_price',o.unit_price,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'terms',o.terms) FROM town_hall_offers o JOIN chat_rooms r ON r.id=o.room_id JOIN town_hall_requests h ON h.room_id=r.id JOIN chat_participants p ON p.room_id=r.id AND p.provider_id=o.provider_id AND p.state='active' WHERE o.id=$2::uuid AND r.id=$1::uuid`, id, in.Offer).Scan(&peer, &offerProvider, &raw)
 	if err != nil {
+		return communityError(err)
+	}
+	if peer == actor {
+		return fiber.ErrForbidden
+	}
+	if err = independentHallProvider(c.Context(), tx, id, offerProvider); err != nil {
 		return communityError(err)
 	}
 	if err = lockSocialPair(c.Context(), tx, actor, peer); err != nil {
