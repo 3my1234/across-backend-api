@@ -28,6 +28,6 @@ jobs:
         with:
           go-version: '1.27.3'
       - name: Verify private detail ownership and complete editable snapshot
-        run: go test -p 1 -count=1 -v ./internal/controllers -run '^TestNative(ListingDetail|RequestExact)'
+        run: go test -p 1 -count=1 -v ./internal/controllers -run '^TestNative(ListingDetail|RequestExact|PushStatus)'
       - name: Compile all handlers and route registrations
         run: go test -p 1 ./internal/controllers ./internal/routes -run '^$'
