@@ -1,0 +1,34 @@
+name: Referral rewards and catalogue prices
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  referral-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-referral-ci
+          POSTGRES_DB: referral_tests
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-referral-ci@127.0.0.1:5432/referral_tests?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Apply all migrations to the isolated empty database
+        run: go run ./cmd/migrate
+      - name: Verify credits, concurrent settlements, identity and display contracts
+        run: go test -race -p 1 -count=1 -v ./internal/controllers -run '^Test(Referral|ProductRecommendations|CatalogCompare)'
+      - name: Compile API and worker routes
+        run: go test -p 1 ./internal/controllers ./internal/routes ./cmd/api ./cmd/worker -run '^$'

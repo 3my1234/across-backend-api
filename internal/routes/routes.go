@@ -34,6 +34,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authController := controllers.NewAuthController(db, cfg)
 	sesController := controllers.NewSESController(db, cfg)
 	xpController := controllers.NewXPController(db)
+	referralController := controllers.NewReferralController(db)
 	waitlist := controllers.NewWaitlistController(db)
 	supportController := controllers.NewSupportController(db)
 	messageReceipts := controllers.NewMessageReceiptsController(db)
@@ -222,6 +223,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/analytics/profit-loss", superOnly, analyticsController.GetProfitLoss)
 
 	// Register every admin endpoint before the broad customer auth group.
+	v1.Get("/referrals/validate", authRateLimit, referralController.Validate)
 	authed := v1.Group("", middleware.RequireAuth(cfg, db))
 	authed.Get("/messaging/preferences", messageReceipts.Preferences)
 	authed.Patch("/messaging/preferences", messageReceipts.SavePreferences)
@@ -346,6 +348,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// XP System
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)
 	authed.Get("/xp/balance", xpController.GetBalance)
+	authed.Get("/referrals/me", referralController.Mine)
 	authed.Get("/xp/history", xpController.GetHistory)
 	authed.Get("/xp/withdrawals", xpController.ListWithdrawals)
 	authed.Post("/xp/withdrawals", xpController.RequestWithdrawal)

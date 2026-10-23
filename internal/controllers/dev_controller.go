@@ -19,6 +19,9 @@ func NewDevController(db *pgxpool.Pool, cfg config.Config) *DevController {
 }
 
 func (d *DevController) Login(c *fiber.Ctx) error {
+	if !d.cfg.DevLoginAllowed() {
+		return fiber.ErrNotFound
+	}
 	var countryID string
 	if err := d.db.QueryRow(c.Context(), `
 		INSERT INTO countries_config(country_code, currency_code, base_escrow_days, active_payment_gateways)
