@@ -296,6 +296,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/providers/me/verification-documents", marketplaceController.ListVerificationDocuments)
 	authed.Post("/providers/me/verification-documents", marketplaceController.AddVerificationDocument)
 	authed.Get("/providers/me/listings", marketplaceController.ListMyListings)
+	authed.Get("/providers/me/listings/:listing_id", marketplaceController.GetMyListing)
 	authed.Post("/providers/me/listings", marketplaceController.CreateListing)
 	authed.Patch("/providers/me/listings/:listing_id", marketplaceController.UpdateListing)
 	authed.Delete("/providers/me/listings/:listing_id", marketplaceController.ArchiveListing)
