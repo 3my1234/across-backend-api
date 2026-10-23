@@ -46,6 +46,7 @@ func TestCommunityDualRoleBuyerAndOwnBusinessGuards(t *testing.T) {
 		return room
 	}
 	room := create(owner)
+	communityCall(t, app, "POST", "/hall/"+room+"/apply", buyer, "", 403)
 	communityCall(t, app, "POST", "/hall/"+room+"/apply", owner, "", 422)
 	communityCall(t, app, "POST", "/hall/"+room+"/apply", staff, "", 403)
 	staffRoom := create(staff)
@@ -59,6 +60,22 @@ func TestCommunityDualRoleBuyerAndOwnBusinessGuards(t *testing.T) {
 	offer := uuid.NewString()
 	exec(`INSERT INTO town_hall_offers(id,room_id,provider_id,sender_user_id,unit_price,terms) VALUES($1,$2,$3,$4,500,'Stale offer')`, offer, room, provider, staff)
 	communityCall(t, app, "POST", "/hall/"+room+"/choose", owner, `{"offer_id":"`+offer+`","close_room":true}`, 403)
+	// A different business can serve a provider acting as the buyer, with no
+	// duplicate customer identity or loss of the buyer's existing business.
+	peer, peerProvider, peerSub := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	exec(`INSERT INTO users(id,full_name) VALUES($1,'Independent provider')`, peer)
+	exec(`INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status) VALUES($1,$2,'Independent business','approved')`, peerProvider, peer)
+	exec(`INSERT INTO provider_members(provider_id,user_id,role) VALUES($1,$2,'owner')`, peerProvider, peer)
+	exec(`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,current_period_end) VALUES($1,$2,$3,'active',now()+interval '1 month')`, peerSub, peerProvider, plan)
+	exec(`INSERT INTO provider_subscription_payments VALUES($1,500,'NGN')`, peerSub)
+	communityCall(t, app, "POST", "/hall/"+room+"/apply", peer, "", 204)
+	communityCall(t, app, "POST", "/hall/"+room+"/providers/"+peerProvider, owner, `{"action":"approve"}`, 204)
+	communityCall(t, app, "POST", "/hall/"+room+"/offers", peer, `{"unit_price":600,"client_message_id":"`+uuid.NewString()+`"}`, 204)
+	var peerOffer string
+	if err := db.QueryRow(ctx, `SELECT id::text FROM town_hall_offers WHERE room_id=$1 AND provider_id=$2`, room, peerProvider).Scan(&peerOffer); err != nil {
+		t.Fatal(err)
+	}
+	communityCall(t, app, "POST", "/hall/"+room+"/choose", owner, `{"offer_id":"`+peerOffer+`","close_room":false}`, 200)
 	// Free, expired and restricted businesses retain their customer capabilities.
 	for _, condition := range []string{"free", "expired", "restricted"} {
 		t.Run(condition, func(t *testing.T) {
@@ -75,14 +92,12 @@ func TestCommunityDualRoleBuyerAndOwnBusinessGuards(t *testing.T) {
 			communityCall(t, app, "POST", "/rooms/"+request+"/messages", owner, `{"message":"My customer message","client_message_id":"`+uuid.NewString()+`"}`, 201)
 			communityCall(t, app, "POST", "/hall/"+request+"/close", staff, "", 403)
 			communityCall(t, app, "POST", "/hall/"+request+"/close", owner, "", 204)
-			if condition != "restricted" {
-				other := create(buyer)
-				communityCall(t, app, "POST", "/hall/"+other+"/apply", owner, "", 403)
-			}
+			other := create(buyer)
+			communityCall(t, app, "POST", "/hall/"+other+"/apply", owner, "", 403)
 		})
 	}
 	var people, businesses int
-	if err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM provider_organizations)`).Scan(&people, &businesses); err != nil || people != 3 || businesses != 1 {
+	if err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM provider_organizations)`).Scan(&people, &businesses); err != nil || people != 4 || businesses != 2 {
 		t.Fatalf("account continuity: %d %d %v", people, businesses, err)
 	}
 }

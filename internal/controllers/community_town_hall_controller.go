@@ -260,7 +260,10 @@ func (s *CommunityController) HallApply(c *fiber.Ctx) error {
 	actor := communityActor(c)
 	provider, _, err := s.market.providerForUser(c.Context(), actor)
 	if err != nil {
-		return err
+		if err == pgx.ErrNoRows {
+			return fiber.NewError(403, "An active approved provider profile and paid plan are required to respond")
+		}
+		return communityError(err)
 	}
 	tx, err := s.db.Begin(c.Context())
 	if err != nil {
