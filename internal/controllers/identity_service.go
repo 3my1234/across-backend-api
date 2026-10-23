@@ -18,6 +18,10 @@ func NewIdentityService(db *pgxpool.Pool) *IdentityService {
 }
 
 func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, email, name string) (string, bool, error) {
+	return s.ResolvePrivyWithReferral(ctx, countryID, subject, email, name, "")
+}
+
+func (s *IdentityService) ResolvePrivyWithReferral(ctx context.Context, countryID, subject, email, name, referralCode string) (string, bool, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -86,6 +90,11 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
     `, userID, subject, strings.ToLower(email))
 	if err != nil {
 		return "", false, err
+	}
+	if created {
+		if err := attachReferralTx(ctx, tx, userID, referralCode); err != nil {
+			return "", false, err
+		}
 	}
 	return userID, created, tx.Commit(ctx)
 }
