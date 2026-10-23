@@ -47,8 +47,8 @@ func discoveryFixture(t *testing.T) (*pgxpool.Pool, *DiscoveryController, *fiber
 	t.Helper()
 	db := communityTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `ALTER TABLE products ADD COLUMN description text DEFAULT '',ADD COLUMN inventory_count int DEFAULT 5,ADD COLUMN payment_mode_unused text,ADD COLUMN fulfillment_mode text DEFAULT 'merchant_local',ADD COLUMN inventory_city text DEFAULT 'Abuja',ADD COLUMN created_at timestamptz DEFAULT now();
- ALTER TABLE product_delivery_areas ADD COLUMN state_key text DEFAULT '',ADD COLUMN delivered_price numeric DEFAULT 100,ADD COLUMN currency_code text DEFAULT 'NGN';
+	_, err := db.Exec(ctx, `ALTER TABLE products ADD COLUMN description text DEFAULT '',ADD COLUMN inventory_count int DEFAULT 5,ADD COLUMN compare_at_price numeric DEFAULT 0,ADD COLUMN local_selling_price numeric DEFAULT 100,ADD COLUMN local_currency_code text DEFAULT 'NGN',ADD COLUMN is_flash_sale boolean DEFAULT false,ADD COLUMN flash_sale_price numeric DEFAULT 0,ADD COLUMN payment_mode_unused text,ADD COLUMN fulfillment_mode text DEFAULT 'merchant_local',ADD COLUMN inventory_city text DEFAULT 'Abuja',ADD COLUMN created_at timestamptz DEFAULT now();
+ ALTER TABLE product_delivery_areas ADD COLUMN state_key text DEFAULT '',ADD COLUMN delivered_price numeric DEFAULT 100,ADD COLUMN delivery_fee numeric DEFAULT 0,ADD COLUMN currency_code text DEFAULT 'NGN';
  ALTER TABLE provider_listings ADD COLUMN listing_type text DEFAULT 'artisan',ADD COLUMN attributes jsonb DEFAULT '{}',ADD COLUMN description text DEFAULT '',ADD COLUMN price numeric DEFAULT 100,ADD COLUMN currency_code text DEFAULT 'NGN',ADD COLUMN is_available_now boolean DEFAULT true,ADD COLUMN created_at timestamptz DEFAULT now();
  CREATE TABLE countries_config(country_code text,currency_code text,is_active boolean,active_payment_gateways text[]);
  INSERT INTO countries_config VALUES('NG','NGN',true,ARRAY['flutterwave']);`)

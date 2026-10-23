@@ -31,25 +31,26 @@ func NewDiscoveryController(db *pgxpool.Pool, cfg config.Config) *DiscoveryContr
 }
 
 type discoveryItem struct {
-	PriceMode string    `json:"price_mode"`
-	Kind      string    `json:"kind"`
-	ID        string    `json:"id"`
-	Provider  string    `json:"provider_id"`
-	Title     string    `json:"title"`
-	Category  []string  `json:"categories"`
-	City      string    `json:"city"`
-	Images    []string  `json:"image_urls"`
-	Price     *float64  `json:"price"`
-	Currency  string    `json:"currency"`
-	Paid      bool      `json:"-"`
-	Tier      string    `json:"-"`
-	Priority  int       `json:"-"`
-	Promote   bool      `json:"-"`
-	Created   time.Time `json:"-"`
-	Placement string    `json:"placement"`
-	Label     string    `json:"label,omitempty"`
-	Receipt   string    `json:"receipt"`
-	Score     int       `json:"-"`
+	CompareAtPrice float64   `json:"compare_at_price"`
+	PriceMode      string    `json:"price_mode"`
+	Kind           string    `json:"kind"`
+	ID             string    `json:"id"`
+	Provider       string    `json:"provider_id"`
+	Title          string    `json:"title"`
+	Category       []string  `json:"categories"`
+	City           string    `json:"city"`
+	Images         []string  `json:"image_urls"`
+	Price          *float64  `json:"price"`
+	Currency       string    `json:"currency"`
+	Paid           bool      `json:"-"`
+	Tier           string    `json:"-"`
+	Priority       int       `json:"-"`
+	Promote        bool      `json:"-"`
+	Created        time.Time `json:"-"`
+	Placement      string    `json:"placement"`
+	Label          string    `json:"label,omitempty"`
+	Receipt        string    `json:"receipt"`
+	Score          int       `json:"-"`
 }
 type discoveryReceipt struct {
 	Kind      string `json:"k"`
@@ -243,7 +244,7 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	candidates := []discoveryItem{}
 	for rows.Next() {
 		var item discoveryItem
-		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created, &item.PriceMode); err != nil {
+		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created, &item.PriceMode, &item.CompareAtPrice); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		item.Score = discoveryRelevance(item, categories, words, city)
@@ -261,9 +262,9 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	sessionHash := hex.EncodeToString(digest[:])
 	rails := fiber.Map{}
 	used := map[string]bool{}
-	placements := []string{"recommended", "promoted"}
+	placements := []string{"promoted", "recommended"}
 	if sourceID != "" {
-		placements = []string{"similar", "promoted"}
+		placements = []string{"promoted", "similar"}
 	}
 	for _, placement := range placements {
 		pool := []discoveryItem{}
@@ -274,7 +275,13 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 		}
 		limit := 6
 		if placement == "promoted" {
-			limit = 3
+			limit = len(candidates) / 4
+			if limit < 1 {
+				limit = 1
+			}
+			if limit > 3 {
+				limit = 3
+			}
 		}
 		ranked := rankDiscovery(pool, placement, session+time.Now().UTC().Format("2006-01-02T15"), limit)
 		cards := []fiber.Map{}
@@ -297,10 +304,10 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 // Availability and paid eligibility are always live; no cached grant survives
 // expiry, suspension, moderation or an opt-out.
 const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELECT 'product' kind,p.id,p.provider_id,p.title,p.category_path categories,p.inventory_city city,p.image_urls images,
- a.delivered_price price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode
- FROM products p JOIN provider_public_identity v ON v.provider_id=p.provider_id AND v.verified AND p.plan_slot<=v.listing_limit JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$1 AND (a.state_key='' OR a.state_key=$2) AND (a.city_key='' OR a.city_key=$3) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) a ON true
+ CASE WHEN p.is_flash_sale AND a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN p.flash_sale_price+a.delivery_fee ELSE a.delivered_price END price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode,CASE WHEN a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price THEN CASE WHEN p.is_flash_sale AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN GREATEST(p.local_selling_price,COALESCE(p.compare_at_price,0))+a.delivery_fee WHEN p.compare_at_price>p.local_selling_price THEN p.compare_at_price+a.delivery_fee ELSE 0 END ELSE 0 END compare_at_price
+ FROM products p JOIN provider_public_identity v ON v.provider_id=p.provider_id AND v.verified AND p.plan_slot<=v.listing_limit JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$1 AND (a.state_key='' OR a.state_key=$2) AND (a.city_key='' OR a.city_key=$3) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) a ON true
  WHERE p.is_active AND p.published_at IS NOT NULL AND p.moderation_status='approved' AND p.inventory_count>0 AND p.payment_mode='contact' AND p.fulfillment_mode IN('merchant_local','merchant_cross_border') AND ($4='' OR p.id<>NULLIF($4,'')::uuid)
- AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed')
+ AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed'),0::numeric
  FROM provider_listings l JOIN provider_public_identity v ON v.provider_id=l.provider_id AND v.verified AND l.plan_slot<=v.listing_limit JOIN countries_config market ON market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways)
  WHERE l.country_code=$1 AND l.published_at IS NOT NULL AND l.status='approved' AND l.is_available_now AND ($4='' OR l.id<>NULLIF($4,'')::uuid)
  AND (NOT $8 OR l.category=ANY($6::text[]) OR to_tsvector('simple',l.title||' '||l.description||' '||l.category) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), content AS MATERIALIZED (
@@ -310,7 +317,7 @@ const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELE
  UNION ALL (SELECT * FROM service_candidates WHERE id<$7::uuid ORDER BY id LIMIT 128)
  )
  SELECT c.kind,c.id::text,c.provider_id::text,c.title,c.categories,c.city,c.images,c.price::float8,c.currency,
- i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at,c.price_mode
+ i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at,c.price_mode,c.compare_at_price::float8
  FROM content c JOIN provider_public_identity i ON i.provider_id=c.provider_id
  LEFT JOIN discovery_listing_settings ls ON ls.kind=c.kind AND ls.listing_id=c.id AND ls.provider_id=c.provider_id
  LEFT JOIN discovery_provider_settings ps ON ps.provider_id=c.provider_id
