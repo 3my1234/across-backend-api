@@ -211,6 +211,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/messaging/receipts", catalogOnly, messageReceipts.Status)
 	adminRoutes.Post("/messaging/receipts", catalogOnly, messageReceipts.Acknowledge)
 	adminRoutes.Post("/messaging/deliveries", catalogOnly, messageReceipts.BatchDelivered)
+	adminRoutes.Get("/discovery/summary", catalogOnly, discovery.AdminSummary)
 	adminRoutes.Get("/community/reports", catalogOnly, privateCommunity, communityController.Reports)
 	adminRoutes.Get("/community/reports/:report_id/messages", catalogOnly, privateCommunity, communityController.ReportMessages)
 	adminRoutes.Post("/community/reports/:report_id/resolve", catalogOnly, privateCommunity, communityController.ResolveReport)

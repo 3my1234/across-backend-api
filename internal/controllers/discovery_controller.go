@@ -31,6 +31,7 @@ func NewDiscoveryController(db *pgxpool.Pool, cfg config.Config) *DiscoveryContr
 }
 
 type discoveryItem struct {
+	PriceMode string    `json:"price_mode"`
 	Kind      string    `json:"kind"`
 	ID        string    `json:"id"`
 	Provider  string    `json:"provider_id"`
@@ -211,6 +212,24 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 	words := discoveryWords(sourceTitle, strings.Join(categories, " "), c.Query("interests"), c.Query("search"))
+	recent := map[string]bool{}
+	if len(c.Query("recent")) > 1300 {
+		return fiber.ErrBadRequest
+	}
+	if c.Query("recent") != "" {
+		parts := strings.Split(c.Query("recent"), ",")
+		if len(parts) > 24 {
+			return fiber.ErrBadRequest
+		}
+		for _, key := range parts {
+			pair := strings.Split(key, ":")
+			if len(pair) != 2 || (pair[0] != "product" && pair[0] != "service") || uuid.Validate(pair[1]) != nil {
+				return fiber.ErrBadRequest
+			}
+			recent[key] = true
+		}
+	}
+
 	// A UUID seek pivot rotates the bounded candidate window; no OFFSET or
 	// random sort of the entire catalogue. Related/search predicates stay in SQL.
 	seed := sha256.Sum256([]byte(session + time.Now().UTC().Format("2006-01-02T15:04")))
@@ -224,10 +243,13 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	candidates := []discoveryItem{}
 	for rows.Next() {
 		var item discoveryItem
-		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created); err != nil {
+		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created, &item.PriceMode); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		item.Score = discoveryRelevance(item, categories, words, city)
+		if recent[item.Kind+":"+item.ID] {
+			item.Score--
+		}
 		item.Images = d.catalog.normalizeImageURLs(item.Images)
 		candidates = append(candidates, item)
 	}
@@ -275,10 +297,10 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 // Availability and paid eligibility are always live; no cached grant survives
 // expiry, suspension, moderation or an opt-out.
 const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELECT 'product' kind,p.id,p.provider_id,p.title,p.category_path categories,p.inventory_city city,p.image_urls images,
- a.delivered_price price,a.currency_code currency,p.plan_slot,p.created_at
+ a.delivered_price price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode
  FROM products p JOIN provider_public_identity v ON v.provider_id=p.provider_id AND v.verified AND p.plan_slot<=v.listing_limit JOIN LATERAL (SELECT a.delivered_price,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$1 AND (a.state_key='' OR a.state_key=$2) AND (a.city_key='' OR a.city_key=$3) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) a ON true
  WHERE p.is_active AND p.published_at IS NOT NULL AND p.moderation_status='approved' AND p.inventory_count>0 AND p.payment_mode='contact' AND p.fulfillment_mode IN('merchant_local','merchant_cross_border') AND ($4='' OR p.id<>NULLIF($4,'')::uuid)
- AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at
+ AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed')
  FROM provider_listings l JOIN provider_public_identity v ON v.provider_id=l.provider_id AND v.verified AND l.plan_slot<=v.listing_limit JOIN countries_config market ON market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways)
  WHERE l.country_code=$1 AND l.published_at IS NOT NULL AND l.status='approved' AND l.is_available_now AND ($4='' OR l.id<>NULLIF($4,'')::uuid)
  AND (NOT $8 OR l.category=ANY($6::text[]) OR to_tsvector('simple',l.title||' '||l.description||' '||l.category) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), content AS MATERIALIZED (
@@ -288,7 +310,7 @@ const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELE
  UNION ALL (SELECT * FROM service_candidates WHERE id<$7::uuid ORDER BY id LIMIT 128)
  )
  SELECT c.kind,c.id::text,c.provider_id::text,c.title,c.categories,c.city,c.images,c.price::float8,c.currency,
- i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at
+ i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at,c.price_mode
  FROM content c JOIN provider_public_identity i ON i.provider_id=c.provider_id
  LEFT JOIN discovery_listing_settings ls ON ls.kind=c.kind AND ls.listing_id=c.id AND ls.provider_id=c.provider_id
  LEFT JOIN discovery_provider_settings ps ON ps.provider_id=c.provider_id
@@ -429,4 +451,26 @@ func PurgeDiscoveryMetrics(ctx context.Context, db *pgxpool.Pool) error {
 	}
 	_, err = db.Exec(ctx, `DELETE FROM discovery_daily_metrics WHERE ctid IN(SELECT ctid FROM discovery_daily_metrics WHERE day<current_date-90 ORDER BY day LIMIT 1000)`)
 	return err
+}
+
+func (d *DiscoveryController) AdminSummary(c *fiber.Ctx) error {
+	rows, err := d.db.Query(c.Context(), `SELECT placement,COALESCE(sum(impressions),0)::bigint,COALESCE(sum(clicks),0)::bigint,COALESCE(sum(detail_opens),0)::bigint,COALESCE(sum(contact_taps),0)::bigint FROM discovery_daily_metrics WHERE day>=current_date-29 GROUP BY placement`)
+	if err != nil {
+		return fiber.ErrServiceUnavailable
+	}
+	defer rows.Close()
+	items := []fiber.Map{}
+	for rows.Next() {
+		var placement string
+		var impressions, clicks, opens, contacts int64
+		if err = rows.Scan(&placement, &impressions, &clicks, &opens, &contacts); err != nil {
+			return fiber.ErrServiceUnavailable
+		}
+		items = append(items, fiber.Map{"placement": placement, "impressions": impressions, "clicks": clicks, "detail_opens": opens, "contact_taps": contacts})
+	}
+	if rows.Err() != nil {
+		return fiber.ErrServiceUnavailable
+	}
+	c.Set("Cache-Control", "private, no-store")
+	return c.JSON(fiber.Map{"days": 30, "items": items})
 }
