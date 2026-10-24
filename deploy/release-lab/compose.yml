@@ -1,0 +1,100 @@
+# Synthetic CI only: strict runtime policies, no published ports or egress.
+name: atl-foundation-release
+x-runtime: &runtime
+  image: ${ATL_RELEASE_IMAGE:-atl-release-new:local}
+  environment: &environment
+    APP_ENV: staging
+    JWT_SECRET: capacity-lab-not-a-production-secret
+    DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=verify-full&sslrootcert=/fixture/ca.pem
+    MIGRATION_DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=verify-full&sslrootcert=/fixture/ca.pem
+    REDIS_URL: rediss://default:release-lab-only@redis:6380/0
+    REDIS_TLS_CA_BASE64: ${LAB_REDIS_CA_BASE64:?disposable CA required}
+    # The retained old application also verifies TLS using Go's system-root input.
+    SSL_CERT_FILE: /fixture/ca.pem
+    REDIS_OPTIONAL: "false"
+    RUN_MIGRATIONS: "false"
+    RUN_INLINE_WORKERS: "false"
+    ENABLE_DEV_LOGIN: "false"
+    ENABLE_MOCK_PAYMENTS: "false"
+    ADMIN_BOOTSTRAP_TOKEN: ""
+    TRUSTED_PROXY_CIDRS: 10.244.90.10/32
+    ALLOWED_ORIGINS: https://staging.invalid
+    DB_MAX_CONNS: "4"
+    DB_MIN_CONNS: "1"
+    HTTP_MAX_IN_FLIGHT: "32"
+    RATE_LIMIT_PER_MINUTE: "20000"
+    GOMAXPROCS: "2"
+  volumes: ['${LAB_TLS_DIR:?disposable TLS directory required}:/fixture:ro']
+  networks: [lab]
+  cpus: 0.25
+  mem_limit: 256m
+  pids_limit: 128
+  init: true
+  healthcheck:
+    test: [CMD, curl, -fsS, --max-time, "4", http://localhost:8080/api/v1/ready]
+    interval: 2s
+    timeout: 5s
+    retries: 30
+    start_period: 10s
+services:
+  postgres:
+    image: postgres:16-alpine
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/fixture/ca.pem, -c, ssl_key_file=/fixture/server.key]
+    environment: {POSTGRES_USER: lab, POSTGRES_PASSWORD: lab-disposable-only, POSTGRES_DB: capacity_lab}
+    volumes: ['${LAB_TLS_DIR:?}:/fixture:ro']
+    networks: [lab]
+    cpus: 0.75
+    mem_limit: 768m
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U lab -d capacity_lab]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7.2.16
+    command: [redis-server, /fixture/redis.conf]
+    environment: {REDISCLI_AUTH: release-lab-only}
+    volumes: ['${LAB_TLS_DIR:?}:/fixture:ro', 'redis-data:/data']
+    networks: [lab]
+    cpus: 0.25
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, redis-cli, --tls, --cacert, /fixture/ca.pem, -h, redis, -p, "6380", ping]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  seed:
+    image: atl-release-new:local
+    command: [/app/lab, seed]
+    environment: {CAPACITY_LAB: disposable-compose-only, LAB_ACTOR_PAIRS: "10", LAB_SCENARIO: standard}
+    networks: [lab]
+    cpus: 0.5
+    mem_limit: 256m
+  original: *runtime
+  api1: *runtime
+  api2: *runtime
+  worker:
+    <<: *runtime
+    command: [/app/across-worker]
+  gateway:
+    image: haproxy:3.0-alpine
+    command: [haproxy, -f, /fixture/haproxy.cfg]
+    volumes: ['${LAB_TLS_DIR:?}:/fixture:ro']
+    networks:
+      lab: {ipv4_address: 10.244.90.10}
+    cpus: 0.1
+    mem_limit: 128m
+  runner:
+    image: atl-release-new:local
+    command: [/app/lab, lifecycle]
+    environment: {CAPACITY_LAB: disposable-compose-only, LAB_ACTOR_PAIRS: "10", LAB_SCENARIO: standard, LAB_PROFILE: smoke}
+    networks: [lab]
+    cpus: 0.5
+    mem_limit: 256m
+networks:
+  lab:
+    internal: true
+    ipam:
+      config: [{subnet: 10.244.90.0/24}]
+volumes:
+  redis-data:

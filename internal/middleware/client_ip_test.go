@@ -4,6 +4,8 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+
+	"github.com/valyala/fasthttp"
 )
 
 func TestTrustedProxyChainRejectsSpoofing(t *testing.T) {
@@ -24,5 +26,23 @@ func TestTrustedProxyChainRejectsSpoofing(t *testing.T) {
 				t.Fatalf("got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRepeatedForwardingFieldsKeepNearestUntrustedPeer(t *testing.T) {
+	var header fasthttp.RequestHeader
+	header.Add("X-Forwarded-For", "198.51.100.250")
+	header.Add("X-Forwarded-For", "203.0.113.6")
+	chain, valid := forwardedForHeader(&header)
+	if !valid || chain != "198.51.100.250,203.0.113.6" {
+		t.Fatalf("forwarding fields were not preserved: %q", chain)
+	}
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.42.0.2/32")}
+	if got := resolveClientIP(netip.MustParseAddr("10.42.0.2"), chain, trusted); got.String() != "203.0.113.6" {
+		t.Fatalf("forged first field bypassed nearest peer: %s", got)
+	}
+	header.Add("X-Forwarded-For", strings.Repeat("x", 4096))
+	if _, valid = forwardedForHeader(&header); valid {
+		t.Fatal("combined forwarding field limit was not enforced")
 	}
 }

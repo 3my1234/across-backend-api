@@ -3,6 +3,8 @@
 !.env.example
 
 .git/
+**/.git/
+retained-source/
 .github/
 
 api.err.log

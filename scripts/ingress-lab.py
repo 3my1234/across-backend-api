@@ -97,7 +97,7 @@ def main():
                 ):
                     value = probe(source, target, xff, cf)
                     if value.get('verified') != expected:
-                        raise RuntimeError('identity assertion failed: '+name)
+                        raise RuntimeError('identity assertion failed: '+json.dumps({'case': name, 'append': append, 'expected': expected, 'observed': value}))
                     results.append({'mode': 'append' if append else 'current_source', 'case': name,
                                     'expected_verified_ip': expected, 'observed': value, 'passed': True})
                 remove(gateway)
