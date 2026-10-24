@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,6 +19,17 @@ func NewIdentityService(db *pgxpool.Pool) *IdentityService {
 }
 
 func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, email, name string) (string, bool, error) {
+	return s.ResolvePrivyWithReferral(ctx, countryID, subject, email, name, "")
+}
+
+func (s *IdentityService) ResolvePrivyWithReferral(ctx context.Context, countryID, subject, email, name, referralCode string) (string, bool, error) {
+	// Only call after validating the signed token and fetching its linked email
+	// from Privy's authenticated server API. Never accept a client email claim.
+	var valid bool
+	email, valid = normalizeEmail(email)
+	if !valid || strings.TrimSpace(subject) == "" {
+		return "", false, fiber.ErrUnauthorized
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -25,6 +37,9 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "privy:"+subject); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "identity-email:"+email); err != nil {
 		return "", false, err
 	}
 
@@ -35,6 +50,17 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
         FOR UPDATE
     `, subject).Scan(&userID)
 	if err == nil {
+		var active bool
+		var savedEmail string
+		if err = tx.QueryRow(ctx, `SELECT is_active,COALESCE(email,'') FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&active, &savedEmail); err != nil {
+			return "", false, err
+		}
+		if !active {
+			return "", false, fiber.NewError(403, "This account is inactive. Verify your email or contact support.")
+		}
+		if !strings.EqualFold(strings.TrimSpace(savedEmail), email) {
+			return "", false, fiber.NewError(409, "Your linked email has changed. Sign in with your existing account and contact support to update it.")
+		}
 		_, err = tx.Exec(ctx, `
             UPDATE user_identities SET email = $2, updated_at = now()
             WHERE provider = 'privy' AND provider_subject = $1
@@ -44,7 +70,7 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
                 UPDATE users
                 SET email = $2,
                     full_name = CASE WHEN trim(full_name) = '' THEN $3 ELSE full_name END,
-                    is_active = true, email_verified = true, privy_user_id = $4, updated_at = now()
+                    email_verified = true, privy_user_id = $4, updated_at = now()
                 WHERE id = $1
             `, userID, email, name, subject)
 		}
@@ -67,10 +93,24 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
             RETURNING id
         `, countryID, email, name, subject).Scan(&userID)
 	} else if err == nil {
+		var active, linkedElsewhere bool
+		err = tx.QueryRow(ctx, `SELECT is_active,
+ (COALESCE(privy_user_id,'')<>'' AND privy_user_id<>$2) OR EXISTS(
+ SELECT 1 FROM user_identities WHERE user_id=users.id AND provider='privy' AND provider_subject<>$2)
+ FROM users WHERE id=$1`, userID, subject).Scan(&active, &linkedElsewhere)
+		if err != nil {
+			return "", false, err
+		}
+		if !active {
+			return "", false, fiber.NewError(403, "This account is inactive. Verify your email or contact support.")
+		}
+		if linkedElsewhere {
+			return "", false, fiber.NewError(409, "This account already has a different linked sign-in. Use your existing sign-in method.")
+		}
 		_, err = tx.Exec(ctx, `
             UPDATE users
             SET full_name = CASE WHEN trim(full_name) = '' THEN $2 ELSE full_name END,
-                is_active = true, email_verified = true, privy_user_id = $3, updated_at = now()
+                email_verified = true, privy_user_id = $3, updated_at = now()
             WHERE id = $1
         `, userID, name, subject)
 	}
@@ -86,6 +126,11 @@ func (s *IdentityService) ResolvePrivy(ctx context.Context, countryID, subject, 
     `, userID, subject, strings.ToLower(email))
 	if err != nil {
 		return "", false, err
+	}
+	if created {
+		if err := attachReferralTx(ctx, tx, userID, referralCode); err != nil {
+			return "", false, err
+		}
 	}
 	return userID, created, tx.Commit(ctx)
 }

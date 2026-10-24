@@ -1273,7 +1273,14 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 	}
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	search := strings.TrimSpace(c.Query("search"))
-	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,''),review.rating,review.review_text FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id LEFT JOIN provider_listing_reviews review ON review.request_id=r.id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1)
+	var requestID any
+	if raw := strings.TrimSpace(c.Query("request_id")); raw != "" {
+		if uuid.Validate(raw) != nil {
+			return fiber.ErrBadRequest
+		}
+		requestID = raw
+	}
+	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,''),review.rating,review.review_text FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id LEFT JOIN provider_listing_reviews review ON review.request_id=r.id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) AND ($8::uuid IS NULL OR r.id=$8::uuid) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1, requestID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}

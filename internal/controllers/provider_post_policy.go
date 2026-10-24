@@ -61,21 +61,6 @@ func (m *ProviderMarketplaceController) ProviderPostPolicy(c *fiber.Ctx) error {
 	return c.JSON(policy)
 }
 
-// Buyers remain able to request services. Free provider memberships cannot use
-// Town Hall as a second channel around the paid provider participation rules.
-func (m *ProviderMarketplaceController) RequireProviderTownHall(c *fiber.Ctx) error {
-	u, _ := c.Locals("user_id").(string)
-	var provider, eligible bool
-	err := m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_members pm JOIN provider_organizations p ON p.id=pm.provider_id WHERE pm.user_id=$1::uuid AND pm.is_active AND p.is_active),EXISTS(SELECT 1 FROM provider_members pm JOIN provider_public_identity i ON i.provider_id=pm.provider_id WHERE pm.user_id=$1::uuid AND pm.is_active AND i.verified AND i.paid_active AND i.badge_tier IN('bronze','silver','gold','diamond'))`, u).Scan(&provider, &eligible)
-	if err != nil {
-		return fiber.NewError(503, "Town Hall access could not be checked. Please retry.")
-	}
-	if provider && !eligible {
-		return fiber.NewError(403, "Town Hall requires an approved provider profile and a paid plan. Upgrade to Bronze or above to participate.")
-	}
-	return c.Next()
-}
-
 func mustJSONVideos(v []string) string {
 	if v == nil {
 		v = []string{}

@@ -1,0 +1,33 @@
+name: Discovery eligibility rotation and analytics
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  discovery-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-discovery-ci
+          POSTGRES_DB: discovery_tests
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-discovery-ci@127.0.0.1:5432/discovery_tests?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Qualify ranking ownership lifecycle and real PostgreSQL metrics
+        run: go test -race -p 1 -count=1 -v ./internal/controllers -run '^Test(Discovery|PaidDiscovery|ProductRecommendations|ReferralGoogle)'
+      - name: Verify additive migration against existing schema
+        run: go run ./cmd/migrate
+      - name: Compile API and worker
+        run: go test -p 1 ./internal/routes ./cmd/api ./cmd/worker -run '^$'

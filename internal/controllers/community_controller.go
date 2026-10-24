@@ -447,6 +447,11 @@ func (s *CommunityController) lockMember(ctx context.Context, tx pgx.Tx, room, a
 		}
 	}
 	if role == "provider" {
+		if kind == "town_hall" {
+			if err = independentHallProvider(ctx, tx, room, provider); err != nil {
+				return "", "", "", err
+			}
+		}
 		var eligible bool
 		err = tx.QueryRow(ctx, `SELECT verified AND paid_active AND badge_tier IN('bronze','silver','gold','diamond') AND EXISTS(SELECT 1 FROM provider_subscriptions sub WHERE sub.provider_id=$1::uuid AND sub.status='active' AND sub.current_period_end>clock_timestamp() AND (sub.starts_at IS NULL OR sub.starts_at<=clock_timestamp()) AND EXISTS(SELECT 1 FROM provider_subscription_payments pay WHERE pay.subscription_id=sub.id AND pay.amount>0 AND pay.currency_code='NGN')) FROM provider_public_identity WHERE provider_id=$1::uuid`, provider).Scan(&eligible)
 		if err != nil || !eligible {
