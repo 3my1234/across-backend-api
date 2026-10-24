@@ -73,7 +73,7 @@ def main():
             # Preserve production's HTTP forwarding behavior and timeouts, with
             # only its service-discovery backend replaced by the fixed fixture.
             lines = original.splitlines()
-            baseline = '\n'.join('  server fixture 10.244.89.4:8080 check' if line.strip().startswith('server-template ') else line for line in lines)+'\n'
+            baseline = '\n'.join('  server fixture 10.244.89.4:8080 check' if line.strip().startswith('server-template ') else line for line in lines if line.strip() != 'option forwardfor')+'\n'
             for append in (False, True):
                 content = baseline
                 if append:
