@@ -1,0 +1,103 @@
+name: Foundation security and recovery
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  redis-tls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: redis_tls_fixture
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Prepare disposable Redis matching observed production version
+        run: docker pull redis:7.2.16
+      - name: Qualify TLS, credentials, shared stores and listener rollback
+        env:
+          REDIS_TLS_LAB: '1'
+        run: |
+          set -euo pipefail
+          go test -v -count=1 -timeout=3m ./internal/db -run '^TestRedisTLSCompatibility$' | tee /tmp/redis-tls-evidence.txt
+          test -z "$(docker ps -aq --filter label=atl.redis-tls-lab)"
+          test -z "$(docker volume ls -q --filter label=atl.redis-tls-lab)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: redis-tls-compatibility-evidence
+          path: /tmp/redis-tls-evidence.txt
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Unit and concurrency regressions
+        run: |
+          go test -v ./...
+          go test -race ./internal/config ./internal/middleware ./internal/buildinfo ./cmd/worker
+          python3 scripts/test_restore_drill.py
+      - name: Reachable Go vulnerability gate
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -show verbose ./...
+      - name: Build offline preflight and check embedded revision
+        run: |
+          go build -ldflags="-X across/backend/internal/buildinfo.Revision=${{ github.sha }}" -o /tmp/atl-config-check ./cmd/config-check
+          /tmp/atl-config-check --build-info > /tmp/build-info.json
+          python3 -c 'import json; assert json.load(open("/tmp/build-info.json"))["revision"] == "${{ github.sha }}"'
+  recovery-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: foundation_recovery_fixture
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Build disposable fixture from actual application migrations
+        env:
+          APP_ENV: test
+          DATABASE_URL: postgres://postgres:disposable-ci-only@127.0.0.1:5432/foundation_recovery_fixture?sslmode=disable
+        run: go run ./cmd/migrate
+      - name: Make synthetic archive from disposable CI data
+        env:
+          FIXTURE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "$FIXTURE_CONTAINER" psql -X -U postgres -d foundation_recovery_fixture -v ON_ERROR_STOP=1 < scripts/recovery-fixture.sql
+          docker exec "$FIXTURE_CONTAINER" pg_dump -U postgres -d foundation_recovery_fixture -Fc > /tmp/synthetic-recovery.dmp
+      - name: Build isolated application read checker
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/recovery-read-check ./cmd/recovery-read-check
+      - name: Exercise isolated restore, business aggregates and real read handlers
+        run: |
+          set -euo pipefail
+          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16
+          python3 scripts/restore-drill.py --archive /tmp/synthetic-recovery.dmp --postgres-major 16 --read-check /tmp/recovery-read-check --execute | tee /tmp/recovery-evidence.jsonl
+          python3 -c 'import json; r=[json.loads(x) for x in open("/tmp/recovery-evidence.jsonl")][-1]; e=r["extended_validation"]; assert r["isolated_restore_passed"] and r["migration_inventory_matched"] and r["owned_container_removed"] and r["counts"]["users"] == 2 and e["application_reads"]["application_reads_passed"] and not e["findings_require_review"]; assert e["aggregate_counts"]["subscription_payments"] == 1 and e["aggregate_counts"]["ordinary_messages"] == 1 and e["aggregate_counts"]["town_hall_offers"] == 1; assert all(x["status"]=="pass" for x in e["application_reads"]["checks"])'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-recovery-evidence
+          path: /tmp/recovery-evidence.jsonl

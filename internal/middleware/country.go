@@ -29,16 +29,11 @@ func RequireAllowedCountry(cfg config.Config) fiber.Handler {
 	}
 
 	return func(c *fiber.Ctx) error {
-		// Cloudflare already geolocates the real visitor at the edge. Prefer that
-		// value to a second lookup of a mobile carrier or proxy address, which can
-		// be slower and less accurate.
-		country := normalizedCountryCode(c.Get("CF-IPCountry"))
-		if country == "" {
-			var err error
-			country, err = detectCountryCode(c)
-			if err != nil {
-				return err
-			}
+		// Geographic availability is a product hint, not an authorization
+		// boundary. Unverified CF headers must not override the resolved client.
+		country, err := detectCountryCode(c)
+		if err != nil {
+			return err
 		}
 		if country == "" {
 			country = normalizedCountryCode(c.Get("X-Client-Country-Code"))
@@ -70,7 +65,7 @@ func detectCountryCode(c *fiber.Ctx) (string, error) {
 		return "", nil
 	}
 	if parsed, err := netip.ParseAddr(clientIP); err == nil {
-		if !parsed.IsValid() || !parsed.IsGlobalUnicast() {
+		if !parsed.IsValid() || !parsed.IsGlobalUnicast() || parsed.IsPrivate() {
 			return "", nil
 		}
 	}
@@ -97,7 +92,7 @@ func detectCountryCode(c *fiber.Ctx) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", nil
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
 	if err != nil {
 		return "", nil
 	}
@@ -110,24 +105,7 @@ func detectCountryCode(c *fiber.Ctx) (string, error) {
 }
 
 func clientIPFromRequest(c *fiber.Ctx) string {
-	// CF-Connecting-IP is set by Cloudflare to the original visitor. XFF can
-	// contain an arbitrary client-supplied left-most value, so it is fallback.
-	if ip := strings.TrimSpace(c.Get("CF-Connecting-IP")); ip != "" {
-		return ip
-	}
-	forwarded := strings.TrimSpace(c.Get("X-Forwarded-For"))
-	if forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		if len(parts) > 0 {
-			if ip := strings.TrimSpace(parts[0]); ip != "" {
-				return ip
-			}
-		}
-	}
-	if ip := strings.TrimSpace(c.Get("X-Real-IP")); ip != "" {
-		return ip
-	}
-	return strings.TrimSpace(c.IP())
+	return scaleClientIP(c)
 }
 
 func parseAllowedCountries(raw string) map[string]struct{} {

@@ -35,10 +35,12 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: SOURCE_COMMIT=${{ github.sha }}
           tags: ${{ inputs.repository_uri }}:${{ github.sha }}
           provenance: false
       - name: Record immutable deployment image
         env:
           REPOSITORY_URI: ${{ inputs.repository_uri }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: printf 'Deployment image: `%s@%s`\n' "$REPOSITORY_URI" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          printf 'Deployment image: `%s@%s`\n' "$REPOSITORY_URI" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

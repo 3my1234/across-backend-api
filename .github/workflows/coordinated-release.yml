@@ -1,0 +1,37 @@
+name: Coordinated API worker TLS release and rollback
+on:
+  pull_request:
+    branches: [main, feat/milestone-1-foundation]
+    paths: ['deploy/release-lab/**', 'scripts/release-lab.py', 'internal/config/**', 'internal/middleware/client_ip*', '.github/workflows/coordinated-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  coordinated-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ec60b2a57cee69a58718d7a350834caf766a3dcd
+          path: retained-source
+      - name: Build both actual application revisions without publishing
+        run: |
+          docker build -f deploy/release-lab/Dockerfile -t atl-release-new:local .
+          docker build -f deploy/release-lab/Dockerfile -t atl-release-old:local retained-source
+          docker pull postgres:16-alpine
+          docker pull redis:7.2.16
+          docker pull haproxy:3.0-alpine
+      - name: Qualify actual processes, interruption, persistence and rollback
+        env:
+          ATL_RELEASE_LAB: synthetic-only
+        run: |
+          set -euo pipefail
+          python3 scripts/release-lab.py | tee /tmp/coordinated-release.json
+          python3 -c 'import json; r=json.load(open("/tmp/coordinated-release.json")); assert r["coordinated_release_passed"] and r["owned_cleanup_complete"]'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coordinated-release-evidence
+          path: /tmp/coordinated-release.json

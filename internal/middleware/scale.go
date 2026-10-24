@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -91,15 +90,10 @@ func publicCacheablePath(path string) bool {
 }
 
 func scaleClientIP(c *fiber.Ctx) string {
-	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP"} {
-		if value := strings.TrimSpace(c.Get(header)); net.ParseIP(value) != nil {
-			return value
-		}
+	if ip, ok := c.Locals(verifiedClientIPKey).(string); ok && ip != "" {
+		return ip
 	}
-	if forwarded := strings.TrimSpace(strings.Split(c.Get("X-Forwarded-For"), ",")[0]); net.ParseIP(forwarded) != nil {
-		return forwarded
-	}
-	return c.IP()
+	return c.Context().RemoteIP().String()
 }
 
 func maxInt64(a, b int64) int64 {

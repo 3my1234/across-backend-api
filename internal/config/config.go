@@ -28,10 +28,14 @@ type Config struct {
 	HTTPMaxInFlight               int
 	WorkerHealthAddr              string
 	AllowedOrigins                string
+	TrustedProxyCIDRs             string
 	DatabaseURL                   string
+	DatabaseVerifiedVPNHost       string
 	DatabaseReadURL               string
 	MigrationDatabaseURL          string
 	RedisURL                      string
+	RedisTLSCAFile                string
+	RedisTLSCABase64              string
 	RedisAddr                     string
 	RedisPassword                 string
 	RedisDB                       int
@@ -118,16 +122,20 @@ func Load() Config {
 		WebPushPublicKey:              env("WEB_PUSH_VAPID_PUBLIC_KEY", ""),
 		WebPushPrivateKey:             env("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
 		WebPushSubject:                env("WEB_PUSH_SUBJECT", "mailto:support@atlxpres.com"),
-		AppEnv:                        env("APP_ENV", "development"),
+		AppEnv:                        strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
 		EnableDevLogin:                envBool("ENABLE_DEV_LOGIN", false),
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
 		HTTPMaxInFlight:               envInt("HTTP_MAX_IN_FLIGHT", 128),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),
 		AllowedOrigins:                env("ALLOWED_ORIGINS", defaultAllowedOrigins),
+		TrustedProxyCIDRs:             env("TRUSTED_PROXY_CIDRS", ""),
 		DatabaseURL:                   databaseURL(),
+		DatabaseVerifiedVPNHost:       env("DB_VERIFIED_VPN_HOST", ""),
 		DatabaseReadURL:               env("DATABASE_READ_URL", ""),
 		MigrationDatabaseURL:          env("MIGRATION_DATABASE_URL", databaseURL()),
 		RedisURL:                      env("REDIS_URL", ""),
+		RedisTLSCAFile:                env("REDIS_TLS_CA_FILE", ""),
+		RedisTLSCABase64:              env("REDIS_TLS_CA_BASE64", ""),
 		RedisAddr:                     env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:                 env("REDIS_PASSWORD", ""),
 		RedisDB:                       envInt("REDIS_DB", 0),

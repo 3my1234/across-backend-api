@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.22.x'}
+        with: {go-version: '1.27.3'}
       - name: Unit-check lab storage boundary and valid photo fixtures
         run: go test ./cmd/capacity-lab
       - name: Generate disposable TLS identity and start internal services
