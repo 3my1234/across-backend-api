@@ -1,0 +1,41 @@
+name: Exact-source migration toolkit
+on:
+  pull_request:
+    branches: [main, feat/milestone-1-foundation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  toolkit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_PASSWORD: synthetic-only, POSTGRES_DB: migration_gate_fixture}
+        ports: [5432:5432]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Verify bounded DDL lock waits preserve existing writes
+        env:
+          MIGRATION_GATE_LAB: isolated-ci
+          MIGRATION_GATE_DATABASE_URL: postgres://postgres:synthetic-only@localhost:5432/migration_gate_fixture?sslmode=disable
+        run: go test -race ./internal/db -run TestMigrationLockWaitIsBoundedAndPreservesExistingWrites -count=1
+      - name: Build tools from the exact reviewed revision
+        env:
+          RELEASE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 scripts/build-release-toolkit.py
+          .release-artifacts/release-toolkit/across-config-check --build-info > .release-artifacts/build-info.json
+          python3 -c 'import json,os; r=json.load(open(".release-artifacts/build-info.json")); assert r["revision"]==os.environ["RELEASE_REVISION"] and not r["modified"]'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-toolkit-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .release-artifacts/
+          include-hidden-files: true
+          retention-days: 14

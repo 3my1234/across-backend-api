@@ -58,6 +58,25 @@ func NewPostgresPool(ctx context.Context, databaseURL string, configuredMax, con
 	if err != nil {
 		return nil, err
 	}
+	return openPostgresPool(ctx, pgxCfg, configuredMax, configuredMin)
+}
+
+// Migration timeouts belong only to this session. They never change database
+// server settings or the ordinary API/worker pools.
+func NewMigrationPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+	pgxCfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	pgxCfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	pgxCfg.ConnConfig.RuntimeParams["lock_timeout"] = "3s"
+	pgxCfg.ConnConfig.RuntimeParams["statement_timeout"] = "120s"
+	pgxCfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "60s"
+	pgxCfg.ConnConfig.RuntimeParams["application_name"] = "atl-release-migrator"
+	return openPostgresPool(ctx, pgxCfg, 2, 1)
+}
+
+func openPostgresPool(ctx context.Context, pgxCfg *pgxpool.Config, configuredMax, configuredMin int) (*pgxpool.Pool, error) {
 	maxConns := configuredMax
 	if maxConns < 2 {
 		maxConns = 2
