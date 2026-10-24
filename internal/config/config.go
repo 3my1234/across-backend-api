@@ -84,6 +84,12 @@ type Config struct {
 	ProviderSubscriptionPolicy    *ProviderSubscriptionPolicy
 }
 
+// Development login is opt-in and never permitted in production/staging.
+func (c Config) DevLoginAllowed() bool {
+	environment := strings.ToLower(strings.TrimSpace(c.AppEnv))
+	return c.EnableDevLogin && (environment == "development" || environment == "test")
+}
+
 func Load() Config {
 	loadDotEnv(".env")
 	publicBaseURL := strings.TrimRight(env("PUBLIC_BASE_URL", ""), "/")

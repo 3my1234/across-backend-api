@@ -90,6 +90,7 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		Phone               string `json:"phone"`
 		Password            string `json:"password"`
 		RegistrationContext string `json:"registration_context"`
+		ReferralCode        string `json:"referral_code"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
@@ -146,6 +147,9 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		log.Printf("signup insert failed: %v", err)
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
+	if err := attachReferralTx(c.Context(), tx, userID, req.ReferralCode); err != nil {
+		return err
+	}
 	if err := services.QueueVerificationEmail(c.Context(), tx, userID, verificationToken, a.cfg.PublicBaseURL); err != nil {
 		if errors.Is(err, services.ErrRecipientSuppressed) {
 			return fiber.NewError(fiber.StatusBadRequest, "this email address cannot receive account messages; use another email")
@@ -191,49 +195,17 @@ func (a *AuthController) Login(c *fiber.Ctx) error {
 	return a.respondSession(c, userID)
 }
 
+// The former email-only endpoint did not verify a Google identity. Current
+// mobile Google sign-in uses signed Privy verification, never this endpoint.
 func (a *AuthController) Gmail(c *fiber.Ctx) error {
-	var req struct {
-		Email    string `json:"email"`
-		FullName string `json:"full_name"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
-	}
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	req.FullName = strings.TrimSpace(req.FullName)
-	if req.Email == "" || !strings.Contains(req.Email, "@gmail.") && !strings.HasSuffix(req.Email, "@gmail.com") {
-		return fiber.NewError(fiber.StatusBadRequest, "valid gmail address required")
-	}
-	if req.FullName == "" {
-		req.FullName = "Across Buyer"
-	}
-
-	countryID, err := ensureCountry(c, a.db)
-	if err != nil {
-		return err
-	}
-	var userID string
-	err = a.db.QueryRow(c.Context(), `
-		INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified)
-		VALUES ($1, $2, 'gmail-oauth-placeholder', $3, true, true)
-		ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, is_active = true, email_verified = true, updated_at = now()
-		RETURNING id
-	`, countryID, req.Email, req.FullName).Scan(&userID)
-	if err != nil {
-		return err
-	}
-	if err := services.QueueWelcomeEmail(c.Context(), a.db, userID); err != nil && !errors.Is(err, services.ErrRecipientSuppressed) {
-		log.Printf("welcome email queue failed user_id=%s: %v", userID, err)
-	}
-	_ = CreateNotification(c.Context(), a.db, userID, "", nil, "order_confirmed", "Welcome to Atlantic Express!",
-		"Thank you for joining ATLANTIC SHANSU LOGISTICS LIMITED. Start shopping for quality products from China!", nil)
-	return a.respondSession(c, userID)
+	return fiber.NewError(fiber.StatusGone, "Update ATL Xpress and use verified Google sign-in or your email and password")
 }
 
 func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	var req struct {
 		PrivyToken    string `json:"privy_token"`
 		PrivyTokenAlt string `json:"privyToken"`
+		ReferralCode  string `json:"referral_code"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
@@ -263,8 +235,12 @@ func (a *AuthController) VerifyPrivy(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	userID, _, err := a.identities.ResolvePrivy(c.Context(), countryID, privyUserID, email, name)
+	userID, _, err := a.identities.ResolvePrivyWithReferral(c.Context(), countryID, privyUserID, email, name, req.ReferralCode)
 	if err != nil {
+		var referralError *fiber.Error
+		if errors.As(err, &referralError) {
+			return referralError
+		}
 		log.Printf("privy identity resolution failed subject=%s: %v", privyUserID, err)
 		return fiber.NewError(fiber.StatusInternalServerError, "Google account could not be linked")
 	}
@@ -877,7 +853,7 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 	c.Type("html", "utf-8")
 	verificationMessage := "Your Atlantic Express account is active. Return to the mobile app and sign in to continue."
 	if registrationContext == "provider" {
-		verificationMessage = "Your Atlantic Express account is active. Return to the provider portal and sign in to complete provider onboarding."
+		verificationMessage = "Your Atlantic Express account is active. Return to the ATL Xpress app or web provider portal and sign in with the same email and password to complete provider onboarding."
 	}
 	return c.SendString(a.verificationResultPage(true, "Email verified successfully", verificationMessage))
 }

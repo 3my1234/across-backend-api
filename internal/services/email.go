@@ -70,7 +70,7 @@ func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountConte
 	plainAction := "Explore Atlantic Express"
 	if accountContext == "provider" {
 		destination = strings.TrimSpace(e.cfg.ProviderPortalURL)
-		introduction = "Open the provider portal to complete your business or professional profile, submit verification documents, and prepare your products or services for review."
+		introduction = "Continue in the ATL Xpress mobile app: sign in with the email and password you registered, open Provider workspace, and complete your business profile and verification documents. You can also use the web provider portal below."
 		featureOneTitle, featureOneCopy = "Verify", "Complete your profile"
 		featureTwoTitle, featureTwoCopy = "List", "Products or services"
 		featureThreeTitle, featureThreeCopy = "Grow", "Reach verified buyers"

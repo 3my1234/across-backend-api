@@ -17,12 +17,12 @@ export function plan(profile='smoke',target=4){
 }
 export function validateFixture(fixture,configuration){
  if(fixture.schema!==1||fixture.marker!=='disposable-compose-only'||fixture.origin!=='http://gateway:8080')throw Error('Only exported isolated Compose fixtures are accepted');
- if(!/^[a-f0-9-]{36}$/.test(fixture.run_id)||Date.parse(fixture.expires_at)<=Date.now())throw Error('Invalid or expired fixture run');
+ if(!/^[a-f0-9-]{36}$/.test(fixture.run_id)||!Number.isFinite(Date.parse(fixture.expires_at))||Date.parse(fixture.expires_at)<=Date.now())throw Error('Invalid or expired fixture run');
  if(!Array.isArray(fixture.sessions)||fixture.sessions.length<Math.max(4,configuration.target))throw Error('Not enough distinct synthetic sessions for requested target');
  const seen=new Set();for(const item of fixture.sessions){if(seen.has(item.id)||!['buyer','provider'].includes(item.role)||!item.email.endsWith('@example.invalid'))throw Error('Invalid or duplicate synthetic identity');seen.add(item.id);}
 }
 export function requireApproval(configuration,approval){
  if(configuration.profile==='smoke')return;
- if(!approval||approval.authorized!==true||approval.environment!=='isolated-staging'||approval.profile!==configuration.profile||approval.max_sessions<configuration.target||approval.max_duration_seconds<configuration.seconds||!Number.isFinite(approval.spending_cap_usd)||approval.spending_cap_usd<0||Date.now()-Date.parse(approval.approved_at)>86400000||Date.parse(approval.approved_at)>Date.now()+300000||!Number.isFinite(Date.parse(approval.approved_at)))throw Error('A current explicit resource/cost approval is required outside smoke');
+ if(!approval||approval.authorized!==true||approval.environment!=='isolated-staging'||approval.profile!==configuration.profile||!Number.isInteger(approval.max_sessions)||approval.max_sessions<configuration.target||!Number.isInteger(approval.max_duration_seconds)||approval.max_duration_seconds<configuration.seconds||!Number.isFinite(approval.spending_cap_usd)||approval.spending_cap_usd<0||Date.now()-Date.parse(approval.approved_at)>86400000||Date.parse(approval.approved_at)>Date.now()+300000||!Number.isFinite(Date.parse(approval.approved_at)))throw Error('A current explicit resource/cost approval is required outside smoke');
 }
 export function chooseActivity(mix,value){let edge=0;for(const [name,weight]of Object.entries(mix)){edge+=weight;if(value<edge)return name;}throw Error('Workload weights must sum to 100');}

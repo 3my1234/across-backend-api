@@ -1,11 +1,13 @@
 // A read-only ramp gate. It never starts Docker, provisions resources or sends
 // traffic. It produces the next permitted stage after checking prior evidence.
 import fs from 'node:fs';
-import {RAMP} from './policy.mjs';
+import {RAMP,plan} from './policy.mjs';
 export function nextStage(summary,reconciliation){
  const previous=summary.configuration?.target;
  if(!summary.run_id||summary.run_id!==reconciliation.run_id||reconciliation.write_reconciliation_passed!==true)throw Error('Matching successful reconciliation required');
  if(summary.configuration?.profile==='burst')throw Error('Burst results cannot authorize a sustainable session stage');
+ const declared=plan(summary.configuration?.profile,previous);
+ for(const [key,value] of Object.entries(declared))if(summary.configuration?.[key]!==value)throw Error('Reviewed session model must be preserved: '+key);
  if(summary.configuration?.p95_ms!==500||summary.configuration?.p99_ms!==1500)throw Error('Original latency gates must be preserved');
  const metrics=summary.metrics||{};
  if(!Number.isInteger(previous)||previous<2)throw Error('Valid planned concurrency required');
@@ -13,7 +15,7 @@ export function nextStage(summary,reconciliation){
   const keys=name==='successful_latency'?['p(95)','p(99)']:['rate'];
   for(const key of keys)if(!Number.isFinite(metrics[name]?.values?.[key]))throw Error('Missing finite evidence for '+name);
  }
- if((metrics.session_starts?.values.count||0)<previous||(metrics.vus?.values.max||0)<previous)throw Error('Planned concurrent sessions were not achieved');
+ if(!Number.isFinite(metrics.session_starts?.values.count)||!Number.isFinite(metrics.vus?.values.max)||metrics.session_starts.values.count<previous||metrics.vus.values.max<previous)throw Error('Planned concurrent sessions were not achieved');
  if((metrics.dropped_iterations?.values.count||0)>0)throw Error('Generator dropped arrivals');
  for(const metric of Object.values(metrics))for(const threshold of Object.values(metric.thresholds||{}))if(threshold.ok!==true)throw Error('A previous threshold failed');
  if(!metrics.successful_latency||metrics.successful_latency.values['p(95)']>=500||metrics.successful_latency.values['p(99)']>=1500)throw Error('Successful latency gate failed');
