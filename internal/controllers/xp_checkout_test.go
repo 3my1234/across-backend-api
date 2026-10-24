@@ -303,7 +303,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	// older portal updates; new products default to Flutterwave.
 	if _, err = db.Exec(ctx, `CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text DEFAULT 'owner',is_active boolean DEFAULT true);
  ALTER TABLE provider_organizations ADD provider_type text DEFAULT 'product_merchant';
- ALTER TABLE products ADD variants jsonb,ADD compare_at_price numeric,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
+ ALTER TABLE products ADD variants jsonb,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
  ALTER TABLE product_delivery_areas ADD uses_primary_price boolean DEFAULT false;`); err != nil {
 		t.Fatal(err)
 	}

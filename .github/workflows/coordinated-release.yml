@@ -1,8 +1,8 @@
 name: Coordinated API worker TLS release and rollback
 on:
   pull_request:
-    branches: [main, feat/milestone-1-foundation]
-    paths: ['deploy/release-lab/**', 'scripts/release-lab.py', 'internal/config/**', 'internal/middleware/client_ip*', '.github/workflows/coordinated-release.yml']
+    branches: [main, feat/milestone-1-foundation, feat/worker-role-isolation]
+    paths: ['deploy/release-lab/**', 'scripts/release-lab.py', 'internal/config/**', 'internal/middleware/client_ip*', 'internal/playbilling/**', 'internal/controllers/play_billing*', 'internal/routes/**', 'internal/workers/play_billing.go', 'migrations/104_play_provider_billing.sql', '.github/workflows/coordinated-release.yml']
   workflow_dispatch:
 permissions:
   contents: read

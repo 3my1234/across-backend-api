@@ -14,7 +14,7 @@ func FromEnvironment(db *pgxpool.Pool) (*Store, error) {
 		return nil, nil
 	}
 	allowTest := os.Getenv("PLAY_BILLING_ALLOW_TEST") == "true"
-	if allowTest && os.Getenv("APP_ENV") == "production" {
+	if allowTest && os.Getenv("APP_ENV") != "test" && os.Getenv("APP_ENV") != "staging" && os.Getenv("APP_ENV") != "development" {
 		return nil, errors.New("Play license testing requires an isolated environment")
 	}
 	file, err := os.Open(os.Getenv("PLAY_BILLING_SERVICE_ACCOUNT_FILE"))
