@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -20,7 +21,8 @@ def main():
         result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=timeout)
         if result.returncode:
             # All inputs are synthetic, but do not dump credential/token-like logs.
-            raise RuntimeError('isolated release operation failed: '+args[0]+' '+args[1])
+            safe = re.findall(r'lifecycle [a-z_]+ (?:status=\d+ expected=\d+|transport failed|read failed)', result.stderr)
+            raise RuntimeError('isolated release operation failed: '+args[0]+' '+args[1]+(' '+safe[-1] if safe else ''))
         return result.stdout.strip()
 
     with tempfile.TemporaryDirectory(prefix='atl-release-') as directory:
@@ -43,7 +45,7 @@ def main():
         run(['sudo', 'chmod', '600', str(fixture/'redis.key')], env)
         env['LAB_REDIS_CA_BASE64'] = base64.b64encode((fixture/'ca.pem').read_bytes()).decode()
         (fixture/'redis.conf').write_text('port 0\ntls-port 6380\ntls-cert-file /fixture/ca.pem\ntls-key-file /fixture/redis.key\ntls-ca-cert-file /fixture/ca.pem\ntls-auth-clients optional\nrequirepass release-lab-only\nappendonly yes\nappendfsync everysec\ndir /data\n')
-        (fixture/'haproxy.cfg').write_text('global\n  maxconn 128\ndefaults\n  mode http\n  timeout connect 2s\n  timeout client 30s\n  timeout server 30s\n  retries 0\nfrontend api\n  bind :8080\n  option forwardfor\n  default_backend copies\nbackend copies\n  balance roundrobin\n  server one api1:8080 check\n  server two api2:8080 check\n')
+        (fixture/'haproxy.cfg').write_text('global\n  maxconn 128\ndefaults\n  mode http\n  timeout connect 2s\n  timeout client 30s\n  timeout server 30s\n  retries 0\nresolvers docker\n  nameserver dns 127.0.0.11:53\n  hold valid 1s\nfrontend api\n  bind :8080\n  option forwardfor\n  default_backend copies\nbackend copies\n  balance roundrobin\n  http-response set-header X-Lab-Backend %[srv_name]\n  default-server inter 1s fall 1 rise 1\n  server one api1:8080 check resolvers docker resolve-prefer ipv4 init-addr none\n  server two api2:8080 check resolvers docker resolve-prefer ipv4 init-addr none\n')
         compose = ['docker', 'compose', '-p', PROJECT, '-f', str(ROOT/'deploy/release-lab/compose.yml')]
 
         def dc(*args, timeout=150):
@@ -71,14 +73,15 @@ def main():
             dc('run', '--rm', '--no-deps', 'seed')
             dc('up', '-d', '--wait', '--wait-timeout', '120', 'original', 'api1', 'api2', 'worker')
             dc('up', '-d', 'gateway')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'prepare-sessions')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'release-check')
             dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'lifecycle')
-            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'run')
             before = counts()
             dc('exec', '-T', 'redis', 'redis-cli', '--tls', '--cacert', '/fixture/ca.pem', '-h', 'redis', '-p', '6380', 'SET', 'release:sentinel', 'retained')
             dc('stop', '-t', '5', 'redis')
             if ready('original') != '503' or ready('worker') != '503':
                 raise RuntimeError('dependency outage was not reflected in readiness')
-            dc('start', '--wait', '--wait-timeout', '60', 'redis')
+            dc('up', '-d', '--no-deps', '--wait', '--wait-timeout', '60', 'redis')
             wait_ready()
             value = dc('exec', '-T', 'redis', 'redis-cli', '--tls', '--cacert', '/fixture/ca.pem', '-h', 'redis', '-p', '6380', 'GET', 'release:sentinel')
             if value != 'retained' or counts() != before:
@@ -90,11 +93,21 @@ def main():
             wait_ready()
             if counts() != before:
                 raise RuntimeError('old-code rollback changed retained business data')
+            # The four lifecycle journeys consume 12 of the actual 20/minute
+            # shared auth allowance. Preserve that production guard instead of
+            # disabling it or mistaking a second fixture run's 429 for a rollback
+            # defect. This also allows Docker DNS/HAProxy convergence on changed
+            # replica addresses; the subsequent journeys still assert responses.
+            time.sleep(61)
             dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'lifecycle')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'release-check')
+            after_rollback = counts()
             evidence.append({'retained_code_rollback': 'pass', 'tls_still_verified': True})
             env['ATL_RELEASE_IMAGE'] = 'atl-release-new:local'
             dc('up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '120', 'original', 'api1', 'api2', 'worker')
             wait_ready()
+            if counts() != after_rollback:
+                raise RuntimeError('forward release lost writes made through retained code')
             evidence.append({'forward_release_after_rollback': 'pass'})
         finally:
             dc('down', '--volumes', '--remove-orphans')

@@ -104,6 +104,8 @@ func main() {
 		must(seed(ctx, db))
 	case "run":
 		must(run(ctx, db))
+	case "release-check":
+		must(releaseJourneys(ctx, db))
 	case "export":
 		must(exportSessions(ctx, db, os.Stdout))
 	case "prepare-sessions":
