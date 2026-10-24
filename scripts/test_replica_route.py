@@ -30,13 +30,15 @@ class RouteSafety(unittest.TestCase):
                       'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': 'text/event-stream'})
         actual = route.routing(labels, ARGS)['http']['routers']['atlxpres-replicas']
         self.assertEqual(actual['middlewares'], ['gzip-sse@docker'])
+        implicit = dict(labels); del implicit['traefik.http.middlewares.gzip-sse.compress']
+        self.assertEqual(route.routing(implicit, ARGS)['http']['routers']['atlxpres-replicas']['middlewares'], ['gzip-sse@docker'])
         for change in ({'traefik.http.middlewares.gzip-sse.compress': 'false'},
                        {'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': ''},
                        {'traefik.http.middlewares.gzip-sse.basicauth.users': 'private-fixture'},
                        {PREFIX + '.middlewares': 'gzip-sse,authentication'}):
             with self.assertRaises(ValueError):
                 route.routing(dict(labels, **change), ARGS)
-        missing = dict(labels); del missing['traefik.http.middlewares.gzip-sse.compress']
+        missing = dict(labels); del missing['traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes']
         with self.assertRaises(ValueError):
             route.routing(missing, ARGS)
 
@@ -96,7 +98,6 @@ class RouteSafety(unittest.TestCase):
             return result.stdout.strip()
         with tempfile.TemporaryDirectory() as directory:
             sse_labels = dict(LABELS, **{PREFIX + '.middlewares': 'gzip-sse',
-                'traefik.http.middlewares.gzip-sse.compress': 'true',
                 'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': 'text/event-stream'})
             config = copy.deepcopy(route.routing(sse_labels, ARGS))
             router = config['http']['routers']['atlxpres-replicas']
@@ -113,7 +114,6 @@ class RouteSafety(unittest.TestCase):
                 for name, body in ((primary, 'PRIMARY'), (backup, 'FALLBACK')):
                     labels = [] if name == primary else ['--label', 'traefik.enable=true',
                         '--label', 'traefik.http.services.https-0-' + route.pilot.API_RESOURCE + '.loadbalancer.server.port=8080',
-                        '--label', 'traefik.http.middlewares.gzip-sse.compress=true',
                         '--label', 'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes=text/event-stream']
                     docker('run', '-d', '--name', name, '--network', project, *labels, 'busybox:1.36', 'sh', '-c',
                            'mkdir -p /www/api/v1; echo ' + body + ' > /www/api/v1/ready; exec httpd -f -p 8080 -h /www')

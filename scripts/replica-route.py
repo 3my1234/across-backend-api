@@ -63,7 +63,10 @@ def routing(labels, proxy_args):
         # A name alone is not evidence of a reviewed compression definition.
         base = 'traefik.http.middlewares.gzip-sse.'
         definition = {key[len(base):]: value for key, value in lowered.items() if key.startswith(base)}
-        if definition != {'compress': 'true', 'compress.excludedcontenttypes': 'text/event-stream'}:
+        # Nested compression labels construct the middleware without a separate
+        # compress=true label. Accept only the two exact equivalent forms.
+        if definition not in ({'compress.excludedcontenttypes': 'text/event-stream'},
+                              {'compress': 'true', 'compress.excludedcontenttypes': 'text/event-stream'}):
             raise ValueError('gzip-sse middleware definition differs from reviewed compression policy')
     elif middlewares != ['gzip']:
         raise ValueError('Live middleware chain changed; preserve it through a separate review')
