@@ -158,8 +158,3 @@ func validationError(problems []string) error {
 	}
 	return errors.New("configuration rejected: " + strings.Join(problems, "; "))
 }
-
-func (c Config) DevLoginAllowed() bool {
-	env := strings.ToLower(strings.TrimSpace(c.AppEnv))
-	return c.EnableDevLogin && (env == "development" || env == "test")
-}
