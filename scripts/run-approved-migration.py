@@ -130,7 +130,12 @@ def main():
     links = subprocess.run(['ip','-d','link','show','type','wireguard'],capture_output=True,text=True,timeout=5)
     if links.returncode or 'wg-atl:' not in links.stdout:
         raise Stop('Verified route interface is not WireGuard')
-    lock_path = Path('/run/lock/atl-schema-release.lock')
+    lock_directory = Path('/run/atl-schema-release')
+    if lock_directory.is_symlink(): raise Stop('Unexpected lock directory symlink')
+    lock_directory.mkdir(mode=0o700,exist_ok=True)
+    if lock_directory.stat().st_uid != 0 or stat.S_IMODE(lock_directory.stat().st_mode) & 0o077:
+        raise Stop('Migration lock directory must be root-owned and private')
+    lock_path = lock_directory/'operation.lock'
     if lock_path.is_symlink(): raise Stop('Unexpected lock symlink')
     with lock_path.open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX | fcntl.LOCK_NB)
