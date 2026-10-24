@@ -165,10 +165,11 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if err != nil {
 		return Result{}, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO play_provider_purchases(token_hash,provider_id,subscription_id,product_id,base_plan_id,encrypted_token,state,auto_renews,test_purchase,needs_acknowledgement,next_check_at)
- VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,now()+interval '5 minutes')
- ON CONFLICT(token_hash) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,state=EXCLUDED.state,auto_renews=EXCLUDED.auto_renews,needs_acknowledgement=EXCLUDED.needs_acknowledgement,checked_at=now(),next_check_at=EXCLUDED.next_check_at`, hash, provider, subscription, product, base, encrypted, receipt.State, receipt.AutoRenews, receipt.Test, receipt.NeedsAcknowledgement)
-	if err != nil {
+	tag, err := tx.Exec(ctx, `INSERT INTO play_provider_purchases(token_hash,provider_id,subscription_id,product_id,base_plan_id,encrypted_token,state,auto_renews,test_purchase,needs_acknowledgement,next_check_at)
+ VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,CASE WHEN $7 IN('SUBSCRIPTION_STATE_EXPIRED','SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED') THEN 'infinity'::timestamptz ELSE now()+interval '5 minutes' END)
+ ON CONFLICT(token_hash) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,state=EXCLUDED.state,auto_renews=EXCLUDED.auto_renews,needs_acknowledgement=EXCLUDED.needs_acknowledgement,checked_at=now(),next_check_at=EXCLUDED.next_check_at
+ WHERE play_provider_purchases.provider_id=EXCLUDED.provider_id AND play_provider_purchases.subscription_id=EXCLUDED.subscription_id`, hash, provider, subscription, product, base, encrypted, receipt.State, receipt.AutoRenews, receipt.Test, receipt.NeedsAcknowledgement)
+	if err != nil || tag.RowsAffected() != 1 {
 		return Result{}, errors.New("Billing token ownership could not be committed")
 	}
 	if receipt.Active {

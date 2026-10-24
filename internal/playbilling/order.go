@@ -78,7 +78,13 @@ func (c *Client) verifyOrder(ctx context.Context, token string, receipt Verified
 		return 0, errors.New("Play order listed price does not match")
 	}
 	paid, err := order.Total.minor()
-	if err != nil || paid <= 0 {
+	if err != nil || paid < 0 {
+		return 0, errors.New("Play order payment amount is invalid")
+	}
+	if paid == 0 {
+		if receipt.Test && expected.AllowTest {
+			return expected.AmountMinor, nil
+		} // Test-only face value; never a financial receipt or referral credit.
 		return 0, errors.New("Play order payment amount is invalid")
 	}
 	return paid, nil

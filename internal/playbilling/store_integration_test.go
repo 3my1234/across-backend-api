@@ -345,3 +345,41 @@ func TestPlayPrepaidYearPreservesOneOffBilling(t *testing.T) {
 		t.Fatal("Prepaid entitlement metadata changed", months, mode)
 	}
 }
+
+func TestPlayCanceledPendingPaymentReleasesPurchaseWithoutExpiry(t *testing.T) {
+	store, provider, state, _ := isolatedStore(t)
+	ctx := context.Background()
+	*state = "SUBSCRIPTION_STATE_PENDING"
+	if _, err := store.Process(ctx, provider, "synthetic-canceled-pending-token", "atl_basic", "monthly"); err != nil {
+		t.Fatal(err)
+	}
+	*state = "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
+	prior := store.Client.http.Transport
+	store.Client.http.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		response, err := prior.RoundTrip(r)
+		if err == nil && r.Method == "GET" {
+			var item map[string]any
+			_ = json.NewDecoder(response.Body).Decode(&item)
+			response.Body.Close()
+			for _, line := range item["lineItems"].([]any) {
+				delete(line.(map[string]any), "expiryTime")
+				delete(line.(map[string]any), "autoRenewingPlan")
+			}
+			raw, _ := json.Marshal(item)
+			response.Body = io.NopCloser(strings.NewReader(string(raw)))
+		}
+		return response, err
+	})
+	result, err := store.Process(ctx, provider, "synthetic-canceled-pending-token", "atl_basic", "monthly")
+	if err != nil || result.Active || result.Pending || result.AutoRenews {
+		t.Fatal("Canceled unpaid purchase stayed pending", err)
+	}
+	var terminal bool
+	store.DB.QueryRow(ctx, `SELECT next_check_at='infinity'::timestamptz FROM play_provider_purchases`).Scan(&terminal)
+	if !terminal {
+		t.Fatal("Terminal purchase keeps consuming store polling quota")
+	}
+	if err := store.Prepare(ctx, provider, "atl_basic", "monthly"); err != nil {
+		t.Fatal("Canceled unpaid purchase blocked future checkout", err)
+	}
+}

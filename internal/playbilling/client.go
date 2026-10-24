@@ -148,7 +148,8 @@ func validate(receipt purchase, expected Expected, now time.Time) (Verified, err
 		return Verified{}, errors.New("Play subscription ownership or structure is invalid")
 	}
 	item := receipt.Items[0]
-	if item.ProductID != expected.ProductID || item.Offer.BasePlanID != expected.BasePlanID || item.Offer.OfferID != "" || (item.AutoRenewing == nil) == (item.Prepaid == nil) {
+	unpaid := receipt.State == "SUBSCRIPTION_STATE_PENDING" || receipt.State == "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED"
+	if item.ProductID != expected.ProductID || item.Offer.BasePlanID != expected.BasePlanID || item.Offer.OfferID != "" || !unpaid && (item.AutoRenewing == nil) == (item.Prepaid == nil) {
 		return Verified{}, errors.New("Play product or plan does not match")
 	}
 	if receipt.Test != nil && !expected.AllowTest {
@@ -164,12 +165,15 @@ func validate(receipt purchase, expected Expected, now time.Time) (Verified, err
 	case "SUBSCRIPTION_STATE_PENDING":
 		out.Pending = true
 		return out, nil
+	case "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED":
+		out.AutoRenews = false
+		return out, nil // Unpaid cancellations may have no expiry timestamp.
 	case "SUBSCRIPTION_STATE_ACTIVE", "SUBSCRIPTION_STATE_IN_GRACE_PERIOD", "SUBSCRIPTION_STATE_CANCELED":
 		if !strings.HasPrefix(item.OrderID, "GPA.") || len(item.OrderID) > 200 {
 			return Verified{}, errors.New("Play successful order is missing")
 		}
 		out.Active = true
-	case "SUBSCRIPTION_STATE_ON_HOLD", "SUBSCRIPTION_STATE_PAUSED", "SUBSCRIPTION_STATE_EXPIRED", "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED":
+	case "SUBSCRIPTION_STATE_ON_HOLD", "SUBSCRIPTION_STATE_PAUSED", "SUBSCRIPTION_STATE_EXPIRED":
 		// A valid inactive receipt must not grant/extend an entitlement.
 	default:
 		return Verified{}, errors.New("Play subscription state is unsupported")
