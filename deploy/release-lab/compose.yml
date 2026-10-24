@@ -77,7 +77,7 @@ services:
     <<: *runtime
     command: [/app/across-worker]
   gateway:
-    image: haproxy:3.0-alpine
+    image: haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb
     command: [haproxy, -f, /fixture/haproxy.cfg]
     volumes: ['${LAB_TLS_DIR:?}:/fixture:ro']
     networks:

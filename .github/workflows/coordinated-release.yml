@@ -22,7 +22,7 @@ jobs:
           docker build -f deploy/release-lab/Dockerfile -t atl-release-old:local retained-source
           docker pull postgres:16-alpine
           docker pull redis:7.2.16
-          docker pull haproxy:3.0-alpine
+          docker pull haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb
       - name: Qualify actual processes, interruption, persistence and rollback
         env:
           ATL_RELEASE_LAB: synthetic-only

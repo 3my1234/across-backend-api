@@ -37,7 +37,7 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
   gateway:
-    image: haproxy:3.0-alpine
+    image: haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb
     restart: unless-stopped
     ports: ["127.0.0.1:18080:8080"]
     volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
