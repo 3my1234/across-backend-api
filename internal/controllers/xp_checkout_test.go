@@ -227,7 +227,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	// Seller names are included in real catalogue detail responses so the buyer
 	// can identify groups without being shown opaque provider UUIDs.
 	if _, err = db.Exec(ctx, `ALTER TABLE provider_organizations ADD business_name text DEFAULT 'Timo Ventures';
-	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0;`); err != nil {
+	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0,ADD compare_at_price numeric DEFAULT 0;`); err != nil {
 		t.Fatal(err)
 	}
 	installPublicIdentityFixture(t, db)
