@@ -39,6 +39,16 @@ CREATE TABLE play_provider_purchases (
  FOREIGN KEY(product_id,base_plan_id) REFERENCES play_provider_products(product_id,base_plan_id)
 );
 CREATE INDEX play_provider_reconcile ON play_provider_purchases(next_check_at);
+CREATE TABLE play_provider_refund_jobs (
+ token_hash TEXT PRIMARY KEY CHECK(token_hash ~ '^[a-f0-9]{64}$'),
+ provider_id UUID NOT NULL REFERENCES provider_organizations(id),
+ product_id TEXT NOT NULL, base_plan_id TEXT NOT NULL,
+ encrypted_token BYTEA NOT NULL CHECK(octet_length(encrypted_token) BETWEEN 44 AND 8192),
+ status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN('requested','confirmed')),
+ next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ FOREIGN KEY(product_id,base_plan_id) REFERENCES play_provider_products(product_id,base_plan_id)
+);
+CREATE INDEX play_provider_refund_due ON play_provider_refund_jobs(next_attempt_at) WHERE status='requested';
 CREATE TABLE play_provider_checkout_intents (
  provider_id UUID PRIMARY KEY REFERENCES provider_organizations(id),
  product_id TEXT NOT NULL,

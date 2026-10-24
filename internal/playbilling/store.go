@@ -26,6 +26,7 @@ type Result struct {
 	AutoRenews           bool      `json:"auto_renews"`
 	NeedsAcknowledgement bool      `json:"needs_acknowledgement"`
 	ExpiresAt            time.Time `json:"expires_at"`
+	RefundState          string    `json:"refund_state,omitempty"`
 }
 type Store struct {
 	DB        *pgxpool.Pool
@@ -78,6 +79,12 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if !locked {
 		return Result{}, ErrBusy
 	}
+	var refundState string
+	if err = tx.QueryRow(ctx, `SELECT status FROM play_provider_refund_jobs WHERE token_hash=$1 AND provider_id=$2::uuid`, TokenHash(token), provider).Scan(&refundState); err == nil {
+		return Result{RefundState: refundState, State: "REFUND"}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, errors.New("Billing storage is unavailable")
+	}
 	var plan Product
 	var email string
 	var eligible bool
@@ -125,7 +132,24 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 			return Result{}, errors.New("Billing storage is unavailable")
 		}
 		if conflict {
-			return Result{}, errors.New("Resolve the existing subscription before activating another purchase")
+			if receipt.Pending {
+				return result, nil
+			}
+			encrypted, e := s.Vault.Seal(provider, token)
+			if e != nil {
+				return Result{}, e
+			}
+			_, e = tx.Exec(ctx, `INSERT INTO play_provider_refund_jobs(token_hash,provider_id,product_id,base_plan_id,encrypted_token) VALUES($1,$2::uuid,$3,$4,$5) ON CONFLICT(token_hash) DO NOTHING`, hash, provider, product, base, encrypted)
+			if e != nil {
+				return Result{}, errors.New("Duplicate purchase recovery could not be recorded")
+			}
+			if e = tx.Commit(ctx); e != nil {
+				return Result{}, errors.New("Duplicate purchase recovery is uncertain")
+			}
+			// The existing subscription stays intact. Only the newly verified,
+			// unfulfilled purchase enters the durable refund path.
+			_ = s.reconcileRefunds(ctx)
+			return Result{State: "REFUND", RefundState: "requested"}, nil
 		}
 		subscription = uuid.NewString()
 		_, err = tx.Exec(ctx, `INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months,billing_provider)
@@ -250,6 +274,9 @@ func (s *Store) Prepare(ctx context.Context, provider, product, base string) err
 // Reconcile claims bounded work without parallel duplicate claims. Failure
 // schedules a later retry; a stale or unreachable store never extends expiry.
 func (s *Store) Reconcile(ctx context.Context) error {
+	if err := s.reconcileRefunds(ctx); err != nil {
+		return err
+	}
 	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT token_hash FROM play_provider_purchases WHERE next_check_at<=now() ORDER BY next_check_at LIMIT 10 FOR UPDATE SKIP LOCKED)
  UPDATE play_provider_purchases p SET next_check_at=now()+interval '5 minutes' FROM due WHERE p.token_hash=due.token_hash
  RETURNING p.provider_id::text,p.encrypted_token,p.product_id,p.base_plan_id`)

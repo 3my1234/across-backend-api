@@ -272,3 +272,31 @@ func TestPlayUnconfirmedAcknowledgementDefersReferralCredit(t *testing.T) {
 		t.Fatal("Successful acknowledgement failed to reconcile referral XP", xp)
 	}
 }
+
+func TestPlayUnfulfilledDuplicateGetsDurableRefundWithoutReplacingAccess(t *testing.T) {
+	store, provider, _, _ := isolatedStore(t)
+	ctx := context.Background()
+	_, err := store.DB.Exec(ctx, `INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months,current_period_end) SELECT $1::uuid,plan_id,'active','legacy-paid-period','owner@example.invalid',500,'one_time',1,now()+interval '30 days' FROM play_provider_products`, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Process(ctx, provider, "synthetic-unfulfilled-duplicate-token", "atl_basic", "monthly")
+	if err != nil || result.Active || result.RefundState != "requested" {
+		t.Fatal("Duplicate purchase was granted or recovery was lost", err)
+	}
+	var state string
+	store.DB.QueryRow(ctx, `SELECT status FROM play_provider_refund_jobs`).Scan(&state)
+	if state != "confirmed" {
+		t.Fatal("Verified unfulfilled purchase refund was not processed")
+	}
+	var purchases, receipts int
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM play_provider_purchases`).Scan(&purchases)
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM provider_subscription_payments`).Scan(&receipts)
+	if purchases != 0 || receipts != 0 {
+		t.Fatal("Refunded duplicate minted entitlement or receipt")
+	}
+	result, err = store.Process(ctx, provider, "synthetic-unfulfilled-duplicate-token", "atl_basic", "monthly")
+	if err != nil || result.RefundState != "confirmed" || result.Active {
+		t.Fatal("Restoring refunded token reactivated it", err)
+	}
+}
