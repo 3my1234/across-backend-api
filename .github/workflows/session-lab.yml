@@ -116,7 +116,10 @@ jobs:
           docker version > session-evidence/docker-version.txt
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: 'session-${{ inputs.profile || 'smoke' }}-${{ github.run_id }}', path: session-evidence/, retention-days: 14}
+        with:
+          name: session-${{ inputs.profile || 'smoke' }}-${{ github.run_id }}
+          path: session-evidence/
+          retention-days: 14
       - name: Remove only disposable lab services and data
         if: always()
         run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml down --volumes --remove-orphans
