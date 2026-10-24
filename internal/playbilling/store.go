@@ -18,6 +18,8 @@ type Product struct {
 	Name        string `json:"name"`
 	Months      int    `json:"duration_months"`
 	AmountMinor int64  `json:"amount_minor"`
+	Purchasable bool   `json:"purchasable"`
+	Prepaid     bool   `json:"prepaid"`
 }
 type Result struct {
 	State                string    `json:"state"`
@@ -38,10 +40,11 @@ type Store struct {
 var ErrBusy = errors.New("A billing operation is already in progress")
 var ErrIneligible = errors.New("This provider or product is not eligible for checkout")
 
-func (s *Store) Catalog(ctx context.Context) ([]Product, error) {
-	rows, err := s.DB.Query(ctx, `SELECT m.product_id,m.base_plan_id,m.plan_id::text,p.name,m.duration_months,m.amount_minor
+func (s *Store) Catalog(ctx context.Context, provider string) ([]Product, error) {
+	rows, err := s.DB.Query(ctx, `SELECT m.product_id,m.base_plan_id,m.plan_id::text,p.name,m.duration_months,m.amount_minor,(m.enabled AND p.is_active),m.prepaid
  FROM play_provider_products m JOIN provider_subscription_plans p ON p.id=m.plan_id
- WHERE m.enabled AND p.is_active ORDER BY p.amount_ngn,m.duration_months LIMIT 100`)
+ WHERE (m.enabled AND p.is_active) OR EXISTS(SELECT 1 FROM play_provider_purchases owned WHERE owned.provider_id=$1::uuid AND owned.product_id=m.product_id AND owned.base_plan_id=m.base_plan_id)
+ ORDER BY p.amount_ngn,m.duration_months LIMIT 100`, provider)
 	if err != nil {
 		return nil, errors.New("Play catalog is unavailable")
 	}
@@ -49,7 +52,7 @@ func (s *Store) Catalog(ctx context.Context) ([]Product, error) {
 	items := []Product{}
 	for rows.Next() {
 		var p Product
-		if err = rows.Scan(&p.ProductID, &p.BasePlanID, &p.PlanID, &p.Name, &p.Months, &p.AmountMinor); err != nil {
+		if err = rows.Scan(&p.ProductID, &p.BasePlanID, &p.PlanID, &p.Name, &p.Months, &p.AmountMinor, &p.Purchasable, &p.Prepaid); err != nil {
 			return nil, errors.New("Play catalog is unavailable")
 		}
 		items = append(items, p)
@@ -88,10 +91,10 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	var plan Product
 	var email string
 	var eligible bool
-	err = tx.QueryRow(ctx, `SELECT m.plan_id::text,m.duration_months,m.amount_minor,u.email,(p.is_active AND o.is_active AND o.verification_status='approved' AND u.is_active AND u.email_verified)
+	err = tx.QueryRow(ctx, `SELECT m.plan_id::text,m.duration_months,m.amount_minor,m.prepaid,u.email,(p.is_active AND o.is_active AND o.verification_status='approved' AND u.is_active AND u.email_verified)
  FROM play_provider_products m JOIN provider_subscription_plans p ON p.id=m.plan_id
  JOIN provider_organizations o ON o.id=$3::uuid JOIN users u ON u.id=o.owner_user_id
- WHERE m.product_id=$1 AND m.base_plan_id=$2`, product, base, provider).Scan(&plan.PlanID, &plan.Months, &plan.AmountMinor, &email, &eligible)
+ WHERE m.product_id=$1 AND m.base_plan_id=$2`, product, base, provider).Scan(&plan.PlanID, &plan.Months, &plan.AmountMinor, &plan.Prepaid, &email, &eligible)
 	if err != nil {
 		return Result{}, ErrIneligible
 	}
@@ -112,7 +115,7 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if !existing && (!enabled || !eligible) {
 		return Result{}, ErrIneligible
 	}
-	expected := Expected{ProductID: product, BasePlanID: base, AccountID: AccountID(provider), AllowTest: s.AllowTest, AmountMinor: plan.AmountMinor}
+	expected := Expected{ProductID: product, BasePlanID: base, AccountID: AccountID(provider), AllowTest: s.AllowTest, AmountMinor: plan.AmountMinor, Prepaid: plan.Prepaid, VerifyOrder: true}
 	now := time.Now().UTC()
 	receipt, err := s.Client.Verify(ctx, token, expected, now)
 	if err != nil {

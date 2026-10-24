@@ -60,6 +60,8 @@ type Expected struct {
 	// Nonzero requires Google's undiscounted NGN recurring price to match the
 	// server catalog exactly. The ledger never accepts mobile price claims.
 	AmountMinor int64
+	Prepaid     bool
+	VerifyOrder bool
 }
 
 type Verified struct {
@@ -134,7 +136,11 @@ func (c *Client) Verify(ctx context.Context, purchaseToken string, expected Expe
 	if json.Unmarshal(data, &receipt) != nil {
 		return Verified{}, errors.New("Play response is invalid")
 	}
-	return validate(receipt, expected, now)
+	verified, err := validate(receipt, expected, now)
+	if err == nil && verified.Active && expected.VerifyOrder {
+		verified.AmountMinor, err = c.verifyOrder(ctx, purchaseToken, verified, expected)
+	}
+	return verified, err
 }
 
 func validate(receipt purchase, expected Expected, now time.Time) (Verified, error) {
@@ -178,8 +184,13 @@ func validate(receipt purchase, expected Expected, now time.Time) (Verified, err
 		out.AutoRenews = false
 	}
 	if expected.AmountMinor > 0 && out.Active {
-		if item.AutoRenewing == nil || item.Phase.FreeTrial != nil || item.Phase.Introductory != nil {
+		if (expected.Prepaid && (item.Prepaid == nil || !expected.VerifyOrder)) || (!expected.Prepaid && item.AutoRenewing == nil) || item.Phase.FreeTrial != nil || item.Phase.Introductory != nil {
 			return Verified{}, errors.New("Play discounted or prepaid plan is not configured")
+		}
+		if expected.Prepaid {
+			out.AmountMinor = expected.AmountMinor
+			out.NeedsAcknowledgement = receipt.AcknowledgementState == "ACKNOWLEDGEMENT_STATE_PENDING"
+			return out, nil
 		}
 		price := item.AutoRenewing.Price
 		units, e := strconv.ParseInt(price.Units, 10, 64)

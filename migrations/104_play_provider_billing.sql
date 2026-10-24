@@ -16,11 +16,14 @@ CREATE TABLE play_provider_products (
  product_id TEXT NOT NULL CHECK(product_id ~ '^[a-z0-9][a-z0-9._-]{0,199}$'),
  base_plan_id TEXT NOT NULL CHECK(base_plan_id ~ '^[a-z0-9][a-z0-9._-]{0,199}$'),
  plan_id UUID NOT NULL REFERENCES provider_subscription_plans(id),
- duration_months INTEGER NOT NULL CHECK(duration_months IN(1,12)),
+ duration_months INTEGER NOT NULL CHECK(duration_months IN(1,3,6,12)),
  amount_minor BIGINT NOT NULL CHECK(amount_minor>0 AND amount_minor<100000000000000),
  enabled BOOLEAN NOT NULL DEFAULT false,
- PRIMARY KEY(product_id,base_plan_id), UNIQUE(plan_id,duration_months)
+ prepaid BOOLEAN NOT NULL DEFAULT false,
+ CHECK(prepaid OR duration_months=1),
+ PRIMARY KEY(product_id,base_plan_id)
 );
+CREATE UNIQUE INDEX play_provider_active_period ON play_provider_products(plan_id,duration_months) WHERE enabled;
 -- Mapping is deliberately empty until real products/prices are independently
 -- checked in Play Console. No guessed SKU or synthetic purchase is enabled.
 CREATE TABLE play_provider_purchases (
@@ -58,8 +61,8 @@ CREATE TABLE play_provider_checkout_intents (
 );
 CREATE FUNCTION protect_play_product_mapping() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF (NEW.plan_id,NEW.product_id,NEW.base_plan_id,NEW.duration_months,NEW.amount_minor)
-  IS DISTINCT FROM (OLD.plan_id,OLD.product_id,OLD.base_plan_id,OLD.duration_months,OLD.amount_minor)
+ IF (NEW.plan_id,NEW.product_id,NEW.base_plan_id,NEW.duration_months,NEW.amount_minor,NEW.prepaid)
+  IS DISTINCT FROM (OLD.plan_id,OLD.product_id,OLD.base_plan_id,OLD.duration_months,OLD.amount_minor,OLD.prepaid)
   AND EXISTS(SELECT 1 FROM play_provider_purchases WHERE product_id=OLD.product_id AND base_plan_id=OLD.base_plan_id)
  THEN RAISE EXCEPTION 'Purchased Play product mappings are immutable'; END IF;
  RETURN NEW;

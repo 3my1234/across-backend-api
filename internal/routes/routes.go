@@ -51,6 +51,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// keeps a login/signup spike from occupying every application request slot.
 	// Rejections retain the existing JSON/Retry-After contract; no work is replayed.
 	passwordAdmission := middleware.NewAdmission(2)
+	playAdmission := middleware.NewAdmission(2)
+	playRateLimit := middleware.DistributedUserRateLimit(cache, "play-billing", 30, time.Minute)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -185,7 +187,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 			httpMetrics = runtimeSnapshots[0]()
 		}
 		pool := db.Stat()
-		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
 	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)
@@ -356,8 +358,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/me/subscription-renewal", marketplaceController.ProviderManageRenewal)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
 	authed.Get("/providers/me/play-billing", playBilling.Catalog)
-	authed.Post("/providers/me/play-billing/prepare", playBilling.Prepare)
-	authed.Post("/providers/me/play-billing/verify", playBilling.Verify)
+	authed.Post("/providers/me/play-billing/prepare", playRateLimit, playAdmission.Handler, playBilling.Prepare)
+	authed.Post("/providers/me/play-billing/verify", playRateLimit, playAdmission.Handler, playBilling.Verify)
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
 	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)

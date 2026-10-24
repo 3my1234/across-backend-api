@@ -98,10 +98,18 @@ func isolatedStore(t *testing.T) (*Store, string, *string, *string) {
 	}
 	state := "SUBSCRIPTION_STATE_ACTIVE"
 	order := "GPA.1111-2222-3333-44444"
+	var transportLock sync.Mutex
+	lastToken := ""
 	client, _ := New(&http.Client{Transport: transport(func(r *http.Request) (*http.Response, error) {
+		transportLock.Lock()
+		defer transportLock.Unlock()
 		if r.Method == "POST" {
 			return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader(""))}, nil
 		}
+		if strings.Contains(r.URL.Path, "/orders/") {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(orderFixture(lastToken, order)))}, nil
+		}
+		lastToken = r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		raw := fixture(state)
 		raw = strings.Replace(raw, AccountID("owned-provider"), AccountID(provider), 1)
 		raw = strings.Replace(raw, "2026-11-24T00:00:00Z", time.Now().UTC().Add(30*24*time.Hour).Truncate(time.Second).Format(time.RFC3339), 1)
@@ -240,6 +248,10 @@ func TestPlayPendingRecoveryReservationAndMappingProtection(t *testing.T) {
 	if err != nil || !result.Active {
 		t.Fatal("Pending payment could not recover", err)
 	}
+	items, err := store.Catalog(ctx, provider)
+	if err != nil || len(items) != 1 || items[0].Purchasable {
+		t.Fatal("Retired mapping was lost for restore or remained purchasable", err)
+	}
 }
 
 func TestPlayUnconfirmedAcknowledgementDefersReferralCredit(t *testing.T) {
@@ -298,5 +310,38 @@ func TestPlayUnfulfilledDuplicateGetsDurableRefundWithoutReplacingAccess(t *test
 	result, err = store.Process(ctx, provider, "synthetic-unfulfilled-duplicate-token", "atl_basic", "monthly")
 	if err != nil || result.RefundState != "confirmed" || result.Active {
 		t.Fatal("Restoring refunded token reactivated it", err)
+	}
+}
+
+func TestPlayPrepaidYearPreservesOneOffBilling(t *testing.T) {
+	store, provider, _, _ := isolatedStore(t)
+	ctx := context.Background()
+	_, err := store.DB.Exec(ctx, `UPDATE play_provider_products SET base_plan_id='yearly',duration_months=12,amount_minor=540000,prepaid=true`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := store.Client.http.Transport
+	store.Client.http.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		response, e := prior.RoundTrip(r)
+		if e != nil || r.Method != "GET" {
+			return response, e
+		}
+		raw, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		text := strings.ReplaceAll(string(raw), "monthly", "yearly")
+		text = strings.ReplaceAll(text, `"units":"500"`, `"units":"5400"`)
+		text = strings.Replace(text, `"autoRenewingPlan":{"autoRenewEnabled":true,"recurringPrice":{"currencyCode":"NGN","units":"5400","nanos":0}}`, `"prepaidPlan":{}`, 1)
+		response.Body = io.NopCloser(strings.NewReader(text))
+		return response, nil
+	})
+	result, err := store.Process(ctx, provider, "synthetic-yearly-prepaid-token", "atl_basic", "yearly")
+	if err != nil || !result.Active || result.AutoRenews || result.NeedsAcknowledgement {
+		t.Fatal("Prepaid purchase changed renewal rules or failed verification", err)
+	}
+	var months int
+	var mode string
+	store.DB.QueryRow(ctx, `SELECT duration_months,billing_mode FROM provider_subscriptions`).Scan(&months, &mode)
+	if months != 12 || mode != "one_time" {
+		t.Fatal("Prepaid entitlement metadata changed", months, mode)
 	}
 }

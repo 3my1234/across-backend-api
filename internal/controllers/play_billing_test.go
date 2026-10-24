@@ -19,9 +19,9 @@ func TestPlayBillingRequiresExistingAuthenticatedBusinessOwner(t *testing.T) {
  CREATE TABLE provider_organizations(id uuid PRIMARY KEY,is_active bool);
  CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text,is_active bool);
  CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY,name text,amount_ngn numeric,is_active bool);
- CREATE TABLE play_provider_products(product_id text,base_plan_id text,plan_id uuid,duration_months int,amount_minor bigint,enabled bool);
+ CREATE TABLE play_provider_products(product_id text,base_plan_id text,plan_id uuid,duration_months int,amount_minor bigint,enabled bool,prepaid bool DEFAULT false);
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY,status text,current_period_end timestamptz);
- CREATE TABLE play_provider_purchases(provider_id uuid,subscription_id uuid,state text,auto_renews bool,needs_acknowledgement bool,checked_at timestamptz);`)
+ CREATE TABLE play_provider_purchases(provider_id uuid,subscription_id uuid,product_id text,base_plan_id text,state text,auto_renews bool,needs_acknowledgement bool,checked_at timestamptz);`)
 	if err != nil {
 		t.Fatal(err)
 	}

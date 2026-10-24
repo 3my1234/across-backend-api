@@ -1,7 +1,7 @@
 name: Exact-source migration toolkit
 on:
   pull_request:
-    branches: [main, feat/milestone-1-foundation]
+    branches: [main, feat/milestone-1-foundation, feat/worker-role-isolation]
   workflow_dispatch:
 permissions:
   contents: read

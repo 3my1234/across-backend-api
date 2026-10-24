@@ -2,6 +2,7 @@ package playbilling
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -43,6 +44,25 @@ func TestServerVerificationStatesAndAccountBinding(t *testing.T) {
 				t.Fatal("Cross-account receipt accepted")
 			}
 		})
+	}
+}
+
+func TestStorePriceMustMatchApprovedBasePrice(t *testing.T) {
+	expected := Expected{ProductID: "atl_basic", BasePlanID: "monthly", AccountID: AccountID("owned-provider"), AmountMinor: 50000}
+	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	raw := strings.Replace(fixture("SUBSCRIPTION_STATE_ACTIVE"), `"autoRenewEnabled":true`, `"autoRenewEnabled":true,"recurringPrice":{"currencyCode":"NGN","units":"500","nanos":0}`, 1)
+	for _, test := range []struct {
+		raw string
+		ok  bool
+	}{{raw, true}, {strings.Replace(raw, `"500"`, `"499"`, 1), false}, {strings.Replace(raw, `"NGN"`, `"USD"`, 1), false}, {strings.Replace(raw, `"nanos":0`, `"nanos":1`, 1), false}, {strings.Replace(raw, `"offerDetails"`, `"offerPhase":{"freeTrial":{}},"offerDetails"`, 1), false}} {
+		var receipt purchase
+		if json.Unmarshal([]byte(test.raw), &receipt) != nil {
+			t.Fatal("Bad price fixture")
+		}
+		got, err := validate(receipt, expected, now)
+		if (err == nil) != test.ok || test.ok && got.AmountMinor != 50000 {
+			t.Fatal("Store price validation failed", err)
+		}
 	}
 }
 

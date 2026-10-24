@@ -40,7 +40,7 @@ func (p *PlayBillingController) Catalog(c *fiber.Ctx) error {
 	if p.store == nil {
 		return fiber.NewError(503, "Google Play billing is not configured yet")
 	}
-	items, err := p.store.Catalog(c.Context())
+	items, err := p.store.Catalog(c.Context(), provider)
 	if err != nil {
 		return fiber.NewError(503, "Google Play plans could not load")
 	}
