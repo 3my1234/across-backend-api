@@ -46,6 +46,10 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	communityController := controllers.NewCommunityController(db, cfg, cache)
 	privateCommunity := func(c *fiber.Ctx) error { c.Set("Cache-Control", "private, no-store"); return c.Next() }
 	authRateLimit := middleware.DistributedRateLimit(cache, "auth", 20, time.Minute)
+	// Password hashing is CPU-bound. An independent, non-queuing bulkhead
+	// keeps a login/signup spike from occupying every application request slot.
+	// Rejections retain the existing JSON/Retry-After contract; no work is replayed.
+	passwordAdmission := middleware.NewAdmission(2)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
@@ -146,19 +150,19 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// Keep a terminating 404 rather than allowing the path to fall through to
 	// authenticated route middleware. Controller also guards direct use.
 	v1.Post("/dev/login", dev.Login)
-	v1.Post("/auth/signup", authRateLimit, authController.Signup)
-	v1.Post("/auth/login", authRateLimit, authController.Login)
+	v1.Post("/auth/signup", authRateLimit, passwordAdmission.Handler, authController.Signup)
+	v1.Post("/auth/login", authRateLimit, passwordAdmission.Handler, authController.Login)
 	v1.Post("/auth/gmail", authRateLimit, authController.Gmail)
 	v1.Post("/auth/privy/verify", authRateLimit, authController.VerifyPrivy)
 	v1.Post("/auth/resend-verification", authRateLimit, authController.ResendVerification)
 	v1.Get("/auth/verify-email", authController.VerifyEmail)
 	v1.Post("/auth/forgot-password", authRateLimit, authController.ForgotPassword)
 	v1.Get("/auth/reset-password", authController.ResetPasswordPage)
-	v1.Post("/auth/reset-password", authRateLimit, authController.ResetPassword)
+	v1.Post("/auth/reset-password", authRateLimit, passwordAdmission.Handler, authController.ResetPassword)
 	v1.Post("/webhooks/ses", sesController.Webhook)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
-	v1.Post("/admin/login", authRateLimit, admin.Login)
+	v1.Post("/admin/login", authRateLimit, passwordAdmission.Handler, admin.Login)
 	v1.Post("/admin/pricing/calculate", controllers.PriceBreakdown)
 	adminRoutes := v1.Group("/admin")
 	allAdmins := middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin")
@@ -180,7 +184,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 			httpMetrics = runtimeSnapshots[0]()
 		}
 		pool := db.Stat()
-		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
 	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id/password", superOnly, admin.ResetAdminPassword)

@@ -85,3 +85,50 @@ func TestAdmissionReleasesAfterErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordAdmissionDoesNotOccupyBusinessRoutes(t *testing.T) {
+	gate := NewAdmission(1)
+	app := fiber.New()
+	entered, release := make(chan struct{}), make(chan struct{})
+	app.Post("/login", gate.Handler, func(c *fiber.Ctx) error {
+		select {
+		case <-release:
+		default:
+			close(entered)
+			<-release
+		}
+		return c.SendStatus(200)
+	})
+	app.Get("/messages", func(c *fiber.Ctx) error { return c.SendStatus(200) })
+	done := make(chan error, 1)
+	go func() {
+		response, err := app.Test(httptest.NewRequest("POST", "/login", nil), -1)
+		if response != nil {
+			response.Body.Close()
+		}
+		done <- err
+	}()
+	<-entered
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, sample := range []struct {
+		method, path string
+		status       int
+	}{{"POST", "/login", 503}, {"GET", "/messages", 200}} {
+		response, err := app.Test(httptest.NewRequest(sample.method, sample.path, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != sample.status {
+			t.Fatalf("%s status=%d expected=%d", sample.path, response.StatusCode, sample.status)
+		}
+		if sample.status == 503 && (response.Header.Get("Retry-After") != "2" || response.Header.Get("Cache-Control") != "no-store") {
+			t.Fatal("Password overload must remain bounded and retryable without caching")
+		}
+	}
+}
