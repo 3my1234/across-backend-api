@@ -18,3 +18,4 @@ build/
 
 Dockerfile*
 README.deploy.md
+.release-artifacts/

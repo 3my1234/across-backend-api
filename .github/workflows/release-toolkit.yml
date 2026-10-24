@@ -37,4 +37,5 @@ jobs:
         with:
           name: release-toolkit-${{ github.event.pull_request.head.sha || github.sha }}
           path: .release-artifacts/
+          include-hidden-files: true
           retention-days: 14
