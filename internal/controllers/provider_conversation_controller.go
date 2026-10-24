@@ -74,6 +74,9 @@ func (m *ProviderMarketplaceController) startConversation(c *fiber.Ctx, product 
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	if err = independentBusinessContact(c.Context(), m.db, providerID, userID); err != nil {
+		return err
+	}
 	tx, err := m.db.Begin(c.Context())
 	if err != nil {
 		return fiber.ErrInternalServerError
@@ -385,6 +388,13 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	}
 	if err != nil {
 		return fiber.ErrInternalServerError
+	}
+	contactUserID := userID
+	if provider {
+		contactUserID = buyerID
+	}
+	if err = independentBusinessContact(c.Context(), m.db, providerID, contactUserID); err != nil {
+		return err
 	}
 	var writeID, threadID string
 	var blocked bool

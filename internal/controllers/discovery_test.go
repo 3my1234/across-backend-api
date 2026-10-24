@@ -48,6 +48,7 @@ func discoveryFixture(t *testing.T) (*pgxpool.Pool, *DiscoveryController, *fiber
 	db := communityTestDB(t)
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `ALTER TABLE products ADD COLUMN description text DEFAULT '',ADD COLUMN inventory_count int DEFAULT 5,ADD COLUMN compare_at_price numeric DEFAULT 0,ADD COLUMN local_selling_price numeric DEFAULT 100,ADD COLUMN local_currency_code text DEFAULT 'NGN',ADD COLUMN is_flash_sale boolean DEFAULT false,ADD COLUMN flash_sale_price numeric DEFAULT 0,ADD COLUMN payment_mode_unused text,ADD COLUMN fulfillment_mode text DEFAULT 'merchant_local',ADD COLUMN inventory_city text DEFAULT 'Abuja',ADD COLUMN created_at timestamptz DEFAULT now();
+ ALTER TABLE product_delivery_areas ALTER COLUMN city_key SET DEFAULT '';
  ALTER TABLE product_delivery_areas ADD COLUMN state_key text DEFAULT '',ADD COLUMN delivered_price numeric DEFAULT 100,ADD COLUMN delivery_fee numeric DEFAULT 0,ADD COLUMN currency_code text DEFAULT 'NGN';
  ALTER TABLE provider_listings ADD COLUMN listing_type text DEFAULT 'artisan',ADD COLUMN attributes jsonb DEFAULT '{}',ADD COLUMN description text DEFAULT '',ADD COLUMN price numeric DEFAULT 100,ADD COLUMN currency_code text DEFAULT 'NGN',ADD COLUMN is_available_now boolean DEFAULT true,ADD COLUMN created_at timestamptz DEFAULT now();
  CREATE TABLE countries_config(country_code text,currency_code text,is_active boolean,active_payment_gateways text[]);
@@ -103,8 +104,50 @@ func TestDiscoveryPostgresEligibilityControlsAndMetrics(t *testing.T) {
 		}
 
 	}
+	// Page scope is applied inside SQL before bounded windows, ranking and receipts.
+	for _, kind := range []string{"product", "service"} {
+		scoped := communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&kind="+kind, "", "", 200)
+		total := 0
+		for _, placement := range []string{"recommended", "promoted"} {
+			for _, raw := range scoped[placement].([]any) {
+				card := raw.(map[string]any)
+				total++
+				if card["kind"] != kind {
+					t.Fatal("wrong listing type before receipt issuance", scoped)
+				}
+				receipt, e := d.readReceipt(card["receipt"].(string))
+				if e != nil || receipt.Kind != kind {
+					t.Fatal("wrong scoped receipt", receipt, e)
+				}
+			}
+		}
+		if total == 0 {
+			t.Fatal("type scope discarded eligible inventory", kind, scoped)
+		}
+	}
+	// Unscoped homepage candidates include both types; ranking may legitimately
+	// select only one type in a particular bounded rail.
+	homeRows, e := db.Query(ctx, discoveryCandidateSQL, "NG", "", "", "", []string{}, []string{}, uuid.NewString(), false, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	kinds := map[string]bool{}
+	for homeRows.Next() {
+		values, e := homeRows.Values()
+		if e != nil {
+			t.Fatal(e)
+		}
+		kinds[values[0].(string)] = true
+	}
+	homeRows.Close()
+	if !kinds["product"] || !kinds["service"] {
+		t.Fatal("homepage candidates excluded a type", kinds)
+	}
+	communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString(), "", "", 200)
+	communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&kind=anything", "", "", 400)
+	communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&source_kind=product&source_id="+products[0]+"&kind=service", "", "", 400)
 	var planJSON []byte
-	if err := db.QueryRow(ctx, "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) "+discoveryCandidateSQL, "NG", "", "", products[0], []string{"phone"}, []string{"Phones"}, uuid.NewString(), true).Scan(&planJSON); err != nil {
+	if err := db.QueryRow(ctx, "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) "+discoveryCandidateSQL, "NG", "", "", products[0], []string{"phone"}, []string{"Phones"}, uuid.NewString(), true, "product").Scan(&planJSON); err != nil {
 		t.Fatal(err)
 	}
 	var planInfo []map[string]any
@@ -127,6 +170,9 @@ func TestDiscoveryPostgresEligibilityControlsAndMetrics(t *testing.T) {
 		for _, raw := range result[placement].([]any) {
 			card := raw.(map[string]any)
 			id, pid := card["id"].(string), card["provider_id"].(string)
+			if card["kind"] != "product" {
+				t.Fatal("detail recommendations crossed source kind", card)
+			}
 			if id == products[0] || seen[id] || businesses[pid] {
 				t.Fatal("duplicate/self/provider monopoly", card)
 			}
@@ -217,6 +263,11 @@ func TestDiscoveryPostgresEligibilityControlsAndMetrics(t *testing.T) {
 	}
 	communityCall(t, app, "GET", "/discovery?session=invalid", "", "", 422)
 	// Empty markets return empty rails, not unrelated cross-border inventory.
+	exec(`UPDATE provider_listings SET is_available_now=false`)
+	serviceEmpty := communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&kind=service", "", "", 200)
+	if len(serviceEmpty["recommended"].([]any)) != 0 || len(serviceEmpty["promoted"].([]any)) != 0 {
+		t.Fatal("empty service feed substituted products", serviceEmpty)
+	}
 	exec(`UPDATE countries_config SET is_active=false`)
 	result = communityCall(t, app, "GET", "/discovery?country_code=NG&session="+session, "", "", 200)
 	if len(result["recommended"].([]any))+len(result["promoted"].([]any)) != 0 {
