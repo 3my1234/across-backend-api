@@ -96,6 +96,16 @@ def command(image, toolkit, name, owner, env_file=None, network='none', migrate=
     return args+['--entrypoint','/candidate/'+binary,image]
 
 
+def logged_migration(log_path, invoke):
+    # Create the exclusive private log BEFORE starting a mutating process.
+    # pathlib.Path.open has no opener parameter; built-in open supports it.
+    with open(log_path,'x',encoding='utf-8',opener=lambda path,flags:os.open(path,flags,0o600)) as log:
+        result = invoke()
+        log.write(result.stdout+'\n'+result.stderr)
+        log.flush()
+        return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--toolkit',type=Path,required=True)
@@ -163,12 +173,10 @@ def main():
             preflight = run('preflight',['--role','migrate','--expect-env','production'],with_env=True)
             if preflight.returncode:
                 raise Stop('Offline migration configuration rejected; details withheld')
-            result = run('migrate',[],network='coolify',with_env=True,migrate=True,timeout=200)
             # Keep diagnostics server-local and private. Never echo DB errors,
             # URLs, passwords, row values or SQL logs into the chat/terminal.
             log_path = env_file.with_name('migration-'+owner+'.log')
-            with log_path.open('x',opener=lambda path,flags:os.open(path,flags,0o600)) as log:
-                log.write(result.stdout+'\n'+result.stderr)
+            result = logged_migration(log_path,lambda:run('migrate',[],network='coolify',with_env=True,migrate=True,timeout=200))
             if result.returncode:
                 raise Stop('Migration failed; stop release and review private server log')
             print(json.dumps(dict(plan,migration_command_succeeded=True,approval_ref_recorded=True,

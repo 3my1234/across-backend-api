@@ -3,11 +3,14 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location('operator', Path(__file__).with_name('run-approved-migration.py'))
 operator = importlib.util.module_from_spec(spec)
@@ -15,6 +18,34 @@ spec.loader.exec_module(operator)
 
 
 class MigrationRunner(unittest.TestCase):
+    def test_actual_logging_path_is_private_and_does_not_echo_process_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'private.log'
+            def invoke():
+                self.assertTrue(path.is_file(), 'log must exist before mutation starts')
+                if os.name == 'posix':
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600)
+                return SimpleNamespace(returncode=0,stdout='private-url-fixture',stderr='private-error-fixture')
+            captured=io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                result=operator.logged_migration(path,invoke)
+            self.assertEqual(result.returncode,0)
+            self.assertEqual(captured.getvalue(),'')
+            self.assertEqual(path.read_text(encoding='utf-8'),'private-url-fixture\nprivate-error-fixture')
+
+    def test_existing_or_uncreatable_log_prevents_migrator_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'existing.log'
+            path.write_text('retained')
+            invoke=Mock(side_effect=AssertionError('mutator must not run'))
+            with self.assertRaises(FileExistsError):
+                operator.logged_migration(path,invoke)
+            invoke.assert_not_called()
+            self.assertEqual(path.read_text(),'retained')
+            with self.assertRaises(FileNotFoundError):
+                operator.logged_migration(Path(directory)/'missing'/'private.log',invoke)
+            invoke.assert_not_called()
+
     def test_only_fixed_private_database_is_allowed(self):
         good = {'APP_ENV':'production','DB_VERIFIED_VPN_HOST':'10.77.0.2','MIGRATION_DATABASE_URL':'postgres://synthetic:synthetic@10.77.0.2:5432/across_db?sslmode=disable'}
         operator.validate_target(good)
