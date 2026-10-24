@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/pem"
 	"net/http/httptest"
 	"os"
@@ -58,6 +59,41 @@ func TestRedisTLSOptions(t *testing.T) {
 			_, err := bad.RedisOptions()
 			if err == nil || strings.Contains(err.Error(), "disposable") || strings.Contains(err.Error(), bad.RedisTLSCAFile) {
 				t.Fatal("bad TLS configuration must fail without disclosing values")
+			}
+		})
+	}
+}
+
+func TestRedisPublicCAEnvironment(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	valid := Config{RedisURL: "rediss://default:disposable@redis.example.invalid:6380", RedisTLSCABase64: base64.StdEncoding.EncodeToString(data)}
+	opts, err := valid.RedisOptions()
+	if err != nil || opts.TLSConfig.RootCAs == nil || opts.TLSConfig.ServerName != "redis.example.invalid" || opts.TLSConfig.InsecureSkipVerify {
+		t.Fatal("inline public CA did not preserve verified hostname/TLS")
+	}
+	for _, kind := range []string{"encoding", "empty", "private-key", "oversized", "both", "plaintext", "newline"} {
+		t.Run(kind, func(t *testing.T) {
+			bad := valid
+			switch kind {
+			case "encoding":
+				bad.RedisTLSCABase64 = "invalid!"
+			case "empty":
+				bad.RedisTLSCABase64 = base64.StdEncoding.EncodeToString([]byte(" "))
+			case "private-key":
+				bad.RedisTLSCABase64 = base64.StdEncoding.EncodeToString(append(data, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not-a-real-key")})...))
+			case "oversized":
+				bad.RedisTLSCABase64 = strings.Repeat("x", 2*1024*1024)
+			case "both":
+				bad.RedisTLSCAFile = "not-printed"
+			case "plaintext":
+				bad.RedisURL = "redis://default:disposable@redis.example.invalid:6379"
+			case "newline":
+				bad.RedisTLSCABase64 += "\n"
+			}
+			if _, err := bad.RedisOptions(); err == nil || strings.Contains(err.Error(), "disposable") || strings.Contains(err.Error(), "not-printed") {
+				t.Fatal("invalid public CA configuration accepted or disclosed")
 			}
 		})
 	}

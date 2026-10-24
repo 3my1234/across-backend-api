@@ -35,6 +35,7 @@ type Config struct {
 	MigrationDatabaseURL          string
 	RedisURL                      string
 	RedisTLSCAFile                string
+	RedisTLSCABase64              string
 	RedisAddr                     string
 	RedisPassword                 string
 	RedisDB                       int
@@ -134,6 +135,7 @@ func Load() Config {
 		MigrationDatabaseURL:          env("MIGRATION_DATABASE_URL", databaseURL()),
 		RedisURL:                      env("REDIS_URL", ""),
 		RedisTLSCAFile:                env("REDIS_TLS_CA_FILE", ""),
+		RedisTLSCABase64:              env("REDIS_TLS_CA_BASE64", ""),
 		RedisAddr:                     env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:                 env("REDIS_PASSWORD", ""),
 		RedisDB:                       envInt("REDIS_DB", 0),

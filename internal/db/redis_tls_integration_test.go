@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
@@ -117,6 +118,31 @@ func TestRedisTLSCompatibility(t *testing.T) {
 		defer stop()
 		if msg, err := sub.ReceiveMessage(messageCtx); err != nil || msg.Payload != "synthetic" {
 			t.Fatal("worker receive failed")
+		}
+	})
+	t.Run("replica_public_ca_environment", func(t *testing.T) {
+		certificate, err := os.ReadFile(caPath)
+		if err != nil {
+			t.Fatal("fixture public CA unavailable")
+		}
+		inline := base
+		inline.RedisTLSCAFile = ""
+		inline.RedisTLSCABase64 = base64.StdEncoding.EncodeToString(certificate)
+		api, err := New(ctx, inline)
+		if err != nil {
+			t.Fatal("inline CA API connection failed")
+		}
+		defer api.Close()
+		worker, err := New(ctx, inline)
+		if err != nil {
+			t.Fatal("inline CA worker connection failed")
+		}
+		defer worker.Close()
+		if err := api.Redis.Set(ctx, "tls-lab:inline", "same-shared-store", time.Minute).Err(); err != nil {
+			t.Fatal("inline CA write failed")
+		}
+		if value, err := worker.Redis.Get(ctx, "tls-lab:inline").Result(); err != nil || value != "same-shared-store" {
+			t.Fatal("inline CA shared read failed")
 		}
 	})
 	t.Run("listener_cutover_and_rollback", func(t *testing.T) {
