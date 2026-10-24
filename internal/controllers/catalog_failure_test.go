@@ -24,3 +24,17 @@ func TestCatalogDatabaseFailureDoesNotMasqueradeAsMissingProduct(t *testing.T) {
 		t.Fatalf("Database failure became missing data or leaked internals: status=%d", response.StatusCode)
 	}
 }
+
+func TestCatalogMalformedProductDoesNotQueryDatabase(t *testing.T) {
+	app := fiber.New()
+	catalog := NewCatalogController(nil, config.Config{})
+	app.Get("/products/:product_id", catalog.GetProduct)
+	response, err := app.Test(httptest.NewRequest("GET", "/products/not-a-product?country_code=NG", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 404 {
+		t.Fatal("Malformed product URL became a database outage", response.StatusCode)
+	}
+}

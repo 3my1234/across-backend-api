@@ -174,6 +174,12 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if s.Push != nil {
 		fallback = time.Hour
 	}
+	if receipt.Pending {
+		fallback = 5 * time.Minute
+	}
+	if receipt.NeedsAcknowledgement {
+		fallback = time.Minute
+	}
 	nextCheck := now.Add(fallback)
 	if receipt.Active && receipt.ExpiresAt.Add(-5*time.Minute).Before(nextCheck) {
 		nextCheck = receipt.ExpiresAt.Add(-5 * time.Minute)

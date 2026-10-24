@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -236,6 +237,10 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		return destinationErr
 	}
 	productID := c.Params("product_id")
+	parsedID, parseErr := uuid.Parse(productID)
+	if parseErr != nil || parsedID.String() != strings.ToLower(productID) {
+		return fiber.NewError(404, "product not found")
+	}
 	var id, sku, title, description, currency, hubID, hubName, hubCity string
 	var categories, images []string
 	var price, compareAtPrice, flashSalePrice, averageRating float64
