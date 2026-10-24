@@ -5,7 +5,7 @@ on:
       profile:
         description: 'Smoke4 or launch-authorized100-session/180s isolated stage; no production targets'
         type: choice
-        options: [smoke, stage]
+        options: [smoke, stage, gradual]
         default: smoke
   pull_request:
     branches: [main]
@@ -18,10 +18,10 @@ jobs:
     timeout-minutes: 20
     env:
       LAB_SCENARIO: busy
-      LAB_ACTOR_PAIRS: ${{ inputs.profile == 'stage' && '100' || '10' }}
+      LAB_ACTOR_PAIRS: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '100' || '10' }}
       LAB_SESSION_PROFILE: ${{ inputs.profile || 'smoke' }}
-      LAB_SESSION_TARGET: ${{ inputs.profile == 'stage' && '100' || '4' }}
-      LAB_SESSION_APPROVAL: ${{ inputs.profile == 'stage' && '/exchange/approval.json' || '' }}
+      LAB_SESSION_TARGET: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '100' || '4' }}
+      LAB_SESSION_APPROVAL: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '/exchange/approval.json' || '' }}
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +45,10 @@ jobs:
           data=json.loads(Path('session-exchange/fixtures.json').read_text())
           import os
           from datetime import datetime, timezone
-          if os.environ['LAB_SESSION_PROFILE'] == 'stage':
+          if os.environ['LAB_SESSION_PROFILE'] != 'smoke':
               # Explicit user directive24Oct authorizes bounded isolated load
               # tests. Public-repository standard runner only, no paid resources.
-              approval={'authorized':True,'environment':'isolated-staging','profile':'stage','max_sessions':100,'max_duration_seconds':180,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User final launch integration directive,24October2026; isolated load tests only'}
+              approval={'authorized':True,'environment':'isolated-staging','profile':os.environ['LAB_SESSION_PROFILE'],'max_sessions':100,'max_duration_seconds':180,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User final launch integration directive,24October2026; isolated load tests only'}
               Path('session-exchange/approval.json').write_text(json.dumps(approval))
           data.pop('sessions')
           Path('session-exchange/run.json').write_text(json.dumps(data))
