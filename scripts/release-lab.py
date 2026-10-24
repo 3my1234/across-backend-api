@@ -43,7 +43,7 @@ def main():
         run(['sudo', 'chmod', '600', str(fixture/'redis.key')], env)
         env['LAB_REDIS_CA_BASE64'] = base64.b64encode((fixture/'ca.pem').read_bytes()).decode()
         (fixture/'redis.conf').write_text('port 0\ntls-port 6380\ntls-cert-file /fixture/ca.pem\ntls-key-file /fixture/redis.key\ntls-ca-cert-file /fixture/ca.pem\ntls-auth-clients optional\nrequirepass release-lab-only\nappendonly yes\nappendfsync everysec\ndir /data\n')
-        (fixture/'haproxy.cfg').write_text('global\n  maxconn 128\ndefaults\n  mode http\n  timeout connect 2s\n  timeout client 30s\n  timeout server 30s\n  retries 0\nfrontend api\n  bind :8080\n  option forwardfor\n  default_backend copies\nbackend copies\n  balance roundrobin\n  server one api1:8080 check\n  server two api2:8080 check\n')
+        (fixture/'haproxy.cfg').write_text('global\n  maxconn 128\ndefaults\n  mode http\n  timeout connect 2s\n  timeout client 30s\n  timeout server 30s\n  retries 0\nfrontend api\n  bind :8080\n  option forwardfor\n  default_backend copies\nbackend copies\n  balance roundrobin\n  http-response set-header X-Lab-Backend %[srv_name]\n  server one api1:8080 check\n  server two api2:8080 check\n')
         compose = ['docker', 'compose', '-p', PROJECT, '-f', str(ROOT/'deploy/release-lab/compose.yml')]
 
         def dc(*args, timeout=150):
@@ -71,8 +71,9 @@ def main():
             dc('run', '--rm', '--no-deps', 'seed')
             dc('up', '-d', '--wait', '--wait-timeout', '120', 'original', 'api1', 'api2', 'worker')
             dc('up', '-d', 'gateway')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'prepare-sessions')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'release-check')
             dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'lifecycle')
-            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'run')
             before = counts()
             dc('exec', '-T', 'redis', 'redis-cli', '--tls', '--cacert', '/fixture/ca.pem', '-h', 'redis', '-p', '6380', 'SET', 'release:sentinel', 'retained')
             dc('stop', '-t', '5', 'redis')
@@ -91,10 +92,14 @@ def main():
             if counts() != before:
                 raise RuntimeError('old-code rollback changed retained business data')
             dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'lifecycle')
+            dc('run', '--rm', '--no-deps', 'runner', '/app/lab', 'release-check')
+            after_rollback = counts()
             evidence.append({'retained_code_rollback': 'pass', 'tls_still_verified': True})
             env['ATL_RELEASE_IMAGE'] = 'atl-release-new:local'
             dc('up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '120', 'original', 'api1', 'api2', 'worker')
             wait_ready()
+            if counts() != after_rollback:
+                raise RuntimeError('forward release lost writes made through retained code')
             evidence.append({'forward_release_after_rollback': 'pass'})
         finally:
             dc('down', '--volumes', '--remove-orphans')
