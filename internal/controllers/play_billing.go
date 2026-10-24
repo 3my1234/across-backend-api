@@ -13,11 +13,16 @@ import (
 type PlayBillingController struct {
 	db    *pgxpool.Pool
 	store *playbilling.Store
+	push  *playbilling.PushVerifier
 }
 
 func NewPlayBillingController(db *pgxpool.Pool) *PlayBillingController {
 	store, _ := playbilling.FromEnvironment(db) // Disabled/misconfigured purchase paths fail closed, without logging credentials.
-	return &PlayBillingController{db: db, store: store}
+	var push *playbilling.PushVerifier
+	if store != nil {
+		push = store.Push
+	}
+	return &PlayBillingController{db: db, store: store, push: push}
 }
 func (p *PlayBillingController) owner(c *fiber.Ctx) (string, error) {
 	c.Set("Cache-Control", "private, no-store")

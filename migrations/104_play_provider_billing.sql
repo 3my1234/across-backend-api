@@ -24,6 +24,11 @@ CREATE TABLE play_provider_products (
  PRIMARY KEY(product_id,base_plan_id)
 );
 CREATE UNIQUE INDEX play_provider_active_period ON play_provider_products(plan_id,duration_months) WHERE enabled;
+-- Billing routing only: this preserves the existing provider/account identity.
+CREATE TABLE play_provider_accounts (
+ provider_id UUID PRIMARY KEY REFERENCES provider_organizations(id),
+ account_id TEXT NOT NULL UNIQUE CHECK(account_id ~ '^[a-f0-9]{64}$')
+);
 -- Mapping is deliberately empty until real products/prices are independently
 -- checked in Play Console. No guessed SKU or synthetic purchase is enabled.
 CREATE TABLE play_provider_purchases (
@@ -42,6 +47,17 @@ CREATE TABLE play_provider_purchases (
  FOREIGN KEY(product_id,base_plan_id) REFERENCES play_provider_products(product_id,base_plan_id)
 );
 CREATE INDEX play_provider_reconcile ON play_provider_purchases(next_check_at);
+CREATE INDEX play_provider_unacknowledged ON play_provider_purchases(checked_at) WHERE needs_acknowledgement;
+CREATE TABLE play_provider_events (
+ message_id TEXT PRIMARY KEY CHECK(length(message_id) BETWEEN 1 AND 128),
+ token_hash TEXT NOT NULL CHECK(token_hash ~ '^[a-f0-9]{64}$'),
+ encrypted_token BYTEA NOT NULL CHECK(octet_length(encrypted_token) BETWEEN 44 AND 8192),
+ received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ processed_at TIMESTAMPTZ
+);
+CREATE INDEX play_provider_events_pending ON play_provider_events(received_at,token_hash) WHERE processed_at IS NULL;
+CREATE INDEX play_provider_events_retention ON play_provider_events(received_at);
 CREATE TABLE play_provider_refund_jobs (
  token_hash TEXT PRIMARY KEY CHECK(token_hash ~ '^[a-f0-9]{64}$'),
  provider_id UUID NOT NULL REFERENCES provider_organizations(id),
@@ -63,7 +79,8 @@ CREATE FUNCTION protect_play_product_mapping() RETURNS trigger LANGUAGE plpgsql 
 BEGIN
  IF (NEW.plan_id,NEW.product_id,NEW.base_plan_id,NEW.duration_months,NEW.amount_minor,NEW.prepaid)
   IS DISTINCT FROM (OLD.plan_id,OLD.product_id,OLD.base_plan_id,OLD.duration_months,OLD.amount_minor,OLD.prepaid)
-  AND EXISTS(SELECT 1 FROM play_provider_purchases WHERE product_id=OLD.product_id AND base_plan_id=OLD.base_plan_id)
+  AND (EXISTS(SELECT 1 FROM play_provider_purchases WHERE product_id=OLD.product_id AND base_plan_id=OLD.base_plan_id)
+   OR EXISTS(SELECT 1 FROM play_provider_checkout_intents WHERE product_id=OLD.product_id AND base_plan_id=OLD.base_plan_id AND expires_at>now()))
  THEN RAISE EXCEPTION 'Purchased Play product mappings are immutable'; END IF;
  RETURN NEW;
 END $$;

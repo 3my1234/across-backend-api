@@ -383,3 +383,74 @@ func TestPlayCanceledPendingPaymentReleasesPurchaseWithoutExpiry(t *testing.T) {
 		t.Fatal("Canceled unpaid purchase blocked future checkout", err)
 	}
 }
+
+func TestPlayNotificationReorderingDeduplicationAndFreshStoreState(t *testing.T) {
+	store, provider, state, _ := isolatedStore(t)
+	ctx := context.Background()
+	token := "synthetic-notification-purchase-token"
+	encrypted, _ := store.Vault.Seal("rtdn:duplicate-event", token)
+	for i := 0; i < 2; i++ {
+		if _, err := store.DB.Exec(ctx, `INSERT INTO play_provider_events(message_id,token_hash,encrypted_token) VALUES('duplicate-event',$1,$2) ON CONFLICT(message_id) DO NOTHING`, TokenHash(token), encrypted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var events, pending int
+	store.DB.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE processed_at IS NULL) FROM play_provider_events`).Scan(&events, &pending)
+	if events != 1 || pending != 1 {
+		t.Fatal("Early or duplicate notification was lost")
+	}
+	if _, err := store.Process(ctx, provider, token, "atl_basic", "monthly"); err != nil {
+		t.Fatal(err)
+	}
+	*state = "SUBSCRIPTION_STATE_ON_HOLD" // Never trust an older event's claim of renewal.
+	if err := store.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	store.DB.QueryRow(ctx, `SELECT status FROM provider_subscriptions`).Scan(&status)
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM play_provider_events WHERE processed_at IS NULL`).Scan(&pending)
+	if status != "expired" || pending != 0 {
+		t.Fatal("Notification did not resolve current Google state", status, pending)
+	}
+	metrics, err := QueueHealth(ctx, store.DB)
+	if err != nil || metrics["schema_ready"] != true || metrics["events_pending"] != int64(0) {
+		t.Fatal("Billing aggregate health lost notification progress", metrics, err)
+	}
+}
+
+func TestPlayNotificationRecoversPaymentWithoutMobileCallback(t *testing.T) {
+	store, provider, _, _ := isolatedStore(t)
+	ctx := context.Background()
+	if err := store.Prepare(ctx, provider, "atl_basic", "monthly"); err != nil {
+		t.Fatal(err)
+	}
+	token := "synthetic-closed-app-purchase-token"
+	encrypted, _ := store.Vault.Seal("rtdn:closed-app-event", token)
+	if _, err := store.DB.Exec(ctx, `INSERT INTO play_provider_events(message_id,token_hash,encrypted_token) VALUES('closed-app-event',$1,$2)`, TokenHash(token), encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var receipts, pending, xp int
+	if err := store.DB.QueryRow(ctx, `SELECT status FROM provider_subscriptions`).Scan(&status); err != nil || status != "active" {
+		t.Fatal("Interrupted payment did not activate", status, err)
+	}
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM provider_subscription_payments`).Scan(&receipts)
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM play_provider_events WHERE processed_at IS NULL`).Scan(&pending)
+	store.DB.QueryRow(ctx, `SELECT sum(amount) FROM xp_transactions`).Scan(&xp)
+	if receipts != 1 || pending != 0 || xp != 500 {
+		t.Fatal("Interrupted purchase recovery duplicated or lost effects", receipts, pending, xp)
+	}
+	if _, err := store.Process(ctx, provider, token, "atl_basic", "monthly"); err != nil {
+		t.Fatal(err)
+	}
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM provider_subscription_payments`).Scan(&receipts)
+	if receipts != 1 {
+		t.Fatal("Later mobile callback duplicated payment")
+	}
+}

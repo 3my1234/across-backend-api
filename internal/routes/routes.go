@@ -57,6 +57,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
 
 	v1 := app.Group("/api/v1")
+	v1.Post("/webhooks/google-play", playAdmission.Handler, playBilling.Notification)
 	// Friend invitations and connection advertising are retired from launch.
 	v1.Use(func(c *fiber.Ctx) error {
 		err := c.Next()

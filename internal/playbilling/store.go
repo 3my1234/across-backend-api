@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,7 @@ type Store struct {
 	Client    *Client
 	Vault     *Vault
 	AllowTest bool
+	Push      *PushVerifier
 }
 
 var ErrBusy = errors.New("A billing operation is already in progress")
@@ -115,6 +117,9 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if !existing && (!enabled || !eligible) {
 		return Result{}, ErrIneligible
 	}
+	if _, err = tx.Exec(ctx, `INSERT INTO play_provider_accounts(provider_id,account_id) VALUES($1::uuid,$2) ON CONFLICT(provider_id) DO NOTHING`, provider, AccountID(provider)); err != nil {
+		return Result{}, errors.New("Play account binding is unavailable")
+	}
 	expected := Expected{ProductID: product, BasePlanID: base, AccountID: AccountID(provider), AllowTest: s.AllowTest, AmountMinor: plan.AmountMinor, Prepaid: plan.Prepaid, VerifyOrder: true}
 	now := time.Now().UTC()
 	receipt, err := s.Client.Verify(ctx, token, expected, now)
@@ -165,10 +170,18 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	if err != nil {
 		return Result{}, err
 	}
+	fallback := 5 * time.Minute
+	if s.Push != nil {
+		fallback = time.Hour
+	}
+	nextCheck := now.Add(fallback)
+	if receipt.Active && receipt.ExpiresAt.Add(-5*time.Minute).Before(nextCheck) {
+		nextCheck = receipt.ExpiresAt.Add(-5 * time.Minute)
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO play_provider_purchases(token_hash,provider_id,subscription_id,product_id,base_plan_id,encrypted_token,state,auto_renews,test_purchase,needs_acknowledgement,next_check_at)
- VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,CASE WHEN $7 IN('SUBSCRIPTION_STATE_EXPIRED','SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED') THEN 'infinity'::timestamptz ELSE now()+interval '5 minutes' END)
+ VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,CASE WHEN $7 IN('SUBSCRIPTION_STATE_EXPIRED','SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED') THEN 'infinity'::timestamptz ELSE $11::timestamptz END)
  ON CONFLICT(token_hash) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,state=EXCLUDED.state,auto_renews=EXCLUDED.auto_renews,needs_acknowledgement=EXCLUDED.needs_acknowledgement,checked_at=now(),next_check_at=EXCLUDED.next_check_at
- WHERE play_provider_purchases.provider_id=EXCLUDED.provider_id AND play_provider_purchases.subscription_id=EXCLUDED.subscription_id`, hash, provider, subscription, product, base, encrypted, receipt.State, receipt.AutoRenews, receipt.Test, receipt.NeedsAcknowledgement)
+ WHERE play_provider_purchases.provider_id=EXCLUDED.provider_id AND play_provider_purchases.subscription_id=EXCLUDED.subscription_id`, hash, provider, subscription, product, base, encrypted, receipt.State, receipt.AutoRenews, receipt.Test, receipt.NeedsAcknowledgement, nextCheck)
 	if err != nil || tag.RowsAffected() != 1 {
 		return Result{}, errors.New("Billing token ownership could not be committed")
 	}
@@ -268,6 +281,9 @@ func (s *Store) Prepare(ctx context.Context, provider, product, base string) err
 	if !eligible {
 		return ErrIneligible
 	}
+	if _, err = tx.Exec(ctx, `INSERT INTO play_provider_accounts(provider_id,account_id) VALUES($1::uuid,$2) ON CONFLICT(provider_id) DO NOTHING`, provider, AccountID(provider)); err != nil {
+		return errors.New("Play account binding is unavailable")
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO play_provider_checkout_intents VALUES($1::uuid,$2,$3,now()+interval '15 minutes') ON CONFLICT(provider_id) DO UPDATE SET product_id=EXCLUDED.product_id,base_plan_id=EXCLUDED.base_plan_id,expires_at=EXCLUDED.expires_at`, provider, product, base)
 	if err != nil {
 		return errors.New("Billing storage is unavailable")
@@ -278,10 +294,20 @@ func (s *Store) Prepare(ctx context.Context, provider, product, base string) err
 // Reconcile claims bounded work without parallel duplicate claims. Failure
 // schedules a later retry; a stale or unreachable store never extends expiry.
 func (s *Store) Reconcile(ctx context.Context) error {
+	if err := s.recoverNotificationPurchases(ctx); err != nil {
+		return err
+	}
+	// Events can precede mobile verification. Retain unmatched hashes until a
+	// purchase is restored, and always read current Google state out of order.
+	_, err := s.DB.Exec(ctx, `WITH ready AS(SELECT e.message_id FROM play_provider_events e JOIN play_provider_purchases p ON p.token_hash=e.token_hash WHERE e.processed_at IS NULL ORDER BY e.received_at LIMIT 100 FOR UPDATE OF e SKIP LOCKED), claimed AS(UPDATE play_provider_events e SET processed_at=now() FROM ready WHERE ready.message_id=e.message_id RETURNING e.token_hash) UPDATE play_provider_purchases p SET next_check_at='-infinity'::timestamptz FROM claimed WHERE claimed.token_hash=p.token_hash`)
+	if err != nil {
+		return errors.New("Play notification reconciliation is unavailable")
+	}
+	_, _ = s.DB.Exec(ctx, `DELETE FROM play_provider_events WHERE message_id IN(SELECT message_id FROM play_provider_events WHERE received_at<now()-interval '14 days' LIMIT 1000)`)
 	if err := s.reconcileRefunds(ctx); err != nil {
 		return err
 	}
-	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT token_hash FROM play_provider_purchases WHERE next_check_at<=now() ORDER BY next_check_at LIMIT 10 FOR UPDATE SKIP LOCKED)
+	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT token_hash FROM play_provider_purchases WHERE next_check_at<=now() ORDER BY next_check_at LIMIT 50 FOR UPDATE SKIP LOCKED)
  UPDATE play_provider_purchases p SET next_check_at=now()+interval '5 minutes' FROM due WHERE p.token_hash=due.token_hash
  RETURNING p.provider_id::text,p.encrypted_token,p.product_id,p.base_plan_id`)
 	if err != nil {
@@ -305,18 +331,36 @@ func (s *Store) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return errors.New("Play reconciliation storage is unavailable")
 	}
-	failures := 0
+	pending := make(chan work, len(items))
+	results := make(chan error, len(items))
 	for _, w := range items {
-		token, e := s.Vault.Open(w.provider, w.encrypted)
-		if e == nil {
-			_, e = s.Process(ctx, w.provider, token, w.product, w.base)
-		}
+		pending <- w
+	}
+	close(pending)
+	var group sync.WaitGroup
+	for i := 0; i < min(4, len(items)); i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for w := range pending {
+				token, e := s.Vault.Open(w.provider, w.encrypted)
+				if e == nil {
+					_, e = s.Process(ctx, w.provider, token, w.product, w.base)
+				}
+				results <- e
+			}
+		}()
+	}
+	group.Wait()
+	close(results)
+	failures := 0
+	for e := range results {
 		if e != nil {
 			failures++
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if failures > 0 {
 		return fmt.Errorf("Play reconciliation: %d checks deferred", failures)

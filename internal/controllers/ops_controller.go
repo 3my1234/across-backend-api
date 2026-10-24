@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"across/backend/internal/playbilling"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ func NewOpsController(db *pgxpool.Pool) *OpsController {
 // QueueHealth exposes bounded aggregate signals for worker autoscaling and
 // incident diagnosis without returning recipients, tokens, or message bodies.
 func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
+	c.Set("Cache-Control", "private, no-store")
 	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
 	defer cancel()
 	var emailPending, pushPending int64
@@ -63,7 +65,12 @@ func (o *OpsController) QueueHealth(c *fiber.Ctx) error {
  FROM web_push_deliveries d JOIN web_push_subscriptions s ON s.id=d.subscription_id AND s.disabled_at IS NULL`).Scan(&webPending, &webFailed, &webOldest); err != nil {
 		return fiber.NewError(503, "browser push queue health unavailable")
 	}
+	playHealth, err := playbilling.QueueHealth(ctx, o.db)
+	if err != nil {
+		return fiber.NewError(503, "Play billing queue health unavailable")
+	}
 	return c.JSON(fiber.Map{
+		"play_billing":       playHealth,
 		"email":              fiber.Map{"pending": emailPending, "oldest_seconds": emailOldestSeconds},
 		"push":               fiber.Map{"pending": pushPending, "oldest_seconds": pushOldestSeconds},
 		"web_push":           fiber.Map{"pending": webPending, "failed": webFailed, "oldest_seconds": webOldest},

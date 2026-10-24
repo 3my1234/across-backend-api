@@ -42,5 +42,9 @@ func FromEnvironment(db *pgxpool.Pool) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{DB: db, Client: client, Vault: vault, AllowTest: allowTest}, nil
+	push, err := PushFromEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	return &Store{DB: db, Client: client, Vault: vault, AllowTest: allowTest, Push: push}, nil
 }
