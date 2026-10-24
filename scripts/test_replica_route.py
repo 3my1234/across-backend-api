@@ -120,7 +120,7 @@ class RouteSafety(unittest.TestCase):
                     self.assertEqual(docker('exec', name, 'wget', '-qO-', 'http://127.0.0.1:8080/api/v1/ready'), body)
                 docker('run', '-d', '--name', proxy, '--network', project, '-p', '127.0.0.1::8000',
                        '-v', str(Path(directory).resolve()) + ':/dynamic:ro',
-                       '-v', '/var/run/docker.sock:/var/run/docker.sock:ro', 'traefik:v3.6',
+                       '-v', '/var/run/docker.sock:/var/run/docker.sock:ro', 'traefik@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d',
                        '--entrypoints.http.address=:8000', '--providers.file.directory=/dynamic', '--providers.file.watch=true',
                        '--providers.docker=true', '--providers.docker.exposedbydefault=false', '--providers.docker.network=' + project, '--log.level=DEBUG')
                 # Exercise the exact publish method after the watcher starts.
