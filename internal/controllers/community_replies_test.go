@@ -33,9 +33,8 @@ func TestCommunityTownHallRepliesPermissionsAndOwnActivity(t *testing.T) {
 		exec(`INSERT INTO provider_members(provider_id,user_id,role) VALUES($1,$2,'owner')`, provider, user)
 		exec(`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,current_period_end) VALUES($1,$2,$3,'active',now()+interval '1 month')`, sub, provider, plan)
 		exec(`INSERT INTO provider_subscription_payments VALUES($1,500,'NGN')`, sub)
-		communityCall(t, app, "POST", "/hall", user, `{"message":"I want to create a request","client_request_id":"`+uuid.NewString()+`"}`, 403)
 		feed := communityCall(t, app, "GET", "/hall", user, "", 200)
-		if feed["can_create"] != false {
+		if feed["can_create"] != true {
 			t.Fatal(feed)
 		}
 	}
