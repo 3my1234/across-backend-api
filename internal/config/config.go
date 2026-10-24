@@ -27,6 +27,7 @@ type Config struct {
 	HTTPAddr                      string
 	HTTPMaxInFlight               int
 	WorkerHealthAddr              string
+	WorkerRoles                   string
 	AllowedOrigins                string
 	TrustedProxyCIDRs             string
 	DatabaseURL                   string
@@ -127,6 +128,7 @@ func Load() Config {
 		HTTPAddr:                      env("HTTP_ADDR", ":8080"),
 		HTTPMaxInFlight:               envInt("HTTP_MAX_IN_FLIGHT", 128),
 		WorkerHealthAddr:              env("WORKER_HEALTH_ADDR", ":8080"),
+		WorkerRoles:                   env("WORKER_ROLES", "all"),
 		AllowedOrigins:                env("ALLOWED_ORIGINS", defaultAllowedOrigins),
 		TrustedProxyCIDRs:             env("TRUSTED_PROXY_CIDRS", ""),
 		DatabaseURL:                   databaseURL(),

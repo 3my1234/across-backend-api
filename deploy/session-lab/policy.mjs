@@ -7,6 +7,7 @@ export function plan(profile='smoke',target=4){
  switch(profile){
  case 'smoke':if(target>20)throw Error('Smoke is capped at 20 sessions');return {...common,seconds:45,executor:'constant-vus'};
  case 'stage':return {...common,seconds:180,executor:'constant-vus'};
+ case 'gradual':return {...common,seconds:180,ramp_seconds:30,executor:'ramping-vus'};
  case 'sustained':return {...common,seconds:1800,executor:'constant-vus'};
  case 'soak':return {...common,seconds:7200,executor:'constant-vus'};
  case 'stress':return {...common,seconds:300,executor:'constant-vus'};

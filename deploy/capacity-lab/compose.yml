@@ -19,7 +19,7 @@ x-api: &api
     HTTP_MAX_IN_FLIGHT: "64"
     RATE_LIMIT_PER_MINUTE: "600"
     # Only the lab proxy and synthetic-client generator own this chain.
-    TRUSTED_PROXY_CIDRS: 172.29.248.10/32,172.29.248.20/32
+    TRUSTED_PROXY_CIDRS: 172.29.248.10/32,172.29.248.20/32,172.29.248.21/32
   depends_on: {seed: {condition: service_completed_successfully}}
   networks: [lab]
   cpus: 0.75

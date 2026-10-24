@@ -20,13 +20,13 @@ const confirmed=new Counter('confirmed_writes'),unexpected=new Rate('unexpected_
 const perOperation=['session','catalogue','services','product_detail','service_detail','market_history','market_send','hall_history','hall_send','hall_offer','support_history','admin_overview','receipts','inbox'];
 const threshold={unexpected_failure:[{threshold:'rate<0.01',abortOnFail:true,delayAbortEval:'10s'}],content_valid:[{threshold:'rate==1',abortOnFail:true,delayAbortEval:'10s'}],controlled_overload:cfg.profile==='burst'?['rate<=1']:[{threshold:'rate==0',abortOnFail:true,delayAbortEval:'10s'}],successful_latency:[{threshold:'p(95)<500',abortOnFail:true,delayAbortEval:'15s'},'p(99)<1500'],confirmed_writes:['count>0']};
 threshold['backend_responses{backend:api1}']=['count>0'];threshold['backend_responses{backend:api2}']=['count>0'];
-if(cfg.executor==='constant-vus'){
+if(cfg.executor!=='constant-arrival-rate'){
  threshold.recipient_observations=['count>0'];
  threshold.poll_delivery_latency=[`p(95)<${cfg.poll_p95_ms}`,`p(99)<${cfg.poll_p99_ms}`];
 }
 for(const op of perOperation)threshold[`successful_latency{op:${op}}`]=['p(95)<500','p(99)<1500'];
 if(cfg.executor!=='constant-arrival-rate')threshold.session_starts=[`count>=${cfg.target}`];else threshold.dropped_iterations=['count==0'];
-export const options={scenarios:{sessions:cfg.executor==='constant-vus'?{executor:'constant-vus',vus:cfg.target,duration:`${cfg.seconds}s`,gracefulStop:'15s'}:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:`${cfg.seconds}s`,preAllocatedVUs:Math.min(cfg.target,100),maxVUs:cfg.target,gracefulStop:'15s'}},thresholds:threshold,summaryTrendStats:['min','med','p(95)','p(99)','max'],systemTags:['status','method','name','scenario','expected_response'],maxRedirects:0,discardResponseBodies:false};
+export const options={scenarios:{sessions:cfg.executor==='ramping-vus'?{executor:'ramping-vus',startVUs:0,stages:[{duration:`${cfg.ramp_seconds}s`,target:cfg.target},{duration:`${cfg.seconds-cfg.ramp_seconds}s`,target:cfg.target}],gracefulStop:'15s'}:cfg.executor==='constant-vus'?{executor:'constant-vus',vus:cfg.target,duration:`${cfg.seconds}s`,gracefulStop:'15s'}:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:`${cfg.seconds}s`,preAllocatedVUs:Math.min(cfg.target,100),maxVUs:cfg.target,gracefulStop:'15s'}},thresholds:threshold,summaryTrendStats:['min','med','p(95)','p(99)','max'],systemTags:['status','method','name','scenario','expected_response'],maxRedirects:0,discardResponseBodies:false};
 let actor=null,loggedIn=false,cycle=0,nextPollAt=0;const observed=new Set();
 // An active conversation continues polling while its user thinks or browses.
 // Do not wait for the random activity selector to choose chat again. Missed
@@ -39,7 +39,7 @@ function waitWithPolling(seconds){
  }
 }
 function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=true){
- const params={headers:{'Content-Type':'application/json','X-Real-IP':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op},redirects:0,timeout:'12s'};
+ const params={headers:{'Content-Type':'application/json','X-Forwarded-For':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op},redirects:0,timeout:'12s'};
  params.responseCallback=http.expectedStatuses(want);
  if(token)params.headers.Authorization=`Bearer ${token}`;
  const response=http.request(method,fixture.origin+'/api/v1'+path,body?JSON.stringify(body):null,params);

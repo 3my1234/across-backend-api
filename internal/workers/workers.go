@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"across/backend/internal/config"
@@ -15,22 +14,29 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Run starts all durable background consumers. Queue claims use SKIP LOCKED
+// Run starts selected durable background consumers. Queue claims use SKIP LOCKED
 // and idempotent database keys, so multiple worker replicas can run safely.
 func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*redis.Client) {
-	var group sync.WaitGroup
-	// Connection-based promotions are retired from launch. Retain stored records.
-	group.Add(9)
-	go func() { defer group.Done(); runWebPushLoop(ctx, db, cfg) }()
-	go func() { defer group.Done(); runEmailLoop(ctx, db, cfg) }()
-	go func() { defer group.Done(); runPushLoop(ctx, db) }()
-	go func() { defer group.Done(); runPushReceiptLoop(ctx, db) }()
-	go func() { defer group.Done(); runAutoConfirmLoop(ctx, db) }()
-	go func() { defer group.Done(); runBatchClosureLoop(ctx, db) }()
-	go func() { defer group.Done(); runSettlementReconciliationLoop(ctx, db, cfg) }()
-	go func() { defer group.Done(); runTownHallExpiryLoop(ctx, db) }()
-	go func() { defer group.Done(); runDriverExpiryLoop(ctx, db) }()
-	group.Wait()
+	roles, err := cfg.WorkerRoleNames()
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	// Existing implementations and durable claim/idempotency semantics unchanged.
+	runners := map[string]func(context.Context){
+		"web_push":         func(ctx context.Context) { runWebPushLoop(ctx, db, cfg) },
+		"email":            func(ctx context.Context) { runEmailLoop(ctx, db, cfg) },
+		"push":             func(ctx context.Context) { runPushLoop(ctx, db) },
+		"push_receipts":    func(ctx context.Context) { runPushReceiptLoop(ctx, db) },
+		"auto_confirm":     func(ctx context.Context) { runAutoConfirmLoop(ctx, db) },
+		"batch_closure":    func(ctx context.Context) { runBatchClosureLoop(ctx, db) },
+		"settlements":      func(ctx context.Context) { runSettlementReconciliationLoop(ctx, db, cfg) },
+		"town_hall_expiry": func(ctx context.Context) { runTownHallExpiryLoop(ctx, db) },
+		"driver_expiry":    func(ctx context.Context) { runDriverExpiryLoop(ctx, db) },
+	}
+	if err := runSelected(ctx, roles, runners); err != nil {
+		log.Print(err)
+	}
 }
 
 func runSettlementReconciliationLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {

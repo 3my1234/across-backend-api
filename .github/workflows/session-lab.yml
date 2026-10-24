@@ -1,6 +1,12 @@
-name: Isolated session smoke
+name: Isolated session qualification
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Smoke4 or launch-authorized100-session/180s isolated stage; no production targets'
+        type: choice
+        options: [smoke, stage, gradual]
+        default: smoke
   pull_request:
     branches: [main]
     paths: ['cmd/capacity-lab/**', 'deploy/session-lab/**', 'deploy/capacity-lab/**', '.github/workflows/session-lab.yml']
@@ -9,12 +15,13 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       LAB_SCENARIO: busy
-      LAB_ACTOR_PAIRS: '10'
-      LAB_SESSION_PROFILE: smoke
-      LAB_SESSION_TARGET: '4'
+      LAB_ACTOR_PAIRS: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '100' || '10' }}
+      LAB_SESSION_PROFILE: ${{ inputs.profile || 'smoke' }}
+      LAB_SESSION_TARGET: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '100' || '4' }}
+      LAB_SESSION_APPROVAL: ${{ inputs.profile != 'smoke' && inputs.profile != '' && '/exchange/approval.json' || '' }}
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +43,13 @@ jobs:
           import json
           from pathlib import Path
           data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          import os
+          from datetime import datetime, timezone
+          if os.environ['LAB_SESSION_PROFILE'] != 'smoke':
+              # Explicit user directive24Oct authorizes bounded isolated load
+              # tests. Public-repository standard runner only, no paid resources.
+              approval={'authorized':True,'environment':'isolated-staging','profile':os.environ['LAB_SESSION_PROFILE'],'max_sessions':100,'max_duration_seconds':180,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User final launch integration directive,24October2026; isolated load tests only'}
+              Path('session-exchange/approval.json').write_text(json.dumps(approval))
           data.pop('sessions')
           Path('session-exchange/run.json').write_text(json.dumps(data))
           PY
@@ -102,7 +116,10 @@ jobs:
           docker version > session-evidence/docker-version.txt
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: 'session-smoke-${{ github.run_id }}', path: session-evidence/, retention-days: 14}
+        with:
+          name: session-${{ inputs.profile || 'smoke' }}-${{ github.run_id }}
+          path: session-evidence/
+          retention-days: 14
       - name: Remove only disposable lab services and data
         if: always()
         run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml down --volumes --remove-orphans

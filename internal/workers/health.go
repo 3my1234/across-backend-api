@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -23,11 +24,29 @@ var loopLimits = map[string]time.Duration{
 }
 
 func NewMonitor() *Monitor {
-	m := &Monitor{last: make(map[string]time.Time)}
+	roles := make([]string, 0, len(loopLimits))
 	for name := range loopLimits {
+		roles = append(roles, name)
+	}
+	m, _ := NewMonitorForRoles(roles)
+	return m
+}
+
+func NewMonitorForRoles(roles []string) (*Monitor, error) {
+	if len(roles) == 0 {
+		return nil, errors.New("worker monitor selection is empty")
+	}
+	m := &Monitor{last: make(map[string]time.Time)}
+	for _, name := range roles {
+		if _, ok := loopLimits[name]; !ok {
+			return nil, errors.New("worker monitor selection is invalid")
+		}
+		if _, exists := m.last[name]; exists {
+			return nil, errors.New("worker monitor selection is duplicated")
+		}
 		m.last[name] = time.Now()
 	}
-	return m
+	return m, nil
 }
 
 func WithMonitor(ctx context.Context, m *Monitor) context.Context {
@@ -37,7 +56,9 @@ func WithMonitor(ctx context.Context, m *Monitor) context.Context {
 func heartbeat(ctx context.Context, name string) {
 	if m, ok := ctx.Value(monitorKey{}).(*Monitor); ok {
 		m.mu.Lock()
-		m.last[name] = time.Now()
+		if _, selected := m.last[name]; selected {
+			m.last[name] = time.Now()
+		}
 		m.mu.Unlock()
 	}
 }
@@ -46,8 +67,9 @@ func (m *Monitor) Snapshot() (bool, map[string]bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	healthy := true
-	checks := make(map[string]bool, len(loopLimits))
-	for name, limit := range loopLimits {
+	checks := make(map[string]bool, len(m.last))
+	for name := range m.last {
+		limit := loopLimits[name]
 		checks[name] = time.Since(m.last[name]) <= limit
 		healthy = healthy && checks[name]
 	}

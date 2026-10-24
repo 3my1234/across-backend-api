@@ -35,6 +35,11 @@ func (c Config) Validate(role string) error {
 	if role != "api" && role != "worker" && role != "migrate" {
 		add("service role must be api, worker or migrate")
 	}
+	if role == "worker" || (role == "api" && c.RunInlineWorkers) {
+		if _, err := c.WorkerRoleNames(); err != nil {
+			add(err.Error())
+		}
+	}
 	if env != "production" && env != "staging" {
 		return validationError(problems)
 	}

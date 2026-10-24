@@ -5,6 +5,7 @@ import {RAMP,plan} from './policy.mjs';
 export function nextStage(summary,reconciliation){
  const previous=summary.configuration?.target;
  if(!summary.run_id||summary.run_id!==reconciliation.run_id||reconciliation.write_reconciliation_passed!==true)throw Error('Matching successful reconciliation required');
+ if(summary.configuration?.profile==='gradual')throw Error('Gradual arrival cannot qualify the simultaneous-login stage');
  if(summary.configuration?.profile==='burst')throw Error('Burst results cannot authorize a sustainable session stage');
  const declared=plan(summary.configuration?.profile,previous);
  for(const [key,value] of Object.entries(declared))if(summary.configuration?.[key]!==value)throw Error('Reviewed session model must be preserved: '+key);

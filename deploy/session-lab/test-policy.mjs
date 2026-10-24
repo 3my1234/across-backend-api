@@ -36,3 +36,5 @@ console.log('Ramp gate passed: matched evidence, achieved concurrency and unchan
 for(const name of ['unexpected_failure','successful_latency','content_valid','controlled_overload']){
  const metrics={...evidence.metrics};delete metrics[name];assert.throws(()=>nextStage({...evidence,metrics},recon));
 }
+
+assert.equal(plan('gradual',100).ramp_seconds,30);assert.equal(plan('gradual',100).seconds,180);assert.equal(plan('gradual',100).p95_ms,500);

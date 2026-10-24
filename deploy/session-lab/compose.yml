@@ -38,7 +38,10 @@ services:
       LAB_SESSION_MIX: ${LAB_SESSION_MIX:-mixed}
       LAB_SESSION_APPROVAL: ${LAB_SESSION_APPROVAL:-}
     volumes: [../session-lab:/suite:ro, '${LAB_EXCHANGE_DIR:?explicit disposable exchange directory required}:/exchange']
-    networks: [lab]
+    # A synthetic trusted edge, separate from the Go fixture runner. Never a
+    # production address: this network has no host ports or external egress.
+    networks:
+      lab: {ipv4_address: 172.29.248.21}
     cpus: 1
     mem_limit: 512m
   verifier:
