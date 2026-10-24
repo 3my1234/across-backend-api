@@ -79,7 +79,7 @@ def main():
             dc('stop', '-t', '5', 'redis')
             if ready('original') != '503' or ready('worker') != '503':
                 raise RuntimeError('dependency outage was not reflected in readiness')
-            dc('start', '--wait', '--wait-timeout', '60', 'redis')
+            dc('up', '-d', '--no-deps', '--wait', '--wait-timeout', '60', 'redis')
             wait_ready()
             value = dc('exec', '-T', 'redis', 'redis-cli', '--tls', '--cacert', '/fixture/ca.pem', '-h', 'redis', '-p', '6380', 'GET', 'release:sentinel')
             if value != 'retained' or counts() != before:
