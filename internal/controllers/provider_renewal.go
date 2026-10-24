@@ -42,6 +42,13 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 	if err != nil || role != "owner" {
 		return fiber.ErrForbidden
 	}
+	var managedByPlay bool
+	if err = m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND to_jsonb(s)->>'billing_provider'='google_play' AND s.status IN ('active','pending','grace','past_due'))`, providerID).Scan(&managedByPlay); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if managedByPlay {
+		return fiber.NewError(409, "Manage this subscription in Google Play. Your paid access remains until its confirmed expiry.")
+	}
 	var req struct {
 		NextPlanID string `json:"next_plan_id"`
 	}

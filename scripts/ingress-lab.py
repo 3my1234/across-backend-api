@@ -80,7 +80,7 @@ def main():
                     content = content.replace('  default_backend replicas', '  option forwardfor\n  default_backend replicas')
                 (root/'haproxy.cfg').write_text(content)
                 (root/'haproxy.cfg').chmod(0o644)
-                gateway = start('gateway', '10.244.89.3', 'haproxy:3.0-alpine', ['haproxy', '-f', '/fixture/haproxy.cfg'])
+                gateway = start('gateway', '10.244.89.3', 'haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb', ['haproxy', '-f', '/fixture/haproxy.cfg'])
                 for attempt in range(15):
                     try:
                         probe('10.244.89.5', '10.244.89.2:8080')

@@ -81,6 +81,6 @@ jobs:
           python3 scripts/test_replica_route.py
           python3 scripts/test_replica_discovery.py
           python3 scripts/test_replica_release.py
-          docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy:3.0-alpine haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+          docker run --rm -v "$PWD/deploy/scaling/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       - name: Build production image
         run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} --progress=plain --file ${{ matrix.dockerfile }} --tag across-backend:ci .

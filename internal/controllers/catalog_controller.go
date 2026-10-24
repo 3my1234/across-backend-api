@@ -4,12 +4,15 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/storage"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -234,6 +237,10 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		return destinationErr
 	}
 	productID := c.Params("product_id")
+	parsedID, parseErr := uuid.Parse(productID)
+	if parseErr != nil || parsedID.String() != strings.ToLower(productID) {
+		return fiber.NewError(404, "product not found")
+	}
 	var id, sku, title, description, currency, hubID, hubName, hubCity string
 	var categories, images []string
 	var price, compareAtPrice, flashSalePrice, averageRating float64
@@ -263,8 +270,11 @@ func (cc *CatalogController) GetProduct(c *fiber.Ctx) error {
 		  AND EXISTS(SELECT 1 FROM provider_organizations po WHERE po.id=p.provider_id AND po.verification_status='approved' AND po.is_active=true AND ($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions ps WHERE ps.provider_id=po.id AND ps.status='active' AND ps.current_period_end>now())))
 		  AND (p.payment_mode='contact' OR EXISTS(SELECT 1 FROM provider_payout_accounts pa WHERE pa.provider_id=p.provider_id AND pa.payment_provider='flutterwave' AND pa.status='active'))
 	`, productID, !cc.cfg.ProviderSubscriptionsRequired(time.Now().UTC()), destinationCountry, destinationState, destinationCity).Scan(&id, &sku, &title, &description, &categories, &images, &currency, &price, &compareAtPrice, &inventory, &factoryRaw, &hubID, &hubName, &hubCity, &isFlashSale, &flashSalePrice, &reviewCount, &soldCount, &averageRating, &providerID, &fulfillmentMode)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return fiber.NewError(fiber.StatusNotFound, "product not found")
+	}
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Product details are temporarily unavailable. Please retry.")
 	}
 	factory := map[string]any{}
 	_ = json.Unmarshal(factoryRaw, &factory)

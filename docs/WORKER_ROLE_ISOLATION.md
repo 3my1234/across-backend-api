@@ -3,14 +3,15 @@
 Prepared candidate; no production topology/configuration change. This branch is
 based on PR66 head be1336c and does not merge or modify that PR's source branch.
 
-WORKER_ROLES is `all` by default (blank retains the old behavior). All nine
-existing consumers still start. An explicit comma-separated selection starts
+WORKER_ROLES is `all` by default (blank retains the old behavior). The nine
+existing consumers still start; the integrated billing candidate adds an opt-in
+play_billing loop that is idle when Play billing is disabled. An explicit comma-separated selection starts
 only those existing implementations. Invalid/duplicate names reject before
 dependency startup in the worker preflight; values are not echoed in errors.
 Only selected loops participate in heartbeat health and watchdog decisions.
 
 Supported names: web_push, email, push, push_receipts, auto_confirm,
-batch_closure, settlements, town_hall_expiry, driver_expiry.
+batch_closure, settlements, town_hall_expiry, driver_expiry, play_billing.
 
 Possible separately reviewed deployment grouping:
 

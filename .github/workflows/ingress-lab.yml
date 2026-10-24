@@ -19,7 +19,7 @@ jobs:
       - name: Prepare disposable proxy images
         run: |
           docker pull traefik:v3.6.25
-          docker pull haproxy:3.0-alpine
+          docker pull haproxy@sha256:d84eb36e91830bcaa67b23cfde1909850b99f11eb60da3abd185bd0daf3f75bb
           docker pull alpine:3.23
       - name: Exercise actual middleware through both forwarding modes
         env:

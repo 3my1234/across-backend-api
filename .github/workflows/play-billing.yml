@@ -1,0 +1,40 @@
+name: Play billing verification contracts
+on:
+  pull_request:
+    branches: [main, feat/worker-role-isolation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Verify Google credential and receipt boundaries using synthetic transports
+        run: go test -race ./internal/playbilling
+      - name: Reachable dependency vulnerability check
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./internal/playbilling
+  ledger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-only, POSTGRES_DB: play_test}
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      PLAY_BILLING_TEST_LOCAL: 'true'
+      PLAY_BILLING_TEST_DSN: postgres://postgres:synthetic-only@127.0.0.1:5432/play_test?sslmode=disable
+      DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:5432/play_test?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - run: go run ./cmd/migrate
+      - run: go test -race ./internal/playbilling
+      - run: go test ./internal/controllers ./internal/routes ./internal/config ./internal/workers

@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +21,15 @@ return {current, redis.call("PTTL", KEYS[1])}
 `)
 
 func DistributedRateLimit(client *redis.Client, namespace string, requests int, window time.Duration) fiber.Handler {
+	return distributedRateLimit(client, namespace, requests, window, false)
+}
+
+// Use after authentication for store API work. Shared mobile carrier/NAT
+// addresses must not let one provider consume another provider's billing quota.
+func DistributedUserRateLimit(client *redis.Client, namespace string, requests int, window time.Duration) fiber.Handler {
+	return distributedRateLimit(client, namespace, requests, window, true)
+}
+func distributedRateLimit(client *redis.Client, namespace string, requests int, window time.Duration, byUser bool) fiber.Handler {
 	if namespace == "" {
 		namespace = "api"
 	}
@@ -29,6 +40,14 @@ func DistributedRateLimit(client *redis.Client, namespace string, requests int, 
 			return c.Next()
 		}
 		identity := scaleClientIP(c)
+		if byUser {
+			user, _ := c.Locals("user_id").(string)
+			if user == "" {
+				return fiber.ErrUnauthorized
+			}
+			digest := sha256.Sum256([]byte(user))
+			identity = "user:" + hex.EncodeToString(digest[:])
+		}
 		windowID := time.Now().UnixMilli() / window.Milliseconds()
 		key := "rate:" + namespace + ":" + identity + ":" + strconv.FormatInt(windowID, 10)
 		values, err := fixedWindowScript.Run(c.Context(), client, []string{key}, window.Milliseconds()).Int64Slice()

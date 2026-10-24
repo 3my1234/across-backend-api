@@ -9,7 +9,7 @@ import (
 func TestWorkerRoleSelection(t *testing.T) {
 	for _, value := range []string{"", "all", " ALL "} {
 		roles, err := (Config{WorkerRoles: value}).WorkerRoleNames()
-		if err != nil || len(roles) != 9 {
+		if err != nil || len(roles) != 10 {
 			t.Fatal("default must retain all existing consumers")
 		}
 	}

@@ -21,6 +21,7 @@ var loopLimits = map[string]time.Duration{
 	// limits. Settlement batches can make up to 100 twenty-second requests.
 	"driver_expiry": 3 * time.Minute, "town_hall_expiry": 2 * time.Minute, "web_push": 2 * time.Minute, "email": 10 * time.Minute, "push": 2 * time.Minute, "push_receipts": 2 * time.Minute,
 	"settlements": 45 * time.Minute, "batch_closure": 5 * time.Minute, "auto_confirm": 2 * time.Hour,
+	"play_billing": 6 * time.Minute,
 }
 
 func NewMonitor() *Monitor {

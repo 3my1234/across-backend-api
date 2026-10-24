@@ -227,7 +227,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	// Seller names are included in real catalogue detail responses so the buyer
 	// can identify groups without being shown opaque provider UUIDs.
 	if _, err = db.Exec(ctx, `ALTER TABLE provider_organizations ADD business_name text DEFAULT 'Timo Ventures';
-	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0;`); err != nil {
+	ALTER TABLE products ADD category_path text[] DEFAULT '{}',ADD review_count bigint DEFAULT 0,ADD review_rating_sum bigint DEFAULT 0,ADD catalog_version bigint DEFAULT 0,ADD compare_at_price numeric DEFAULT 0;`); err != nil {
 		t.Fatal(err)
 	}
 	installPublicIdentityFixture(t, db)
@@ -303,7 +303,7 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	// older portal updates; new products default to Flutterwave.
 	if _, err = db.Exec(ctx, `CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text DEFAULT 'owner',is_active boolean DEFAULT true);
  ALTER TABLE provider_organizations ADD provider_type text DEFAULT 'product_merchant';
- ALTER TABLE products ADD variants jsonb,ADD compare_at_price numeric,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
+ ALTER TABLE products ADD variants jsonb,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
  ALTER TABLE product_delivery_areas ADD uses_primary_price boolean DEFAULT false;`); err != nil {
 		t.Fatal(err)
 	}
