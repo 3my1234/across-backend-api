@@ -25,7 +25,9 @@ jobs:
         env:
           MIGRATION_GATE_LAB: isolated-ci
           MIGRATION_GATE_DATABASE_URL: postgres://postgres:synthetic-only@localhost:5432/migration_gate_fixture?sslmode=disable
-        run: go test -race ./internal/db -run TestMigrationLockWaitIsBoundedAndPreservesExistingWrites -count=1
+        run: |
+          python3 -m unittest discover -s scripts -p test_run_approved_migration.py -v
+          go test -race ./internal/db -run TestMigrationLockWaitIsBoundedAndPreservesExistingWrites -count=1
       - name: Build tools from the exact reviewed revision
         env:
           RELEASE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}

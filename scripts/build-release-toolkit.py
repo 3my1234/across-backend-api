@@ -26,6 +26,7 @@ if not files or any(p.is_symlink() or p.stat().st_size > 2*1024*1024 for p in fi
 (output/'migrations').mkdir()
 for source in files:
     shutil.copyfile(source,output/'migrations'/source.name)
+shutil.copyfile(root/'scripts'/'run-approved-migration.py', output/'run-approved-migration.py')
 checksums = {p.relative_to(output).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.rglob('*')) if p.is_file()}
 (output/'manifest.json').write_text(json.dumps({'revision':revision,'platform':'linux/amd64','migration_count':len(files),'files':checksums,'scope':'public executable/source artifacts only; no credentials, databases, deployment or migration execution'},indent=2)+'\n')
 print(json.dumps({'release_toolkit':str(output.relative_to(root)),'revision':revision,'migration_count':len(files),'manifest_sha256':hashlib.sha256((output/'manifest.json').read_bytes()).hexdigest()}))
