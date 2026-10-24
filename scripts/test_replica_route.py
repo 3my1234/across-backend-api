@@ -24,6 +24,22 @@ ARGS = ['--providers.file.directory=/traefik/dynamic/', '--providers.file.watch=
 
 
 class RouteSafety(unittest.TestCase):
+    def test_reviewed_sse_compression_is_preserved_without_replacing_original_middleware(self):
+        labels = dict(LABELS, **{PREFIX + '.middlewares': 'gzip-sse',
+                      'traefik.http.middlewares.gzip-sse.compress': 'true',
+                      'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': 'text/event-stream'})
+        actual = route.routing(labels, ARGS)['http']['routers']['atlxpres-replicas']
+        self.assertEqual(actual['middlewares'], ['gzip-sse@docker'])
+        for change in ({'traefik.http.middlewares.gzip-sse.compress': 'false'},
+                       {'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': ''},
+                       {'traefik.http.middlewares.gzip-sse.basicauth.users': 'private-fixture'},
+                       {PREFIX + '.middlewares': 'gzip-sse,authentication'}):
+            with self.assertRaises(ValueError):
+                route.routing(dict(labels, **change), ARGS)
+        missing = dict(labels); del missing['traefik.http.middlewares.gzip-sse.compress']
+        with self.assertRaises(ValueError):
+            route.routing(missing, ARGS)
+
     def test_failed_probe_reports_status_without_private_curl_output(self):
         failure = subprocess.CompletedProcess([], 22, b'503', b'private-do-not-print')
         with patch.object(route.subprocess, 'run', return_value=failure):
@@ -79,7 +95,10 @@ class RouteSafety(unittest.TestCase):
             self.assertEqual(result.returncode, 0, 'Synthetic Docker test failed: ' + result.stderr)
             return result.stdout.strip()
         with tempfile.TemporaryDirectory() as directory:
-            config = copy.deepcopy(route.routing(LABELS, ARGS))
+            sse_labels = dict(LABELS, **{PREFIX + '.middlewares': 'gzip-sse',
+                'traefik.http.middlewares.gzip-sse.compress': 'true',
+                'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': 'text/event-stream'})
+            config = copy.deepcopy(route.routing(sse_labels, ARGS))
             router = config['http']['routers']['atlxpres-replicas']
             router.pop('tls')
             router['entryPoints'], router['rule'] = ['http'], 'Host(`pilot.test`)'
@@ -94,7 +113,8 @@ class RouteSafety(unittest.TestCase):
                 for name, body in ((primary, 'PRIMARY'), (backup, 'FALLBACK')):
                     labels = [] if name == primary else ['--label', 'traefik.enable=true',
                         '--label', 'traefik.http.services.https-0-' + route.pilot.API_RESOURCE + '.loadbalancer.server.port=8080',
-                        '--label', 'traefik.http.middlewares.gzip.compress=true']
+                        '--label', 'traefik.http.middlewares.gzip-sse.compress=true',
+                        '--label', 'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes=text/event-stream']
                     docker('run', '-d', '--name', name, '--network', project, *labels, 'busybox:1.36', 'sh', '-c',
                            'mkdir -p /www/api/v1; echo ' + body + ' > /www/api/v1/ready; exec httpd -f -p 8080 -h /www')
                     self.assertEqual(docker('exec', name, 'wget', '-qO-', 'http://127.0.0.1:8080/api/v1/ready'), body)

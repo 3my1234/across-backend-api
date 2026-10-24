@@ -58,7 +58,14 @@ def routing(labels, proxy_args):
     if entry != secure[0]:
         raise ValueError('Live API entry point differs from HTTPS listener')
     middlewares = lowered.get(prefix + '.middlewares', '').split(',')
-    if middlewares != ['gzip']:
+    if middlewares == ['gzip-sse']:
+        # Preserve the original Docker middleware, including SSE exclusion.
+        # A name alone is not evidence of a reviewed compression definition.
+        base = 'traefik.http.middlewares.gzip-sse.'
+        definition = {key[len(base):]: value for key, value in lowered.items() if key.startswith(base)}
+        if definition != {'compress': 'true', 'compress.excludedcontenttypes': 'text/event-stream'}:
+            raise ValueError('gzip-sse middleware definition differs from reviewed compression policy')
+    elif middlewares != ['gzip']:
         raise ValueError('Live middleware chain changed; preserve it through a separate review')
     priority = lowered.get(prefix + '.priority', '0')
     if not re.fullmatch(r'\d{1,7}', priority):
@@ -67,7 +74,7 @@ def routing(labels, proxy_args):
         'routers': {'atlxpres-replicas': {
             'entryPoints': [secure[0]], 'rule': expected_rule,
             'priority': max(1000, int(priority) + 1000),
-            'middlewares': ['gzip@docker'], 'service': 'atlxpres-available',
+            'middlewares': [middlewares[0] + '@docker'], 'service': 'atlxpres-available',
             'tls': {'certResolver': 'letsencrypt'}}},
         'services': {'atlxpres-available': {'failover': {
             'service': 'atlxpres-replicas',
