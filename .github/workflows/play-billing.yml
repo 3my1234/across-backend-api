@@ -29,9 +29,12 @@ jobs:
     env:
       PLAY_BILLING_TEST_LOCAL: 'true'
       PLAY_BILLING_TEST_DSN: postgres://postgres:synthetic-only@127.0.0.1:5432/play_test?sslmode=disable
+      DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:5432/play_test?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.27.3'}
+      - run: go run ./cmd/migrate
       - run: go test -race ./internal/playbilling
       - run: go test ./internal/controllers ./internal/routes ./internal/config ./internal/workers

@@ -51,13 +51,14 @@ func isolatedStore(t *testing.T) (*Store, string, *string, *string) {
 		}
 	})
 	_, err = db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,email text,email_verified bool,is_active bool);
- CREATE TABLE provider_organizations(id uuid PRIMARY KEY,owner_user_id uuid REFERENCES users(id),is_active bool,verification_status text);
+ CREATE TABLE provider_organizations(id uuid PRIMARY KEY,owner_user_id uuid REFERENCES users(id),is_active bool,verification_status text,country_code text DEFAULT 'NG');
  CREATE TABLE provider_subscription_plans(id uuid PRIMARY KEY,code text,name text,amount_ngn numeric,is_active bool);
  CREATE TABLE provider_subscriptions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),provider_id uuid REFERENCES provider_organizations(id),plan_id uuid REFERENCES provider_subscription_plans(id),status text,tx_ref text UNIQUE,customer_email text,expected_amount_ngn numeric,billing_mode text,duration_months int,starts_at timestamptz,current_period_end timestamptz,last_payment_at timestamptz,updated_at timestamptz DEFAULT now(),version int DEFAULT 1);
  CREATE TABLE provider_subscription_payments(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),subscription_id uuid REFERENCES provider_subscriptions(id),flutterwave_transaction_id text NOT NULL UNIQUE,tx_ref text,amount numeric,currency_code text,paid_at timestamptz DEFAULT now());
  CREATE TABLE provider_renewal_preferences(provider_id uuid PRIMARY KEY,renewal_status text);
  CREATE TABLE xp_transactions(user_id uuid,amount int,reason text,reference_id text,UNIQUE(user_id,reason,reference_id));
- CREATE TABLE notifications(user_id uuid,type text,title text,body text,data jsonb,event_key text UNIQUE);`)
+ CREATE TABLE notifications(user_id uuid,type text,title text,body text,data jsonb,event_key text UNIQUE);
+ CREATE TABLE payments(provider text,purpose text,provider_subscription_id uuid,user_id uuid,country_code text,amount numeric,currency_code text,provider_reference text,provider_transaction_id text,idempotency_key text,payment_method text,payment_status text,provider_status text,paid_at timestamptz,UNIQUE(provider,provider_transaction_id));`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func isolatedStore(t *testing.T) (*Store, string, *string, *string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(ctx, `INSERT INTO provider_organizations VALUES($1::uuid,$2::uuid,true,'approved');`, provider, owner)
+	_, err = db.Exec(ctx, `INSERT INTO provider_organizations(id,owner_user_id,is_active,verification_status) VALUES($1::uuid,$2::uuid,true,'approved');`, provider, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,5 +205,70 @@ func TestPlayConcurrentRetriesMintOnePeriod(t *testing.T) {
 	store.DB.QueryRow(context.Background(), `SELECT count(*) FROM provider_subscription_payments`).Scan(&receipts)
 	if receipts != 1 {
 		t.Fatal("Concurrent receipt duplication", receipts)
+	}
+}
+
+func TestPlayPendingRecoveryReservationAndMappingProtection(t *testing.T) {
+	store, provider, state, _ := isolatedStore(t)
+	ctx := context.Background()
+	if err := store.Prepare(ctx, provider, "atl_basic", "monthly"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Prepare(ctx, provider, "atl_basic", "monthly"); err == nil {
+		t.Fatal("Two simultaneous checkouts reserved")
+	}
+	*state = "SUBSCRIPTION_STATE_PENDING"
+	result, err := store.Process(ctx, provider, "synthetic-pending-purchase-token", "atl_basic", "monthly")
+	if err != nil || !result.Pending || result.Active {
+		t.Fatal("Pending payment was lost or activated", err)
+	}
+	var receipts, xp int
+	store.DB.QueryRow(ctx, `SELECT count(*) FROM provider_subscription_payments`).Scan(&receipts)
+	store.DB.QueryRow(ctx, `SELECT sum(amount) FROM xp_transactions`).Scan(&xp)
+	if receipts != 0 || xp != 5 {
+		t.Fatal("Pending payment received paid receipt/XP")
+	}
+	if _, err = store.DB.Exec(ctx, `UPDATE play_provider_products SET amount_minor=60000`); err == nil {
+		t.Fatal("Purchased product price mapping mutated")
+	}
+	// Removing a product from sale must not stop existing payment recovery.
+	if _, err = store.DB.Exec(ctx, `UPDATE play_provider_products SET enabled=false`); err != nil {
+		t.Fatal(err)
+	}
+	*state = "SUBSCRIPTION_STATE_ACTIVE"
+	result, err = store.Process(ctx, provider, "synthetic-pending-purchase-token", "atl_basic", "monthly")
+	if err != nil || !result.Active {
+		t.Fatal("Pending payment could not recover", err)
+	}
+}
+
+func TestPlayUnconfirmedAcknowledgementDefersReferralCredit(t *testing.T) {
+	store, provider, _, _ := isolatedStore(t)
+	ctx := context.Background()
+	prior := store.Client.http.Transport
+	fail := true
+	store.Client.http.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		if r.Method == "POST" && fail {
+			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		return prior.RoundTrip(r)
+	})
+	result, err := store.Process(ctx, provider, "synthetic-unconfirmed-ack-token", "atl_basic", "monthly")
+	if err != nil || !result.Active || !result.NeedsAcknowledgement {
+		t.Fatal("Uncertain acknowledgement not preserved", err)
+	}
+	var xp int
+	store.DB.QueryRow(ctx, `SELECT sum(amount) FROM xp_transactions`).Scan(&xp)
+	if xp != 5 {
+		t.Fatal("Unacknowledged purchase awarded cash-equivalent XP")
+	}
+	fail = false
+	result, err = store.Process(ctx, provider, "synthetic-unconfirmed-ack-token", "atl_basic", "monthly")
+	if err != nil || result.NeedsAcknowledgement {
+		t.Fatal("Acknowledgement retry failed", err)
+	}
+	store.DB.QueryRow(ctx, `SELECT sum(amount) FROM xp_transactions`).Scan(&xp)
+	if xp != 500 {
+		t.Fatal("Successful acknowledgement failed to reconcile referral XP", xp)
 	}
 }

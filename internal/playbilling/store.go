@@ -119,7 +119,7 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 			return result, nil
 		}
 		var conflict bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND ((status='active' AND current_period_end>now()) OR (billing_provider='flutterwave' AND billing_mode='recurring' AND status IN('pending','past_due','grace'))))
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND ((status='active' AND current_period_end>now()) OR (billing_provider='flutterwave' AND billing_mode='recurring' AND status IN('pending','active','past_due','grace') AND NOT EXISTS(SELECT 1 FROM provider_renewal_preferences r WHERE r.provider_id=provider_subscriptions.provider_id AND r.renewal_status='stopped'))))
    OR EXISTS(SELECT 1 FROM play_provider_purchases WHERE provider_id=$1::uuid AND auto_renews)
    OR EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND renewal_status='uncertain')`, provider).Scan(&conflict); err != nil {
 			return Result{}, errors.New("Billing storage is unavailable")
@@ -146,12 +146,24 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 	}
 	if receipt.Active {
 		var receiptSubscription string
-		err = tx.QueryRow(ctx, `INSERT INTO provider_subscription_payments(subscription_id,tx_ref,amount,currency_code,billing_provider,play_order_id,test_purchase)
-   VALUES($1::uuid,$2,$3::numeric/100,'NGN','google_play',$4,$5)
+		err = tx.QueryRow(ctx, `INSERT INTO provider_subscription_payments(subscription_id,tx_ref,amount,currency_code,billing_provider,play_order_id,test_purchase,referral_eligible)
+   VALUES($1::uuid,$2,$3::numeric/100,'NGN','google_play',$4,$5,$6)
    ON CONFLICT(play_order_id) DO UPDATE SET play_order_id=EXCLUDED.play_order_id
-   RETURNING subscription_id::text`, subscription, "PLAY-"+subscription, receipt.AmountMinor, receipt.OrderID, receipt.Test).Scan(&receiptSubscription)
+   RETURNING subscription_id::text`, subscription, "PLAY-"+subscription, receipt.AmountMinor, receipt.OrderID, receipt.Test, !receipt.NeedsAcknowledgement).Scan(&receiptSubscription)
 		if err != nil || receiptSubscription != subscription {
 			return Result{}, errors.New("Billing order ownership could not be committed")
+		}
+		if !receipt.Test {
+			_, err = tx.Exec(ctx, `INSERT INTO payments(provider,purpose,provider_subscription_id,user_id,country_code,amount,currency_code,provider_reference,provider_transaction_id,idempotency_key,payment_method,payment_status,provider_status,paid_at)
+ SELECT 'google_play','provider_subscription',s.id,o.owner_user_id,o.country_code,$2::numeric/100,'NGN',s.tx_ref,$3,'play:'||$3,'play_store','succeeded',$4,now()
+ FROM provider_subscriptions s JOIN provider_organizations o ON o.id=s.provider_id WHERE s.id=$1::uuid ON CONFLICT DO NOTHING`, subscription, receipt.AmountMinor, receipt.OrderID, receipt.State)
+			if err != nil {
+				return Result{}, errors.New("Billing financial receipt could not be committed")
+			}
+			var financialOwner string
+			if err = tx.QueryRow(ctx, `SELECT provider_subscription_id::text FROM payments WHERE provider='google_play' AND provider_transaction_id=$1`, receipt.OrderID).Scan(&financialOwner); err != nil || financialOwner != subscription {
+				return Result{}, errors.New("Billing financial receipt ownership conflict")
+			}
 		}
 	}
 	status := "expired"
@@ -174,7 +186,27 @@ func (s *Store) Process(ctx context.Context, provider, token, product, base stri
 		_, ackErr := s.Client.Acknowledge(ctx, token, expected, time.Now().UTC())
 		if ackErr == nil {
 			result.NeedsAcknowledgement = false
-			_, _ = s.DB.Exec(ctx, `UPDATE play_provider_purchases SET needs_acknowledgement=false WHERE token_hash=$1 AND provider_id=$2::uuid`, hash, provider)
+		}
+	}
+	if receipt.Active && !result.NeedsAcknowledgement {
+		// Acknowledgement and referral eligibility converge after an uncertain
+		// response; a paid receipt is never inserted twice to retry an XP reward.
+		ackTx, e := s.DB.Begin(ctx)
+		if e == nil {
+			defer ackTx.Rollback(context.Background())
+			_, e = ackTx.Exec(ctx, `UPDATE play_provider_purchases SET needs_acknowledgement=false WHERE token_hash=$1 AND provider_id=$2::uuid`, hash, provider)
+			if e == nil {
+				_, e = ackTx.Exec(ctx, `UPDATE provider_subscription_payments SET referral_eligible=true WHERE play_order_id=$1 AND subscription_id=$2::uuid AND NOT test_purchase`, receipt.OrderID, subscription)
+			}
+			if e == nil {
+				_, e = ackTx.Exec(ctx, `SELECT reconcile_referral_reward(owner_user_id) FROM provider_organizations WHERE id=$1::uuid`, provider)
+			}
+			if e == nil {
+				e = ackTx.Commit(ctx)
+			}
+		}
+		if e != nil {
+			result.NeedsAcknowledgement = true
 		}
 	}
 	return result, nil
@@ -198,7 +230,7 @@ func (s *Store) Prepare(ctx context.Context, provider, product, base string) err
 	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_organizations o JOIN users u ON u.id=o.owner_user_id
  JOIN play_provider_products m ON m.product_id=$2 AND m.base_plan_id=$3 JOIN provider_subscription_plans p ON p.id=m.plan_id
  WHERE o.id=$1::uuid AND o.is_active AND o.verification_status='approved' AND u.is_active AND u.email_verified AND m.enabled AND p.is_active)
- AND NOT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND (s.status='pending' OR (s.status='active' AND s.current_period_end>now()) OR (s.billing_provider='flutterwave' AND s.billing_mode='recurring' AND s.status IN('past_due','grace'))))
+ AND NOT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND (s.status='pending' OR (s.status='active' AND s.current_period_end>now()) OR (s.billing_provider='flutterwave' AND s.billing_mode='recurring' AND s.status IN('active','past_due','grace') AND NOT EXISTS(SELECT 1 FROM provider_renewal_preferences r WHERE r.provider_id=s.provider_id AND r.renewal_status='stopped'))))
  AND NOT EXISTS(SELECT 1 FROM play_provider_purchases WHERE provider_id=$1::uuid AND auto_renews)
  AND NOT EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND renewal_status='uncertain')
  AND NOT EXISTS(SELECT 1 FROM play_provider_checkout_intents WHERE provider_id=$1::uuid AND expires_at>now())`, provider, product, base).Scan(&eligible)

@@ -7,6 +7,7 @@ ALTER TABLE provider_subscription_payments ADD COLUMN billing_provider TEXT NOT 
  CHECK(billing_provider IN ('flutterwave','google_play'));
 ALTER TABLE provider_subscription_payments ADD COLUMN play_order_id TEXT UNIQUE;
 ALTER TABLE provider_subscription_payments ADD COLUMN test_purchase BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE provider_subscription_payments ADD COLUMN referral_eligible BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE provider_subscription_payments ADD CONSTRAINT provider_receipt_origin CHECK (
  (billing_provider='flutterwave' AND flutterwave_transaction_id IS NOT NULL AND play_order_id IS NULL AND NOT test_purchase)
  OR (billing_provider='google_play' AND flutterwave_transaction_id IS NULL AND play_order_id LIKE 'GPA.%'));
@@ -45,6 +46,16 @@ CREATE TABLE play_provider_checkout_intents (
  expires_at TIMESTAMPTZ NOT NULL,
  FOREIGN KEY(product_id,base_plan_id) REFERENCES play_provider_products(product_id,base_plan_id)
 );
+CREATE FUNCTION protect_play_product_mapping() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (NEW.plan_id,NEW.product_id,NEW.base_plan_id,NEW.duration_months,NEW.amount_minor)
+  IS DISTINCT FROM (OLD.plan_id,OLD.product_id,OLD.base_plan_id,OLD.duration_months,OLD.amount_minor)
+  AND EXISTS(SELECT 1 FROM play_provider_purchases WHERE product_id=OLD.product_id AND base_plan_id=OLD.base_plan_id)
+ THEN RAISE EXCEPTION 'Purchased Play product mappings are immutable'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER immutable_play_product_mapping BEFORE UPDATE ON play_provider_products
+ FOR EACH ROW EXECUTE FUNCTION protect_play_product_mapping();
 
 -- Store license-test purchases never create cash-equivalent referral rewards.
 CREATE OR REPLACE FUNCTION reconcile_referral_reward(referred UUID) RETURNS void LANGUAGE plpgsql AS $$
@@ -73,7 +84,7 @@ BEGIN
    JOIN provider_subscriptions sub ON sub.provider_id=org.id
    JOIN provider_subscription_plans plan ON plan.id=sub.plan_id
    JOIN provider_subscription_payments pay ON pay.subscription_id=sub.id
-   WHERE org.owner_user_id=referred AND pay.currency_code='NGN' AND pay.amount>0 AND NOT pay.test_purchase
+   WHERE org.owner_user_id=referred AND pay.currency_code='NGN' AND pay.amount>0 AND NOT pay.test_purchase AND pay.referral_eligible
     AND sub.expected_amount_ngn>0 AND pay.amount+0.01>=sub.expected_amount_ngn
     AND plan.code IN ('provider-monthly','provider-growth','provider-business','provider-diamond')
     AND plan.amount_ngn IN (500,1000,2000,5000)
