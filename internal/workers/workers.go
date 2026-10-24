@@ -31,6 +31,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 		"auto_confirm":     func(ctx context.Context) { runAutoConfirmLoop(ctx, db) },
 		"batch_closure":    func(ctx context.Context) { runBatchClosureLoop(ctx, db) },
 		"settlements":      func(ctx context.Context) { runSettlementReconciliationLoop(ctx, db, cfg) },
+		"play_billing":     func(ctx context.Context) { runPlayBillingLoop(ctx, db) },
 		"town_hall_expiry": func(ctx context.Context) { runTownHallExpiryLoop(ctx, db) },
 		"driver_expiry":    func(ctx context.Context) { runDriverExpiryLoop(ctx, db) },
 	}

@@ -1,0 +1,262 @@
+package playbilling
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type Product struct {
+	ProductID   string `json:"product_id"`
+	BasePlanID  string `json:"base_plan_id"`
+	PlanID      string `json:"plan_id"`
+	Name        string `json:"name"`
+	Months      int    `json:"duration_months"`
+	AmountMinor int64  `json:"amount_minor"`
+}
+type Result struct {
+	State                string    `json:"state"`
+	Active               bool      `json:"active"`
+	Pending              bool      `json:"pending"`
+	AutoRenews           bool      `json:"auto_renews"`
+	NeedsAcknowledgement bool      `json:"needs_acknowledgement"`
+	ExpiresAt            time.Time `json:"expires_at"`
+}
+type Store struct {
+	DB        *pgxpool.Pool
+	Client    *Client
+	Vault     *Vault
+	AllowTest bool
+}
+
+var ErrBusy = errors.New("A billing operation is already in progress")
+var ErrIneligible = errors.New("This provider or product is not eligible for checkout")
+
+func (s *Store) Catalog(ctx context.Context) ([]Product, error) {
+	rows, err := s.DB.Query(ctx, `SELECT m.product_id,m.base_plan_id,m.plan_id::text,p.name,m.duration_months,m.amount_minor
+ FROM play_provider_products m JOIN provider_subscription_plans p ON p.id=m.plan_id
+ WHERE m.enabled AND p.is_active ORDER BY p.amount_ngn,m.duration_months LIMIT 100`)
+	if err != nil {
+		return nil, errors.New("Play catalog is unavailable")
+	}
+	defer rows.Close()
+	items := []Product{}
+	for rows.Next() {
+		var p Product
+		if err = rows.Scan(&p.ProductID, &p.BasePlanID, &p.PlanID, &p.Name, &p.Months, &p.AmountMinor); err != nil {
+			return nil, errors.New("Play catalog is unavailable")
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
+// Process serializes verification and entitlement application per provider.
+// Latest Google expiry is assigned, never added to now, so retries/renewals do
+// not duplicate paid periods. Token and order constraints are global ownership
+// boundaries. Credentials and response details never appear in returned errors.
+func (s *Store) Process(ctx context.Context, provider, token, product, base string) (Result, error) {
+	if _, err := uuid.Parse(provider); err != nil || !validToken(token) || !skuPattern.MatchString(product) || !skuPattern.MatchString(base) {
+		return Result{}, ErrIneligible
+	}
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return Result{}, errors.New("Billing storage is unavailable")
+	}
+	defer tx.Rollback(context.Background())
+	var locked bool
+	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "provider-renewal:"+provider).Scan(&locked); err != nil {
+		return Result{}, errors.New("Billing storage is unavailable")
+	}
+	if !locked {
+		return Result{}, ErrBusy
+	}
+	var plan Product
+	var email string
+	var eligible bool
+	err = tx.QueryRow(ctx, `SELECT m.plan_id::text,m.duration_months,m.amount_minor,u.email,(p.is_active AND o.is_active AND o.verification_status='approved' AND u.is_active AND u.email_verified)
+ FROM play_provider_products m JOIN provider_subscription_plans p ON p.id=m.plan_id
+ JOIN provider_organizations o ON o.id=$3::uuid JOIN users u ON u.id=o.owner_user_id
+ WHERE m.product_id=$1 AND m.base_plan_id=$2`, product, base, provider).Scan(&plan.PlanID, &plan.Months, &plan.AmountMinor, &email, &eligible)
+	if err != nil {
+		return Result{}, ErrIneligible
+	}
+	var enabled bool
+	if err = tx.QueryRow(ctx, `SELECT enabled FROM play_provider_products WHERE product_id=$1 AND base_plan_id=$2`, product, base).Scan(&enabled); err != nil {
+		return Result{}, ErrIneligible
+	}
+	hash := TokenHash(token)
+	var subscription, owner, oldProduct, oldBase string
+	err = tx.QueryRow(ctx, `SELECT subscription_id::text,provider_id::text,product_id,base_plan_id FROM play_provider_purchases WHERE token_hash=$1 FOR UPDATE`, hash).Scan(&subscription, &owner, &oldProduct, &oldBase)
+	existing := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, errors.New("Billing storage is unavailable")
+	}
+	if existing && (owner != provider || product != oldProduct || base != oldBase) {
+		return Result{}, ErrIneligible
+	}
+	if !existing && (!enabled || !eligible) {
+		return Result{}, ErrIneligible
+	}
+	expected := Expected{ProductID: product, BasePlanID: base, AccountID: AccountID(provider), AllowTest: s.AllowTest, AmountMinor: plan.AmountMinor}
+	now := time.Now().UTC()
+	receipt, err := s.Client.Verify(ctx, token, expected, now)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{State: receipt.State, Active: receipt.Active, Pending: receipt.Pending, AutoRenews: receipt.AutoRenews, NeedsAcknowledgement: receipt.NeedsAcknowledgement, ExpiresAt: receipt.ExpiresAt}
+	// Pending purchases are durably tracked for recovery but receive no receipt,
+	// paid status, acknowledgement or XP until Google confirms payment.
+	if !existing {
+		if !receipt.Active && !receipt.Pending {
+			return result, nil
+		}
+		var conflict bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND ((status='active' AND current_period_end>now()) OR (billing_provider='flutterwave' AND billing_mode='recurring' AND status IN('pending','past_due','grace'))))
+   OR EXISTS(SELECT 1 FROM play_provider_purchases WHERE provider_id=$1::uuid AND auto_renews)
+   OR EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND renewal_status='uncertain')`, provider).Scan(&conflict); err != nil {
+			return Result{}, errors.New("Billing storage is unavailable")
+		}
+		if conflict {
+			return Result{}, errors.New("Resolve the existing subscription before activating another purchase")
+		}
+		subscription = uuid.NewString()
+		_, err = tx.Exec(ctx, `INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months,billing_provider)
+   VALUES($1::uuid,$2::uuid,$3::uuid,'pending',$4,$5,$6::numeric/100,'one_time',$7,'google_play')`, subscription, provider, plan.PlanID, "PLAY-"+subscription, email, plan.AmountMinor, plan.Months)
+		if err != nil {
+			return Result{}, errors.New("Billing storage is unavailable")
+		}
+	}
+	encrypted, err := s.Vault.Seal(provider, token)
+	if err != nil {
+		return Result{}, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO play_provider_purchases(token_hash,provider_id,subscription_id,product_id,base_plan_id,encrypted_token,state,auto_renews,test_purchase,needs_acknowledgement,next_check_at)
+ VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,$10,now()+interval '5 minutes')
+ ON CONFLICT(token_hash) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,state=EXCLUDED.state,auto_renews=EXCLUDED.auto_renews,needs_acknowledgement=EXCLUDED.needs_acknowledgement,checked_at=now(),next_check_at=EXCLUDED.next_check_at`, hash, provider, subscription, product, base, encrypted, receipt.State, receipt.AutoRenews, receipt.Test, receipt.NeedsAcknowledgement)
+	if err != nil {
+		return Result{}, errors.New("Billing token ownership could not be committed")
+	}
+	if receipt.Active {
+		var receiptSubscription string
+		err = tx.QueryRow(ctx, `INSERT INTO provider_subscription_payments(subscription_id,tx_ref,amount,currency_code,billing_provider,play_order_id,test_purchase)
+   VALUES($1::uuid,$2,$3::numeric/100,'NGN','google_play',$4,$5)
+   ON CONFLICT(play_order_id) DO UPDATE SET play_order_id=EXCLUDED.play_order_id
+   RETURNING subscription_id::text`, subscription, "PLAY-"+subscription, receipt.AmountMinor, receipt.OrderID, receipt.Test).Scan(&receiptSubscription)
+		if err != nil || receiptSubscription != subscription {
+			return Result{}, errors.New("Billing order ownership could not be committed")
+		}
+	}
+	status := "expired"
+	if receipt.Active {
+		status = "active"
+	}
+	if receipt.Pending {
+		status = "pending"
+	}
+	_, err = tx.Exec(ctx, `UPDATE provider_subscriptions SET status=$2,starts_at=COALESCE(starts_at,now()),current_period_end=$3,last_payment_at=CASE WHEN $4 THEN now() ELSE last_payment_at END,updated_at=now(),version=version+1 WHERE id=$1::uuid AND billing_provider='google_play'`, subscription, status, receipt.ExpiresAt, receipt.Active)
+	if err != nil {
+		return Result{}, errors.New("Billing entitlement could not be committed")
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Result{}, errors.New("Billing confirmation is uncertain; restore purchases before paying again")
+	}
+	_, _ = s.DB.Exec(ctx, `DELETE FROM play_provider_checkout_intents WHERE provider_id=$1::uuid`, provider)
+	if receipt.NeedsAcknowledgement {
+		// No money/access transaction is repeated when acknowledgement is retried.
+		_, ackErr := s.Client.Acknowledge(ctx, token, expected, time.Now().UTC())
+		if ackErr == nil {
+			result.NeedsAcknowledgement = false
+			_, _ = s.DB.Exec(ctx, `UPDATE play_provider_purchases SET needs_acknowledgement=false WHERE token_hash=$1 AND provider_id=$2::uuid`, hash, provider)
+		}
+	}
+	return result, nil
+}
+
+// Prepare reserves checkout under the same provider lock used by Flutterwave,
+// preventing two workspaces/devices from opening simultaneous paid checkouts.
+func (s *Store) Prepare(ctx context.Context, provider, product, base string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return errors.New("Billing storage is unavailable")
+	}
+	defer tx.Rollback(context.Background())
+	var locked, eligible bool
+	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "provider-renewal:"+provider).Scan(&locked); err != nil {
+		return errors.New("Billing storage is unavailable")
+	}
+	if !locked {
+		return ErrBusy
+	}
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_organizations o JOIN users u ON u.id=o.owner_user_id
+ JOIN play_provider_products m ON m.product_id=$2 AND m.base_plan_id=$3 JOIN provider_subscription_plans p ON p.id=m.plan_id
+ WHERE o.id=$1::uuid AND o.is_active AND o.verification_status='approved' AND u.is_active AND u.email_verified AND m.enabled AND p.is_active)
+ AND NOT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND (s.status='pending' OR (s.status='active' AND s.current_period_end>now()) OR (s.billing_provider='flutterwave' AND s.billing_mode='recurring' AND s.status IN('past_due','grace'))))
+ AND NOT EXISTS(SELECT 1 FROM play_provider_purchases WHERE provider_id=$1::uuid AND auto_renews)
+ AND NOT EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND renewal_status='uncertain')
+ AND NOT EXISTS(SELECT 1 FROM play_provider_checkout_intents WHERE provider_id=$1::uuid AND expires_at>now())`, provider, product, base).Scan(&eligible)
+	if err != nil {
+		return errors.New("Billing storage is unavailable")
+	}
+	if !eligible {
+		return ErrIneligible
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO play_provider_checkout_intents VALUES($1::uuid,$2,$3,now()+interval '15 minutes') ON CONFLICT(provider_id) DO UPDATE SET product_id=EXCLUDED.product_id,base_plan_id=EXCLUDED.base_plan_id,expires_at=EXCLUDED.expires_at`, provider, product, base)
+	if err != nil {
+		return errors.New("Billing storage is unavailable")
+	}
+	return tx.Commit(ctx)
+}
+
+// Reconcile claims bounded work without parallel duplicate claims. Failure
+// schedules a later retry; a stale or unreachable store never extends expiry.
+func (s *Store) Reconcile(ctx context.Context) error {
+	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT token_hash FROM play_provider_purchases WHERE next_check_at<=now() ORDER BY next_check_at LIMIT 10 FOR UPDATE SKIP LOCKED)
+ UPDATE play_provider_purchases p SET next_check_at=now()+interval '5 minutes' FROM due WHERE p.token_hash=due.token_hash
+ RETURNING p.provider_id::text,p.encrypted_token,p.product_id,p.base_plan_id`)
+	if err != nil {
+		return errors.New("Play reconciliation storage is unavailable")
+	}
+	type work struct {
+		provider, product, base string
+		encrypted               []byte
+	}
+	items := []work{}
+	for rows.Next() {
+		var w work
+		if err = rows.Scan(&w.provider, &w.encrypted, &w.product, &w.base); err != nil {
+			rows.Close()
+			return errors.New("Play reconciliation storage is unavailable")
+		}
+		items = append(items, w)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return errors.New("Play reconciliation storage is unavailable")
+	}
+	failures := 0
+	for _, w := range items {
+		token, e := s.Vault.Open(w.provider, w.encrypted)
+		if e == nil {
+			_, e = s.Process(ctx, w.provider, token, w.product, w.base)
+		}
+		if e != nil {
+			failures++
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if failures > 0 {
+		return fmt.Errorf("Play reconciliation: %d checks deferred", failures)
+	}
+	return nil
+}

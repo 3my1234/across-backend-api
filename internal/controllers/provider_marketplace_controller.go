@@ -1568,8 +1568,23 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	if !locked {
 		return fiber.NewError(409, "A renewal change or checkout is already in progress. Check its status before retrying.")
 	}
+	// Additive migration may not exist in legacy integration fixtures. When it
+	// does, the direct gateway respects a reserved Play checkout on this account.
+	var playIntentsExist bool
+	if err = checkoutTx.QueryRow(c.Context(), `SELECT to_regclass('play_provider_checkout_intents') IS NOT NULL`).Scan(&playIntentsExist); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if playIntentsExist {
+		var reserved bool
+		if err = checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM play_provider_checkout_intents WHERE provider_id=$1::uuid AND expires_at>now())`, providerID).Scan(&reserved); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if reserved {
+			return fiber.NewError(409, "A Google Play checkout may still be in progress. Restore purchases before paying again.")
+		}
+	}
 	var alreadySubscribed bool
-	if err := checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now())`, providerID).Scan(&alreadySubscribed); err != nil {
+	if err := checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE provider_id=$1::uuid AND ((status='active' AND current_period_end>now()) OR (to_jsonb(s)->>'billing_provider'='google_play' AND status IN ('active','pending','grace','past_due'))))`, providerID).Scan(&alreadySubscribed); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if alreadySubscribed {
@@ -1736,7 +1751,7 @@ func settleProviderSubscription(ctx context.Context, db *pgxpool.Pool, txRef, tr
 		FROM provider_subscriptions s
 		JOIN provider_subscription_plans p ON p.id=s.plan_id
 		JOIN provider_organizations organization ON organization.id=s.provider_id
-		WHERE s.tx_ref=$1::text
+		WHERE s.tx_ref=$1::text AND COALESCE(to_jsonb(s)->>'billing_provider','flutterwave')='flutterwave'
 		FOR UPDATE OF s
 	`, txRef).Scan(&subscriptionID, &providerID, &expected, &ownerUserID, &countryCode, &billingMode, &existingTransaction, &months)
 	if err != nil {

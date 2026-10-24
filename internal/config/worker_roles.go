@@ -8,7 +8,7 @@ import (
 // WorkerRoleNames selects existing durable consumers, not new queues or copies
 // of business logic. Blank retains the existing all-consumer deployment.
 func (c Config) WorkerRoleNames() ([]string, error) {
-	all := []string{"web_push", "email", "push", "push_receipts", "auto_confirm", "batch_closure", "settlements", "town_hall_expiry", "driver_expiry"}
+	all := []string{"web_push", "email", "push", "push_receipts", "auto_confirm", "batch_closure", "settlements", "town_hall_expiry", "driver_expiry", "play_billing"}
 	raw := strings.ToLower(strings.TrimSpace(c.WorkerRoles))
 	if raw == "" || raw == "all" {
 		return all, nil

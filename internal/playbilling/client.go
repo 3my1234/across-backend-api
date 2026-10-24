@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,12 +57,16 @@ func AccountID(providerID string) string {
 type Expected struct {
 	ProductID, BasePlanID, AccountID string
 	AllowTest                        bool
+	// Nonzero requires Google's undiscounted NGN recurring price to match the
+	// server catalog exactly. The ledger never accepts mobile price claims.
+	AmountMinor int64
 }
 
 type Verified struct {
 	ProductID, BasePlanID, OrderID, State                   string
 	ExpiresAt                                               time.Time
 	Active, Pending, AutoRenews, Test, NeedsAcknowledgement bool
+	AmountMinor                                             int64
 }
 
 type purchase struct {
@@ -78,12 +83,21 @@ type purchase struct {
 		OrderID      string `json:"latestSuccessfulOrderId"`
 		AutoRenewing *struct {
 			Enabled bool `json:"autoRenewEnabled"`
+			Price   struct {
+				Currency string `json:"currencyCode"`
+				Units    string `json:"units"`
+				Nanos    int64  `json:"nanos"`
+			} `json:"recurringPrice"`
 		} `json:"autoRenewingPlan"`
 		Prepaid *struct{} `json:"prepaidPlan"`
 		Offer   struct {
 			BasePlanID string `json:"basePlanId"`
 			OfferID    string `json:"offerId"`
 		} `json:"offerDetails"`
+		Phase struct {
+			FreeTrial    *struct{} `json:"freeTrial"`
+			Introductory *struct{} `json:"introductoryPrice"`
+		} `json:"offerPhase"`
 	} `json:"lineItems"`
 }
 
@@ -160,6 +174,20 @@ func validate(receipt purchase, expected Expected, now time.Time) (Verified, err
 		return Verified{}, errors.New("Play expiry is invalid")
 	}
 	out.Active = out.Active && out.ExpiresAt.After(now)
+	if receipt.State == "SUBSCRIPTION_STATE_EXPIRED" || receipt.State == "SUBSCRIPTION_STATE_CANCELED" || receipt.State == "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED" {
+		out.AutoRenews = false
+	}
+	if expected.AmountMinor > 0 && out.Active {
+		if item.AutoRenewing == nil || item.Phase.FreeTrial != nil || item.Phase.Introductory != nil {
+			return Verified{}, errors.New("Play discounted or prepaid plan is not configured")
+		}
+		price := item.AutoRenewing.Price
+		units, e := strconv.ParseInt(price.Units, 10, 64)
+		if e != nil || units < 0 || units > 999999999999 || price.Nanos < 0 || price.Nanos >= 1000000000 || price.Nanos%10000000 != 0 || price.Currency != "NGN" || units*100+price.Nanos/10000000 != expected.AmountMinor {
+			return Verified{}, errors.New("Play price does not match the configured plan")
+		}
+		out.AmountMinor = expected.AmountMinor
+	}
 	out.NeedsAcknowledgement = out.Active && receipt.AcknowledgementState == "ACKNOWLEDGEMENT_STATE_PENDING"
 	return out, nil
 }

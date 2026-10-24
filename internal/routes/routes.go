@@ -18,6 +18,7 @@ import (
 
 func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config, runtimeSnapshots ...func() map[string]any) {
 	payments := controllers.NewPaymentController(db, cfg)
+	playBilling := controllers.NewPlayBillingController(db)
 	admin := controllers.NewAdminController(db, cfg)
 	orders := controllers.NewOrderController(db, cfg.FlutterwaveCustomerPaysFees, func() bool { return cfg.ProviderSubscriptionsRequired(time.Now().UTC()) })
 	if readDB == nil {
@@ -354,6 +355,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/me/videos/complete", marketplaceController.CompletePostVideo)
 	authed.Post("/providers/me/subscription-renewal", marketplaceController.ProviderManageRenewal)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
+	authed.Get("/providers/me/play-billing", playBilling.Catalog)
+	authed.Post("/providers/me/play-billing/prepare", playBilling.Prepare)
+	authed.Post("/providers/me/play-billing/verify", playBilling.Verify)
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
 	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
