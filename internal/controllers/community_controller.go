@@ -76,6 +76,9 @@ func communityID(c *fiber.Ctx, key string) (string, error) {
 	return id, nil
 }
 func communityError(err error) error {
+	if quota := providerCapacityError(err); quota != nil {
+		return quota
+	}
 	var p *pgconn.PgError
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound

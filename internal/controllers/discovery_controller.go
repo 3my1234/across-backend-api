@@ -121,9 +121,9 @@ func rankDiscovery(items []discoveryItem, placement, session string, limit int) 
 			case "silver":
 				weight = 2
 			case "gold":
-				weight = 3
+				weight = 5
 			case "diamond":
-				weight = 4
+				weight = 3
 			}
 			weight *= float64(item.Priority)
 		}

@@ -302,6 +302,10 @@ func testXPCheckoutRecovery(t *testing.T, sellerPrice float64) {
 	// Exercise the real seller create/edit/submit routes. Omitted mode preserves
 	// older portal updates; new products default to Flutterwave.
 	if _, err = db.Exec(ctx, `CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text DEFAULT 'owner',is_active boolean DEFAULT true);
+ CREATE TABLE provider_listings(id uuid PRIMARY KEY,provider_id uuid,status text);
+ -- This historical payment fixture deliberately grants capacity; tier enforcement
+ -- is exercised with the real migration in provider_tier_entitlements tests.
+ CREATE FUNCTION provider_current_benefits(provider uuid) RETURNS jsonb LANGUAGE sql AS $$ SELECT jsonb_build_object('post_limit',listing_limit) FROM provider_public_identity WHERE provider_id=provider $$;
  ALTER TABLE provider_organizations ADD provider_type text DEFAULT 'product_merchant';
  ALTER TABLE products ADD variants jsonb,ADD exchange_rate_snapshot numeric,ADD atlantic_last_mile boolean DEFAULT false,ADD moderation_notes text DEFAULT '';
  ALTER TABLE product_delivery_areas ADD uses_primary_price boolean DEFAULT false;`); err != nil {

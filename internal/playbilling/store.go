@@ -2,6 +2,7 @@ package playbilling
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -13,14 +14,18 @@ import (
 )
 
 type Product struct {
-	ProductID   string `json:"product_id"`
-	BasePlanID  string `json:"base_plan_id"`
-	PlanID      string `json:"plan_id"`
-	Name        string `json:"name"`
-	Months      int    `json:"duration_months"`
-	AmountMinor int64  `json:"amount_minor"`
-	Purchasable bool   `json:"purchasable"`
-	Prepaid     bool   `json:"prepaid"`
+	PostPolicy    json.RawMessage `json:"post_policy,omitempty"`
+	ListingLimit  int             `json:"listing_limit"`
+	MonthlyAmount float64         `json:"amount_ngn"`
+	BadgeTier     string          `json:"badge_tier"`
+	ProductID     string          `json:"product_id"`
+	BasePlanID    string          `json:"base_plan_id"`
+	PlanID        string          `json:"plan_id"`
+	Name          string          `json:"name"`
+	Months        int             `json:"duration_months"`
+	AmountMinor   int64           `json:"amount_minor"`
+	Purchasable   bool            `json:"purchasable"`
+	Prepaid       bool            `json:"prepaid"`
 }
 type Result struct {
 	State                string    `json:"state"`
