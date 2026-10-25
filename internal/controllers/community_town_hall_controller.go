@@ -17,21 +17,37 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	// Every authenticated account can request as a buyer. Provider permissions
 	// apply to responding, not to owning a request; workspace is never authority.
 	var in struct {
-		Message     string  `json:"message"`
-		ClientID    string  `json:"client_request_id"`
-		Title       string  `json:"title"`
-		Description string  `json:"description"`
-		Category    string  `json:"category"`
-		Location    string  `json:"location"`
-		Quantity    float64 `json:"quantity"`
-		Unit        string  `json:"unit"`
-		Price       float64 `json:"target_unit_price"`
+		RequestKind     string  `json:"request_kind"`
+		PickupArea      string  `json:"pickup_area"`
+		DestinationArea string  `json:"destination_area"`
+		Message         string  `json:"message"`
+		ClientID        string  `json:"client_request_id"`
+		Title           string  `json:"title"`
+		Description     string  `json:"description"`
+		Category        string  `json:"category"`
+		Location        string  `json:"location"`
+		Quantity        float64 `json:"quantity"`
+		Unit            string  `json:"unit"`
+		Price           float64 `json:"target_unit_price"`
 	}
 	if c.BodyParser(&in) != nil {
 		return fiber.ErrBadRequest
 	}
 	if _, err := uuid.Parse(in.ClientID); err != nil {
 		return fiber.NewError(422, "A request reference is required")
+	}
+	in.RequestKind = strings.TrimSpace(in.RequestKind)
+	if in.RequestKind != "" && in.RequestKind != "product" && in.RequestKind != "service" && in.RequestKind != "transport" {
+		return fiber.NewError(422, "Choose products, services or transport")
+	}
+	in.Category = strings.TrimSpace(in.Category)
+	in.PickupArea = strings.TrimSpace(in.PickupArea)
+	in.DestinationArea = strings.TrimSpace(in.DestinationArea)
+	if len(in.Category) > 100 || len(in.PickupArea) > 200 || len(in.DestinationArea) > 200 || len(in.Location) > 200 {
+		return fiber.NewError(422, "Shorten the category or location")
+	}
+	if in.PickupArea != "" {
+		in.Location = in.PickupArea
 	}
 	in.Title = strings.TrimSpace(in.Title)
 	messageOnly := strings.TrimSpace(in.Message) != ""
@@ -42,7 +58,7 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 			title = title[:80]
 		}
 		in.Title = string(title)
-		in.Location, in.Unit, in.Category = "", "", ""
+		in.Unit = ""
 		in.Quantity, in.Price = 0, 0
 	}
 	in.Description = strings.TrimSpace(in.Description)
@@ -70,7 +86,7 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 	}
 	if id != requested {
 		var same bool
-		err = tx.QueryRow(c.Context(), `SELECT description=$2 AND location=$3 AND COALESCE(quantity,0)=$4 AND unit=$5 AND COALESCE(target_unit_price,0)=$6 AND category=$7 AND message_only=$8 FROM town_hall_requests WHERE room_id=$1::uuid`, id, in.Description, in.Location, in.Quantity, in.Unit, in.Price, in.Category, messageOnly).Scan(&same)
+		err = tx.QueryRow(c.Context(), `SELECT description=$2 AND location=$3 AND COALESCE(quantity,0)=$4 AND unit=$5 AND COALESCE(target_unit_price,0)=$6 AND category=$7 AND message_only=$8 AND EXISTS(SELECT 1 FROM chat_rooms r WHERE r.id=room_id AND COALESCE(r.context->>'request_kind','')=$9 AND COALESCE(r.context->>'pickup_area','')=$10 AND COALESCE(r.context->>'destination_area','')=$11) FROM town_hall_requests WHERE room_id=$1::uuid`, id, in.Description, in.Location, in.Quantity, in.Unit, in.Price, in.Category, messageOnly, in.RequestKind, in.PickupArea, in.DestinationArea).Scan(&same)
 		if err != nil {
 			return communityError(err)
 		}
@@ -78,6 +94,10 @@ func (s *CommunityController) HallCreate(c *fiber.Ctx) error {
 			return fiber.NewError(409, "Request reference already used")
 		}
 		return c.Status(201).JSON(fiber.Map{"id": id})
+	}
+	contextData, _ := json.Marshal(fiber.Map{"request_kind": in.RequestKind, "pickup_area": in.PickupArea, "destination_area": in.DestinationArea})
+	if _, err = tx.Exec(c.Context(), `UPDATE chat_rooms SET context=context||$2::jsonb WHERE id=$1::uuid`, id, contextData); err != nil {
+		return communityError(err)
 	}
 	_, err = tx.Exec(c.Context(), `INSERT INTO town_hall_requests(room_id,description,category,location,quantity,unit,target_unit_price,message_only) VALUES($1::uuid,$2,$3,$4,NULLIF($5::numeric,0),$6,NULLIF($7::numeric,0),$8)`, id, in.Description, in.Category, in.Location, in.Quantity, in.Unit, in.Price, messageOnly)
 	if err != nil {
@@ -98,13 +118,16 @@ const hallPreviewSQL = `SELECT jsonb_build_object('id',r.id,'title',r.title,'sta
  'expires_at',h.engagement_deadline,
  'provider_engaged',h.first_provider_engaged_at IS NOT NULL,'is_owner',r.owner_user_id=$1::uuid,
  'buyer_name',buyer.full_name, 'buyer_avatar_url',buyer.avatar_url,
- 'description',h.description,'message_only',h.message_only,'category',h.category,'location',h.location,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'target_unit_price',h.target_unit_price,
+ 'request_kind',COALESCE(r.context->>'request_kind',''),'pickup_area',COALESCE(r.context->>'pickup_area',''),'destination_area',COALESCE(r.context->>'destination_area',''),'description',h.description,'message_only',h.message_only,'category',h.category,'location',h.location,'quantity',h.quantity,'unit',h.unit,'currency_code',h.currency_code,'target_unit_price',h.target_unit_price,
  'seats',(SELECT count(*) FROM chat_participants p WHERE p.room_id=r.id AND p.role='provider' AND p.state='active'),
  'admitted',EXISTS(SELECT 1 FROM chat_participants p WHERE p.room_id=r.id AND p.user_id=$1::uuid AND p.state='active'),
  'offers',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',o.id,'provider_id',o.provider_id,'provider_name',i.name,'badge_tier',i.badge_tier,'provider_identity',jsonb_build_object('id',i.provider_id,'name',i.name,'avatar_url',i.avatar_url,'verified',i.verified,'paid_active',i.paid_active,'tier',i.badge_tier),'unit_price',o.unit_price,'terms',o.terms,'updated_at',o.updated_at) ORDER BY o.unit_price,o.id) FROM town_hall_offers o JOIN provider_public_identity i ON i.provider_id=o.provider_id WHERE o.room_id=r.id AND (r.owner_user_id=$1::uuid OR EXISTS(SELECT 1 FROM chat_participants p WHERE p.room_id=o.room_id AND p.provider_id=o.provider_id AND p.state='active'))),'[]'::jsonb))
  FROM chat_rooms r JOIN town_hall_requests h ON h.room_id=r.id JOIN users buyer ON buyer.id=r.owner_user_id`
 
 func (s *CommunityController) HallList(c *fiber.Ctx) error {
+	if hallHasDiscoveryFilters(c) {
+		return s.HallSearch(c)
+	}
 	page, err := parseAdminPage(c)
 	if err != nil {
 		return err
