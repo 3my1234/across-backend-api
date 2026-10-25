@@ -125,6 +125,39 @@ func TestDiscoveryPostgresEligibilityControlsAndMetrics(t *testing.T) {
 			t.Fatal("type scope discarded eligible inventory", kind, scoped)
 		}
 	}
+	for _, kind := range []string{"product", "service"} {
+		prefix := "/discovery?country_code=NG&session=" + uuid.NewString() + "&kind=" + kind
+		legacy := communityCall(t, app, "GET", prefix, "", "", 200)
+		if len(legacy["promoted"].([]any)) > 3 {
+			t.Fatal("legacy placement size changed")
+		}
+		carousel := communityCall(t, app, "GET", prefix+"&promoted_limit=12", "", "", 200)
+		seen := map[string]bool{}
+		if len(carousel["promoted"].([]any)) != 11 {
+			t.Fatal("eligible paid carousel pool missing", kind, carousel)
+		}
+		for _, raw := range carousel["promoted"].([]any) {
+			card := raw.(map[string]any)
+			provider := card["provider_id"].(string)
+			if card["kind"] != kind || provider == providerIDs[0] || seen[provider] {
+				t.Fatal("carousel bypassed type,paid eligibility or diversity")
+			}
+			seen[provider] = true
+			receipt, e := d.readReceipt(card["receipt"].(string))
+			if e != nil || receipt.Placement != "promoted" {
+				t.Fatal("carousel receipt invalid", e)
+			}
+		}
+		bounded := communityCall(t, app, "GET", prefix+"&promoted_limit=5", "", "", 200)
+		if len(bounded["promoted"].([]any)) != 5 {
+			t.Fatal("requested bound ignored")
+		}
+		for _, value := range []string{"0", "25", "-1", "huge", "1.5"} {
+			communityCall(t, app, "GET", prefix+"&promoted_limit="+value, "", "", 400)
+		}
+	}
+	communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&promoted_limit=12", "", "", 400)
+	communityCall(t, app, "GET", "/discovery?country_code=NG&session="+uuid.NewString()+"&source_kind=product&source_id="+products[0]+"&promoted_limit=12", "", "", 400)
 	// Unscoped homepage candidates include both types; ranking may legitimately
 	// select only one type in a particular bounded rail.
 	homeRows, e := db.Query(ctx, discoveryCandidateSQL, "NG", "", "", "", []string{}, []string{}, uuid.NewString(), false, "")

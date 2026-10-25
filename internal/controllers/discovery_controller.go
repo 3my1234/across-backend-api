@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -207,6 +208,16 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 		}
 		listingKind = sourceKind
 	}
+	// Dedicated carousel clients may request a bounded pool; old feeds keep
+	// their original small promoted share. Existing eligibility/diversity applies.
+	carouselLimit := 0
+	if raw := c.Query("promoted_limit"); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 || n > 24 || sourceID != "" || listingKind == "" {
+			return fiber.NewError(400, "promoted_limit requires a product/service catalogue and must be 1 to 24")
+		}
+		carouselLimit = n
+	}
 	categories := []string{}
 	sourceTitle := ""
 	if sourceID != "" {
@@ -292,6 +303,9 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 			}
 			if limit > 3 {
 				limit = 3
+			}
+			if carouselLimit > 0 {
+				limit = carouselLimit
 			}
 		}
 		ranked := rankDiscovery(pool, placement, session+time.Now().UTC().Format("2006-01-02T15"), limit)
