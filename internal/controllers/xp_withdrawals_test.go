@@ -47,12 +47,18 @@ func TestXPWithdrawalsReserveRetryRejectAndPay(t *testing.T) {
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("user_id", c.Get("X-User"))
 		c.Locals("admin_id", admin)
+		role := "super_admin"
+		if strings.HasPrefix(c.Path(), "/finance-review/") {
+			role = "finance_admin"
+		}
+		c.Locals("admin_role", role)
 		return c.Next()
 	})
 	controller := NewXPController(db)
 	app.Post("/withdraw", controller.RequestWithdrawal)
 	app.Get("/withdraw", controller.ListWithdrawals)
 	app.Patch("/review/:withdrawal_id", controller.AdminReviewWithdrawal)
+	app.Patch("/finance-review/:withdrawal_id", controller.AdminReviewWithdrawal)
 	call := func(method, path, actor string, body any) (int, map[string]any) {
 		raw, _ := json.Marshal(body)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(raw)))
@@ -125,6 +131,16 @@ func TestXPWithdrawalsReserveRetryRejectAndPay(t *testing.T) {
 		t.Fatal(status, result)
 	}
 	id = result["id"].(string)
+	if status, _ := call("PATCH", "/finance-review/"+id, user, map[string]any{"status": "processing"}); status != 200 {
+		t.Fatal("finance preparation rejected", status)
+	}
+	if status, _ := call("PATCH", "/finance-review/"+id, user, map[string]any{"status": "paid", "payout_reference": "forbidden-finance-payment"}); status != 403 {
+		t.Fatal("finance recorded final payout", status)
+	}
+	var currentStatus string
+	if err := db.QueryRow(ctx, "SELECT status FROM xp_withdrawals WHERE id=$1", id).Scan(&currentStatus); err != nil || currentStatus != "processing" {
+		t.Fatal("forbidden payout changed withdrawal", currentStatus, err)
+	}
 	for _, action := range []map[string]any{{"status": "processing"}, {"status": "paid", "payout_reference": "bank-2"}, {"status": "paid", "payout_reference": "bank-2"}} {
 		status, result = call("PATCH", "/review/"+id, user, action)
 		if status != 200 {

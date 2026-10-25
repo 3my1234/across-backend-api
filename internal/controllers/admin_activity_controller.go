@@ -178,7 +178,7 @@ func (a *AdminController) MarkAllActivityRead(c *fiber.Ctx) error {
 // procurement handoff. Admin III receives dispatch/arrival work and buyer
 // completion. The actor exclusion above prevents self-notifications.
 const adminActivityVisibilitySQL = `(
-	$3::text IN ('super_admin', 'catalog_admin')
+	$3::text IN ('super_admin', 'catalog_admin') OR ($3::text='support_admin' AND event.source='support')
 	OR (event.source = 'batch' AND $3::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
 		('funds_sent_to_procurement', 'procurement_acknowledged'))
 	OR (event.source = 'batch' AND $3::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
@@ -186,7 +186,7 @@ const adminActivityVisibilitySQL = `(
 )`
 
 const adminActivityVisibilityMarkAllSQL = `(
-	$2::text IN ('super_admin', 'catalog_admin')
+	$2::text IN ('super_admin', 'catalog_admin') OR ($2::text='support_admin' AND event.source='support')
 	OR (event.source = 'batch' AND $2::text = 'procurement_admin' AND COALESCE(event.status::text, '') IN
 		('funds_sent_to_procurement', 'procurement_acknowledged'))
 	OR (event.source = 'batch' AND $2::text = 'courier_admin' AND COALESCE(event.status::text, '') IN
