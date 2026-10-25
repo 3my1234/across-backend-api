@@ -94,6 +94,13 @@ func TestProductChatMigrationPermissionsAttachmentsAndRetries(t *testing.T) {
 		_ = json.NewDecoder(response.Body).Decode(&result)
 		return response.StatusCode, result
 	}
+	unrelated := uuid.NewString()
+	if _, err = db.Exec(ctx, `INSERT INTO provider_organizations(id,business_name)VALUES($1,'Unrelated business')`, unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO provider_members(provider_id,user_id,role)VALUES($1,$2,'owner')`, unrelated, buyer); err != nil {
+		t.Fatal(err)
+	}
 	clientID := uuid.NewString()
 	payload := `{"message":"Is this available?","client_message_id":"` + clientID + `"}`
 	status, started := call("POST", "/products/"+product+"/chat", buyer, payload)

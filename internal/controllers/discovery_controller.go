@@ -196,6 +196,17 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 		return fiber.NewError(422, "A discovery session reference is required")
 	}
 	sourceKind, sourceID := c.Query("source_kind"), c.Query("source_id")
+	listingKind := c.Query("kind")
+	if listingKind != "" && listingKind != "product" && listingKind != "service" {
+		return fiber.NewError(400, "kind must be product or service")
+	}
+	// Detail feeds stay within the source type, including requests from older apps.
+	if sourceID != "" {
+		if listingKind != "" && listingKind != sourceKind {
+			return fiber.NewError(400, "kind must match the source listing")
+		}
+		listingKind = sourceKind
+	}
 	categories := []string{}
 	sourceTitle := ""
 	if sourceID != "" {
@@ -236,7 +247,7 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	seed := sha256.Sum256([]byte(session + time.Now().UTC().Format("2006-01-02T15:04")))
 	pivot := uuid.UUID(seed[:16]).String()
 	query := discoveryCandidateSQL
-	rows, err := d.db.Query(ctx, query, country, state, city, sourceID, words, categories, pivot, sourceID != "" || c.Query("search") != "")
+	rows, err := d.db.Query(ctx, query, country, state, city, sourceID, words, categories, pivot, sourceID != "" || c.Query("search") != "", listingKind)
 	if err != nil {
 		return fiber.NewError(503, "Discovery is temporarily unavailable")
 	}
@@ -306,10 +317,10 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELECT 'product' kind,p.id,p.provider_id,p.title,p.category_path categories,p.inventory_city city,p.image_urls images,
  CASE WHEN p.is_flash_sale AND a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN p.flash_sale_price+a.delivery_fee ELSE a.delivered_price END price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode,CASE WHEN a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price THEN CASE WHEN p.is_flash_sale AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN GREATEST(p.local_selling_price,COALESCE(p.compare_at_price,0))+a.delivery_fee WHEN p.compare_at_price>p.local_selling_price THEN p.compare_at_price+a.delivery_fee ELSE 0 END ELSE 0 END compare_at_price
  FROM products p JOIN provider_public_identity v ON v.provider_id=p.provider_id AND v.verified AND p.plan_slot<=v.listing_limit JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$1 AND (a.state_key='' OR a.state_key=$2) AND (a.city_key='' OR a.city_key=$3) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) a ON true
- WHERE p.is_active AND p.published_at IS NOT NULL AND p.moderation_status='approved' AND p.inventory_count>0 AND p.payment_mode='contact' AND p.fulfillment_mode IN('merchant_local','merchant_cross_border') AND ($4='' OR p.id<>NULLIF($4,'')::uuid)
+ WHERE ($9::text='' OR $9='product') AND p.is_active AND p.published_at IS NOT NULL AND p.moderation_status='approved' AND p.inventory_count>0 AND p.payment_mode='contact' AND p.fulfillment_mode IN('merchant_local','merchant_cross_border') AND ($4='' OR p.id<>NULLIF($4,'')::uuid)
  AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed'),0::numeric
  FROM provider_listings l JOIN provider_public_identity v ON v.provider_id=l.provider_id AND v.verified AND l.plan_slot<=v.listing_limit JOIN countries_config market ON market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways)
- WHERE l.country_code=$1 AND l.published_at IS NOT NULL AND l.status='approved' AND l.is_available_now AND ($4='' OR l.id<>NULLIF($4,'')::uuid)
+ WHERE ($9::text='' OR $9='service') AND l.country_code=$1 AND l.published_at IS NOT NULL AND l.status='approved' AND l.is_available_now AND ($4='' OR l.id<>NULLIF($4,'')::uuid)
  AND (NOT $8 OR l.category=ANY($6::text[]) OR to_tsvector('simple',l.title||' '||l.description||' '||l.category) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), content AS MATERIALIZED (
  (SELECT * FROM product_candidates WHERE id>=$7::uuid ORDER BY id LIMIT 128)
  UNION ALL (SELECT * FROM product_candidates WHERE id<$7::uuid ORDER BY id LIMIT 128)

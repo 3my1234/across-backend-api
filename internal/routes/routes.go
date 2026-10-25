@@ -362,6 +362,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/me/play-billing/prepare", playRateLimit, playAdmission.Handler, playBilling.Prepare)
 	authed.Post("/providers/me/play-billing/verify", playRateLimit, playAdmission.Handler, playBilling.Verify)
 	authed.Get("/marketplace/requests", marketplaceController.ListMyRequests)
+	authed.Get("/marketplace/providers/:provider_id/contact-access", marketplaceController.BusinessContactAccess)
 	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
 	authed.Put("/marketplace/listings/:listing_id/review", marketplaceController.UpsertListingReview)

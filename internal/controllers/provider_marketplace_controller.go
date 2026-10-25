@@ -1154,6 +1154,10 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.ErrNotFound
 	}
+	// Bookings and enquiries also open a business chat; they obey the same rule.
+	if err = independentBusinessContact(c.Context(), tx, providerID, userID); err != nil {
+		return err
+	}
 	wanted := strings.ToLower(strings.TrimSpace(req.RequestType))
 	if directBookingType(lt) {
 		if wanted != "booking" && wanted != "appointment" {
