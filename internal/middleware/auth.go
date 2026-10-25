@@ -84,11 +84,4 @@ func adminRoleAllowed(role string, allowedRoles ...string) bool {
 	return false
 }
 
-func canonicalAdminRole(role string) string {
-	switch strings.TrimSpace(strings.ToLower(role)) {
-	case "admin", "admin_i", "admin_ii", "admin_iii", "procurement_admin", "courier_admin":
-		return "catalog_admin"
-	default:
-		return strings.TrimSpace(strings.ToLower(role))
-	}
-}
+func canonicalAdminRole(role string) string { return auth.CanonicalAdminRole(role) }

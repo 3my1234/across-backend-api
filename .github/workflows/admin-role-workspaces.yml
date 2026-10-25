@@ -1,0 +1,33 @@
+name: Admin role permissions
+on:
+  pull_request:
+    branches: [main, feat/milestone-1-foundation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  admin-roles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: native_contracts
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-ci-only@127.0.0.1:5432/native_contracts?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Verify role access, revocation, staff audit and payout separation
+        run: go test -race -p 1 -count=1 -v ./internal/controllers ./internal/routes -run '^Test(AdminAccess|AdminRoleRoutes|XPWithdrawals)'
+      - name: Compile all handlers and route registrations
+        run: go test -p 1 ./internal/controllers ./internal/routes -run '^$'

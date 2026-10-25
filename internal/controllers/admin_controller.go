@@ -110,41 +110,6 @@ func (a *AdminController) Overview(c *fiber.Ctx) error {
 	})
 }
 
-func (a *AdminController) CreateAdmin(c *fiber.Ctx) error {
-	var req struct {
-		Email    string `json:"email"`
-		FullName string `json:"full_name"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
-	}
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	req.FullName = strings.TrimSpace(req.FullName)
-	req.Role = normalizeAdminRole(req.Role)
-	if req.Role == "" {
-		req.Role = "catalog_admin"
-	}
-	if req.Email == "" || req.FullName == "" || len(req.Password) < 10 || !isValidAdminRole(req.Role) {
-		return fiber.NewError(fiber.StatusBadRequest, "email, name, 10+ character password, and valid role are required")
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	var id string
-	err = a.db.QueryRow(c.Context(), `
-		INSERT INTO admins(email, full_name, password_hash, role)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, req.Email, req.FullName, string(hash), req.Role).Scan(&id)
-	if err != nil {
-		return fiber.NewError(fiber.StatusConflict, "admin already exists")
-	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": id, "email": req.Email, "role": req.Role})
-}
-
 func (a *AdminController) ListAdmins(c *fiber.Ctx) error {
 	page, err := parseAdminPage(c)
 	if err != nil {
@@ -259,72 +224,6 @@ func (a *AdminController) DeleteUser(c *fiber.Ctx) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return fiber.NewError(fiber.StatusNotFound, "user not found")
-	}
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func (a *AdminController) ResetAdminPassword(c *fiber.Ctx) error {
-	adminID := c.Params("admin_id")
-	var req struct {
-		Password string `json:"password"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
-	}
-	req.Password = strings.TrimSpace(req.Password)
-	if len(req.Password) < 10 {
-		return fiber.NewError(fiber.StatusBadRequest, "password must be at least 10 characters")
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	tag, err := a.db.Exec(c.Context(), `
-		UPDATE admins
-		SET password_hash = $2, updated_at = now()
-		WHERE id = $1
-	`, adminID, string(hash))
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to reset password")
-	}
-	if tag.RowsAffected() == 0 {
-		return fiber.NewError(fiber.StatusNotFound, "admin not found")
-	}
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func (a *AdminController) DeleteAdmin(c *fiber.Ctx) error {
-	adminID := c.Params("admin_id")
-	currentAdminID, _ := c.Locals("admin_id").(string)
-	if currentAdminID != "" && currentAdminID == adminID {
-		return fiber.NewError(fiber.StatusBadRequest, "you cannot delete your own account")
-	}
-
-	var targetRole string
-	if err := a.db.QueryRow(c.Context(), `SELECT role FROM admins WHERE id = $1`, adminID).Scan(&targetRole); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "admin not found")
-	}
-
-	if targetRole == "super_admin" {
-		var activeSuperAdmins int
-		if err := a.db.QueryRow(c.Context(), `
-			SELECT COUNT(*)::int
-			FROM admins
-			WHERE role = 'super_admin' AND is_active = true
-		`).Scan(&activeSuperAdmins); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "unable to verify super admin count")
-		}
-		if activeSuperAdmins <= 1 {
-			return fiber.NewError(fiber.StatusConflict, "at least one super admin must remain active")
-		}
-	}
-
-	tag, err := a.db.Exec(c.Context(), `DELETE FROM admins WHERE id = $1`, adminID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "failed to delete admin")
-	}
-	if tag.RowsAffected() == 0 {
-		return fiber.NewError(fiber.StatusNotFound, "admin not found")
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -1192,26 +1091,12 @@ func syncBatchOrders(ctx context.Context, tx pgx.Tx, batchID, status string) err
 }
 
 func normalizeAdminRole(role string) string {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "", "admin", "admin_i", "catalog_admin":
+	if strings.TrimSpace(role) == "" {
 		return "catalog_admin"
-	case "super_admin":
-		return "super_admin"
-	case "admin_ii", "procurement_admin", "admin_iii", "courier_admin":
-		return "catalog_admin"
-	default:
-		return ""
 	}
+	return auth.CanonicalAdminRole(role)
 }
-
-func isValidAdminRole(role string) bool {
-	switch role {
-	case "super_admin", "catalog_admin":
-		return true
-	default:
-		return false
-	}
-}
+func isValidAdminRole(role string) bool { return auth.CanonicalAdminRole(role) != "" }
 
 func normalizeBatchStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {

@@ -138,6 +138,14 @@ func (x *XPController) AdminReviewWithdrawal(c *fiber.Ctx) error {
 	if len(req.Note) > 1000 || len(req.PayoutReference) > 200 || (req.Status == "paid" && req.PayoutReference == "") || (req.Status == "rejected" && req.Note == "") {
 		return fiber.NewError(400, "Paid requests need the bank transfer reference. Rejected requests need a reason.")
 	}
+	// Finance can prepare/reject reviews; only Super Admin records payout completion.
+	role, _ := c.Locals("admin_role").(string)
+	if role != "super_admin" && role != "finance_admin" {
+		return fiber.ErrForbidden
+	}
+	if req.Status == "paid" && role != "super_admin" {
+		return fiber.NewError(403, "A Super Admin must approve the completed payout")
+	}
 	tx, err := x.db.Begin(c.Context())
 	if err != nil {
 		return err
