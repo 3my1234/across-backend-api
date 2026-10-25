@@ -44,6 +44,18 @@ func TestDriverAvailabilityPrivacyExpiryAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Nearby transport presence requires paid access even though ordinary free
+	// service listings remain available in the normal marketplace.
+	plan, sub := uuid.NewString(), uuid.NewString()
+	if _, err = db.Exec(ctx, `INSERT INTO provider_subscription_plans(id,code,listing_limit)VALUES($1,'provider-diamond',40)`, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,starts_at,current_period_end)VALUES($1,$2,$3,'active',now()-interval '1 day',now()+interval '1 month')`, sub, provider, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO provider_subscription_payments VALUES($1,500,'NGN')`, sub); err != nil {
+		t.Fatal(err)
+	}
 	market := &ProviderMarketplaceController{db: db}
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("Actor")); return c.Next() })
@@ -69,6 +81,77 @@ func TestDriverAvailabilityPrivacyExpiryAndRevocation(t *testing.T) {
 		}
 	}
 	read(1)
+	secondOwner, secondProvider, secondListing, secondSub := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users(id,full_name)VALUES($1,'Closer courier')`, []any{secondOwner}},
+		{`INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status)VALUES($1,$2,'Closer transport','approved')`, []any{secondProvider, secondOwner}},
+		{`INSERT INTO provider_members VALUES($1,$2,'owner',true)`, []any{secondProvider, secondOwner}},
+		{`INSERT INTO provider_verification_documents SELECT $1,kind,'approved' FROM unnest(ARRAY['drivers_license','driver_vehicle','driver_plate']) kind`, []any{secondProvider}},
+		{`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,starts_at,current_period_end)VALUES($1,$2,$3,'active',now()-interval '1 day',now()+interval '1 month')`, []any{secondSub, secondProvider, plan}},
+		{`INSERT INTO provider_subscription_payments VALUES($1,500,'NGN')`, []any{secondSub}},
+		{`INSERT INTO provider_listings(id,provider_id,title,status,category)VALUES($1,$2,'Closer ride','approved','Private driver and chauffeur')`, []any{secondListing, secondProvider}},
+	} {
+		if _, err = db.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closePayload := fmt.Sprintf(`{"listing_id":%q,"latitude":9.08099,"longitude":7.451,"accuracy_m":20,"captured_at":%q}`, secondListing, time.Now().Format(time.RFC3339Nano))
+	communityCall(t, app, "PUT", "/availability", secondOwner, closePayload, 200)
+	ordered := communityCall(t, app, "GET", "/nearby?latitude=9.081&longitude=7.451", outsider, "", 200)["items"].([]any)
+	if len(ordered) != 2 || ordered[0].(map[string]any)["id"] != secondListing {
+		t.Fatal("current GPS proximity order lost", ordered)
+	}
+	communityCall(t, app, "PUT", "/availability", owner, closePayload, 403)
+	communityCall(t, app, "DELETE", "/availability", secondOwner, "", 204)
+	communityCall(t, app, "PUT", "/availability", owner, payload(9.08, time.Now()), 429)
+	scoped := communityCall(t, app, "GET", "/nearby?latitude=9.081&longitude=7.451&kind=passenger", outsider, "", 200)
+	if len(scoped["items"].([]any)) != 1 {
+		t.Fatal("passenger category missing", scoped)
+	}
+	first := scoped["items"].([]any)[0].(map[string]any)
+	if first["fresh_for_seconds"].(float64) <= 0 || first["location_updated_at"] == nil {
+		t.Fatal("freshness missing", first)
+	}
+	if len(communityCall(t, app, "GET", "/nearby?latitude=9.081&longitude=7.451&kind=courier", outsider, "", 200)["items"].([]any)) != 0 {
+		t.Fatal("driver shown as courier")
+	}
+	if _, err = db.Exec(ctx, `ALTER TABLE provider_listings ADD COLUMN latitude numeric DEFAULT 9.2,ADD COLUMN longitude numeric DEFAULT 7.4`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_driver_presence SET updated_at=now()-interval '11 seconds'`); err != nil {
+		t.Fatal(err)
+	}
+	communityCall(t, app, "PUT", "/availability", owner, payload(9.5, time.Now()), 200)
+	read(0)
+	far := communityCall(t, app, "GET", "/nearby?latitude=9.501&longitude=7.451", outsider, "", 200)
+	if len(far["items"].([]any)) != 1 {
+		t.Fatal("current GPS not used", far)
+	}
+	var base float64
+	if err = db.QueryRow(ctx, `SELECT latitude::float8 FROM provider_listings WHERE id=$1::uuid`, listing).Scan(&base); err != nil || base != 9.2 {
+		t.Fatal("base location overwritten", base, err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_listings SET category='Dispatch riding'`); err != nil {
+		t.Fatal(err)
+	}
+	courier := communityCall(t, app, "GET", "/nearby?latitude=9.501&longitude=7.451&kind=courier", outsider, "", 200)
+	if len(courier["items"].([]any)) != 1 {
+		t.Fatal("existing courier taxonomy omitted", courier)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET current_period_end=now()-interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if len(communityCall(t, app, "GET", "/nearby?latitude=9.501&longitude=7.451", outsider, "", 200)["items"].([]any)) != 0 {
+		t.Fatal("expired paid access shown nearby")
+	}
+	communityCall(t, app, "PUT", "/availability", owner, payload(9.5, time.Now()), 403)
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET current_period_end=now()+interval '1 month';UPDATE provider_listings SET category='Independent driver'`); err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err = db.Exec(ctx, `UPDATE provider_driver_presence SET expires_at=now()-interval '1 second'`); err != nil {
 		t.Fatal(err)
 	}

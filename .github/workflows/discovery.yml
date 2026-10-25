@@ -1,7 +1,7 @@
 name: Discovery eligibility rotation and analytics
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/listing-contact-discovery]
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Qualify ranking ownership lifecycle and real PostgreSQL metrics
-        run: go test -race -p 1 -count=1 -v ./internal/controllers -run '^Test(Discovery|BusinessContact|MerchantProductExact|ProductChatMigration|PaidDiscovery|ProductRecommendations|ReferralGoogle)'
+        run: go test -race -p 1 -count=1 -v ./internal/controllers -run '^Test(TownHallSearch|DriverAvailability|Discovery|BusinessContact|MerchantProductExact|ProductChatMigration|PaidDiscovery|ProductRecommendations|ReferralGoogle)'
       - name: Verify additive migration against existing schema
         run: go run ./cmd/migrate
       - name: Compile API and worker
