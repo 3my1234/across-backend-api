@@ -319,6 +319,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/onboarding", marketplaceController.Onboard)
 	authed.Get("/providers/payout-banks", marketplaceController.ListPayoutBanks)
 	authed.Get("/providers/me", marketplaceController.MyProvider)
+	authed.Get("/providers/me/entitlements", marketplaceController.ProviderEntitlements)
 	authed.Get("/providers/me/discovery", discovery.ProviderSummary)
 	authed.Put("/providers/me/discovery", discovery.ProviderSettings)
 	authed.Patch("/providers/me", marketplaceController.UpdateMyProvider)

@@ -3,6 +3,7 @@ package controllers
 import (
 	"across/backend/internal/playbilling"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
@@ -48,6 +49,16 @@ func (p *PlayBillingController) Catalog(c *fiber.Ctx) error {
 	items, err := p.store.Catalog(c.Context(), provider)
 	if err != nil {
 		return fiber.NewError(503, "Google Play plans could not load")
+	}
+	// Benefits describe the existing plan ID; never change Play product IDs/offers.
+	for index := range items {
+		item := &items[index]
+		var code string
+		if err = p.db.QueryRow(c.Context(), `SELECT code,listing_limit,amount_ngn FROM provider_subscription_plans WHERE id=$1::uuid`, item.PlanID).Scan(&code, &item.ListingLimit, &item.MonthlyAmount); err != nil {
+			return fiber.NewError(503, "Google Play plan benefits could not load")
+		}
+		item.BadgeTier = providerPlanTier(code)
+		item.PostPolicy, _ = json.Marshal(planPostPolicy(code, item.ListingLimit))
 	}
 	var status, state string
 	var expires *time.Time

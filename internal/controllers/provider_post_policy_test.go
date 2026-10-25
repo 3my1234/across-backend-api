@@ -35,7 +35,7 @@ func TestProviderPostRulesCombinedCapacityAndMedia(t *testing.T) {
 	exec(string(slots))
 	for _, tier := range []string{"", "bronze", "silver", "gold", "diamond"} {
 		t.Run("tier_"+tier, func(t *testing.T) {
-			policy := postPolicy(tier)
+			policy := map[string]providerPostPolicy{"": {Posts: 1, Images: 1}, "bronze": {Posts: 5, Images: 2}, "silver": {Posts: 10, Images: 4}, "gold": {Posts: 20, Images: 8, Videos: 2}, "diamond": {Posts: 40, Images: 8, Videos: 5}}[tier]
 			user, provider := uuid.NewString(), uuid.NewString()
 			exec(`INSERT INTO users(id,full_name) VALUES($1,'Test owner')`, user)
 			exec(`INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status) VALUES($1,$2,'Rules test','approved')`, provider, user)
@@ -123,7 +123,12 @@ func TestPublicPostMediaCurrentTier(t *testing.T) {
 		videos := []any{"1", "2", "3", "4", "5", "6"}
 		item := fiber.Map{"image_urls": images, "factory_details": map[string]any{"video_urls": videos}}
 		limitPublicPostMedia(item, tier)
-		if len(item["image_urls"].([]string)) != policy.Images || len(item["factory_details"].(map[string]any)["video_urls"].([]any)) != policy.Videos {
+		expectedImages, expectedVideos := policy.Images, policy.Videos
+		if tier != "" {
+			expectedImages = 9
+			expectedVideos = 6
+		}
+		if len(item["image_urls"].([]string)) != expectedImages || len(item["factory_details"].(map[string]any)["video_urls"].([]any)) != expectedVideos {
 			t.Fatalf("wrong media limits for %q: %#v", tier, item)
 		}
 		if len(images) != 9 || len(videos) != 6 {

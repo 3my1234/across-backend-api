@@ -85,7 +85,7 @@ func providerIdentityJSON(c *fiber.Ctx, db *pgxpool.Pool, payload fiber.Map, ass
 			}
 		}
 		if tier != "" {
-			label += " · " + strings.ToUpper(tier[:1]) + tier[1:] + " subscription"
+			label += " Ã‚Â· " + strings.ToUpper(tier[:1]) + tier[1:] + " subscription"
 		}
 		identity := fiber.Map{"id": id, "name": name, "avatar_url": avatar, "banner_url": banner, "verified": verified, "paid_active": paid, "tier": tier, "label": label, "listing_limit": limit, "combined_limit": true}
 		for _, target := range targets[id] {
@@ -128,9 +128,9 @@ func providerPlanTier(code string) string {
 	case "provider-growth":
 		return "silver"
 	case "provider-business":
-		return "gold"
-	case "provider-diamond":
 		return "diamond"
+	case "provider-diamond":
+		return "gold"
 	}
 	return ""
 }
@@ -143,9 +143,13 @@ func providerCapacityError(err error) error {
 	return nil
 }
 
-// Limit public presentation after expiry/downgrade without deleting the owner's media.
+// Preserve paid media; apply the existing Free presentation policy after expiry.
 func limitPublicPostMedia(item fiber.Map, tier string) {
 	policy := postPolicy(tier)
+	// Paid downgrades retain existing public media; expiry retains the Free policy.
+	if tier != "" {
+		return
+	}
 	trim := func(value any, max int) any {
 		switch values := value.(type) {
 		case []string:
