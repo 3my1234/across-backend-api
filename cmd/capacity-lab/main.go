@@ -152,11 +152,11 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  INSERT INTO provider_organizations(id,owner_user_id,business_name,slug,contact_email,contact_phone,verification_status)
  SELECT provider,provider_user,'Synthetic lab provider',provider::text,'lab@example.invalid','lab','approved' FROM capacity_lab_actors;
  INSERT INTO provider_members(provider_id,user_id,role) SELECT provider,provider_user,'owner' FROM capacity_lab_actors;
- INSERT INTO provider_subscription_plans(code,name,amount_ngn,listing_limit,badge_tier) VALUES ('capacity-lab-paid','Synthetic paid plan',500,40,'bronze');
+ INSERT INTO provider_subscription_plans(code,name,amount_ngn,listing_limit,badge_tier) VALUES ('capacity-lab-paid','Synthetic Gold plan',5000,60,'gold');
  INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,starts_at,current_period_end,expected_amount_ngn)
- SELECT provider,(SELECT id FROM provider_subscription_plans WHERE code='capacity-lab-paid'),'active',provider::text,'lab@example.invalid',now()-interval '1 day',now()+interval '30 days',500 FROM capacity_lab_actors;
+ SELECT provider,(SELECT id FROM provider_subscription_plans WHERE code='capacity-lab-paid'),'active',provider::text,'lab@example.invalid',now()-interval '1 day',now()+interval '30 days',5000 FROM capacity_lab_actors;
  INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id,tx_ref,amount,currency_code)
- SELECT id,id::text,tx_ref,500,'NGN' FROM provider_subscriptions WHERE customer_email='lab@example.invalid';
+ SELECT id,id::text,tx_ref,5000,'NGN' FROM provider_subscriptions WHERE customer_email='lab@example.invalid';
  INSERT INTO provider_listings(id,provider_id,listing_type,title,slug,description,category,status,published_at,city)
  SELECT listing,provider,'hotel','Synthetic hotel',listing::text,'Synthetic hotel listing','hotel','approved',now(),'Abuja' FROM capacity_lab_actors;
  INSERT INTO provider_listings(provider_id,listing_type,title,slug,description,category,status,published_at,city)

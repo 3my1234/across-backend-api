@@ -13,7 +13,7 @@ accept a target URL or production environment file. Its HTTP transport ignores
 proxy environment variables and refuses redirects. Do not expose these lab
 services publicly or reuse their deliberately disposable credentials.
 
-All scenarios use 100 buyer/provider pairs with approved paid provider fixtures,
+All scenarios use 100 buyer/provider pairs with approved paid Gold provider fixtures (synthetic NGN5,000 receipts, 60 combined posts and 10 simultaneous Town Hall rooms),
 100 marketplace conversations and 2,000 Support messages. Choose `scenario` in
 the manual workflow; only the following bounded shapes are accepted:
 
