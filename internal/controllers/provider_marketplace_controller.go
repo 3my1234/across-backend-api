@@ -1683,6 +1683,13 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 		redirect = "across://providers/subscription"
 	}
 	var subscriptionID string
+	var pendingCheckout bool
+	if err = checkoutTx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='pending')`, providerID).Scan(&pendingCheckout); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if pendingCheckout {
+		return fiber.NewError(409, "Check your pending payment or cancel its unpaid checkout before choosing another plan.")
+	}
 	err = checkoutTx.QueryRow(c.Context(), `
 		INSERT INTO provider_subscriptions(provider_id,plan_id,status,tx_ref,customer_email,expected_amount_ngn,billing_mode,duration_months,gateway_plan_id)
 		VALUES($1::uuid,$2::uuid,'pending',$3,$4,$5,$6,$7,$8)

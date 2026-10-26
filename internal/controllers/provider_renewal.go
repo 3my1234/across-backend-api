@@ -33,7 +33,11 @@ func (m *ProviderMarketplaceController) ProviderRenewalStatus(c *fiber.Ctx) erro
 	if err = m.db.QueryRow(c.Context(), `SELECT (SELECT plan_id::text FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND starts_at<=now() AND current_period_end>now() ORDER BY current_period_end DESC LIMIT 1)`, providerID).Scan(&currentID); err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return c.JSON(fiber.Map{"can_manage": role == "owner", "current_plan_id": currentID, "renewal_status": status, "next_plan_id": nextID, "next_plan_name": nextName, "change_at": changeAt})
+	var pendingCheckout bool
+	if err = m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE provider_id=$1::uuid AND status='pending' AND COALESCE(to_jsonb(s)->>'billing_provider','flutterwave')='flutterwave')`, providerID).Scan(&pendingCheckout); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"can_manage": role == "owner", "has_pending_checkout": pendingCheckout, "current_plan_id": currentID, "renewal_status": status, "next_plan_id": nextID, "next_plan_name": nextName, "change_at": changeAt})
 }
 
 func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) error {
