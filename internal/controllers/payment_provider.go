@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -118,6 +119,43 @@ func (e *paymentProviderError) Error() string { return e.Message }
 type flutterwaveProvider struct {
 	secretKey string
 	client    *http.Client
+}
+
+var errGatewayPaymentNotFound = errors.New("gateway has no transaction for this reference")
+
+func (p *flutterwaveProvider) DisableCheckout(ctx context.Context, link string) error {
+	parsed, err := url.Parse(link)
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "checkout.flutterwave.com" || parsed.User != nil {
+		return fmt.Errorf("invalid stored checkout link")
+	}
+	body, _ := json.Marshal(map[string]string{"link": link})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.flutterwave.com/v3/payments/link/disable", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.secretKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Data    bool   `json:"data"`
+	}
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if resp.StatusCode == 200 && result.Status == "success" && result.Data {
+		return nil
+	}
+	// Flutterwave documents this exact response for an already disabled link.
+	if resp.StatusCode == 400 && result.Status == "error" && result.Message == "This payment link is currently inactive" {
+		return nil
+	}
+	return fmt.Errorf("checkout link disabling was not confirmed")
 }
 
 func newFlutterwaveProvider(secretKey string, client *http.Client) paymentProvider {
@@ -442,8 +480,16 @@ func (p *flutterwaveProvider) VerifyPayment(ctx context.Context, transactionID, 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return verifiedProviderPayment{}, err
 	}
+	// Only an explicit gateway not-found response is safe to distinguish from a
+	// verification outage. Unknown errors and empty success data stay uncertain.
+	if (resp.StatusCode == 200 || resp.StatusCode == 400 || resp.StatusCode == 404) && result.Status == "error" && result.Message == "No transaction was found for this id" {
+		return verifiedProviderPayment{}, errGatewayPaymentNotFound
+	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		return verifiedProviderPayment{}, fmt.Errorf("flutterwave verification returned %d", resp.StatusCode)
+	}
+	if result.Status != "success" || strings.TrimSpace(result.Data.Status) == "" {
+		return verifiedProviderPayment{}, fmt.Errorf("invalid gateway verification response")
 	}
 	return verifiedProviderPayment{
 		TransactionID: gatewayID(result.Data.ID),

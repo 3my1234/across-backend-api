@@ -41,7 +41,9 @@ jobs:
           if ! command -v ffprobe >/dev/null || ! command -v ffmpeg >/dev/null; then
             # The runner's Azure mirror stalled before tests began. Use the
             # official Ubuntu HTTPS archive; retain package signature checks.
-            for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            # New runner images select mirrors through this referenced file;
+            # editing the deb822 source alone does not change that mirror.
+            for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources /etc/apt/apt-mirrors.txt; do
               if [ -f "$source" ]; then
                 sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g;s|https://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
               fi
@@ -57,7 +59,7 @@ jobs:
           DATABASE_URL: postgres://postgres:ci-provider-tests@127.0.0.1:5432/provider_tests?sslmode=disable
           SETTLEMENT_TEST_LOCAL: 'true'
         run: |
-          go test ./internal/controllers -v -count=1 -run 'Test(BrowserPush|ProviderBrowserPush|ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderPostRules|ProviderChat|BuyerConversation|RequestConversation|Chat|MessageReceipt|CircularNotificationAvatar|PublicPostMedia|PostVideo|NewPassword|ProviderIdentity|ProviderBrand|ProviderMedia|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
+          go test ./internal/controllers -v -count=1 -run 'Test(BrowserPush|ProviderBrowserPush|ProductRecommendations|ProductCheckoutDisabled|ProductChat|ProviderPostRules|ProviderChat|BuyerConversation|RequestConversation|Chat|MessageReceipt|CircularNotificationAvatar|PublicPostMedia|PostVideo|NewPassword|ProviderIdentity|ProviderBrand|ProviderMedia|ProviderCheckout|CheckoutGateway|Driver|ServiceSearch|PaidDiscovery|Community|TownHall|Subscription|AdminBusiness|AdminAnalytics|AdminComplaint)'
           go test ./internal/services ./internal/routes
   docker-build:
     runs-on: ubuntu-latest

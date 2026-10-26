@@ -136,6 +136,13 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	if status != 422 {
 		t.Fatal("nonmonthly recurring charge accepted", status, body)
 	}
+	// A second checkout is rejected until the first attempt is closed.
+	if status, _ := checkout("banktransfer", 3); status != 409 {
+		t.Fatal("duplicate checkout was accepted", status)
+	}
+	if _, err = db.Exec(ctx, `UPDATE provider_subscriptions SET status='cancelled' WHERE tx_ref=$1`, card["tx_ref"]); err != nil {
+		t.Fatal(err)
+	}
 	for _, months := range []int{3, 6, 12} {
 		status, paid := checkout("banktransfer", months)
 		if status != 202 {
