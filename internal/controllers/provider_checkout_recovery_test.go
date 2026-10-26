@@ -59,6 +59,7 @@ func TestProviderCheckoutCancellationRecovery(t *testing.T) {
 	sub := uuid.NewString()
 	exec(`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,tx_ref,expected_amount_ngn,billing_mode) VALUES($1,$2,$3,'pending',$4,500,'one_time')`, sub, seller, plan, ref)
 	exec(`INSERT INTO payments(provider,purpose,provider_subscription_id,user_id,provider_reference,checkout_url,payment_status) VALUES('flutterwave','provider_subscription',$1,$2,$3,'https://checkout.flutterwave.com/v3/hosted/pay/old','processing')`, sub, user, ref)
+	legacyRef := ""
 	gatewayTxn := "1001"
 	status := "notfound"
 	disableOK := true
@@ -71,7 +72,7 @@ func TestProviderCheckoutCancellationRecovery(t *testing.T) {
 		if req.URL.Path == "/v3/payments/link/disable" {
 			var payload map[string]string
 			_ = json.NewDecoder(req.Body).Decode(&payload)
-			if req.Method != "POST" || payload["link"] != "https://checkout.flutterwave.com/v3/hosted/pay/old" {
+			if req.Method != "POST" || (payload["link"] != "https://checkout.flutterwave.com/v3/hosted/pay/old" && payload["link"] != "https://checkout.flutterwave.com/v3/hosted/pay/old-legacy") {
 				t.Fatalf("unowned link: %v", payload)
 			}
 			body = `{"status":"success","data":true}`
@@ -86,7 +87,7 @@ func TestProviderCheckoutCancellationRecovery(t *testing.T) {
 		} else if req.URL.Path == "/v3/payments" {
 			body = `{"status":"success","data":{"link":"https://checkout.flutterwave.com/v3/hosted/pay/new"}}`
 		} else {
-			if req.URL.Query().Get("tx_ref") != ref {
+			if req.URL.Query().Get("tx_ref") != ref && req.URL.Query().Get("tx_ref") != legacyRef {
 				t.Fatal("wrong reference", req.URL)
 			}
 			switch status {
@@ -169,9 +170,19 @@ func TestProviderCheckoutCancellationRecovery(t *testing.T) {
 	}
 	_ = lock.Rollback(ctx)
 	// Recover an already disabled link after an interrupted first request.
+	// Older releases allowed more than one pending attempt. Closing the UI
+	// action must reconcile every owned unpaid link before transfer retry.
+	legacyRef = "PROVIDER-" + uuid.NewString()
+	legacySub := uuid.NewString()
+	exec(`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,tx_ref,expected_amount_ngn,billing_mode) VALUES($1,$2,$3,'pending',$4,500,'one_time')`, legacySub, seller, plan, legacyRef)
+	exec(`INSERT INTO payments(provider,purpose,provider_subscription_id,user_id,provider_reference,checkout_url,payment_status) VALUES('flutterwave','provider_subscription',$1,$2,$3,'https://checkout.flutterwave.com/v3/hosted/pay/old-legacy','processing')`, legacySub, user, legacyRef)
 	inactive = true
 	if code, out := call("/cancel", `{}`); code != 200 || out["payment_state"] != "cancelled" || current() != "cancelled" {
 		t.Fatal("did not recover unpaid checkout", code, out)
+	}
+	var remaining int
+	if e := db.QueryRow(ctx, `SELECT count(*) FROM provider_subscriptions WHERE provider_id=$1 AND status='pending'`, seller).Scan(&remaining); e != nil || remaining != 0 {
+		t.Fatal("legacy pending checkout survived", remaining, e)
 	}
 	// Cancellation is idempotent and preserves the old ledger/reference.
 	if code, out := call("/cancel", `{}`); code != 200 || out["payment_state"] != "cancelled" {
