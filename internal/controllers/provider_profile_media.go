@@ -71,8 +71,28 @@ func (m *ProviderMarketplaceController) UpdateProviderMedia(c *fiber.Ctx) error 
 			return fiber.NewError(422, "Image upload is incomplete or exceeds 5 MB")
 		}
 	}
-	_, err = m.db.Exec(c.Context(), `UPDATE provider_organizations SET logo_url=COALESCE($2::text,logo_url),banner_url=COALESCE($3::text,banner_url),updated_at=now() WHERE id=$1::uuid`, providerID, req.Photo, req.Banner)
+	tx, err := m.db.Begin(c.Context())
 	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer tx.Rollback(context.Background())
+	var owner, oldPhoto string
+	if err = tx.QueryRow(c.Context(), `SELECT owner_user_id::text,COALESCE(logo_url,'') FROM provider_organizations WHERE id=$1::uuid FOR UPDATE`, providerID).Scan(&owner, &oldPhoto); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	_, err = tx.Exec(c.Context(), `UPDATE provider_organizations SET logo_url=COALESCE($2::text,logo_url),banner_url=COALESCE($3::text,banner_url),updated_at=now() WHERE id=$1::uuid`, providerID, req.Photo, req.Banner)
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	// One identity: the owner's uploaded provider photo also becomes their
+	// personal photo. A manager must never overwrite another person's avatar.
+	// Removing branding only clears a personal photo that still matches it.
+	if req.Photo != nil && role == "owner" && owner == userID {
+		if _, err = tx.Exec(c.Context(), `UPDATE users SET avatar_url=$2,updated_at=now() WHERE id=$1::uuid AND ($2<>'' OR COALESCE(avatar_url,'')=$3)`, userID, *req.Photo, oldPhoto); err != nil {
+			return fiber.ErrInternalServerError
+		}
+	}
+	if err = tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	return c.SendStatus(fiber.StatusNoContent)

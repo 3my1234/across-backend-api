@@ -41,13 +41,16 @@ func TestProviderBrandKeyOwnership(t *testing.T) {
 func TestProviderMediaRemovalPreservesOtherFieldsAndRequiresManager(t *testing.T) {
 	db := settlementTestDB(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `CREATE TABLE provider_organizations(id uuid PRIMARY KEY,is_active boolean DEFAULT true,logo_url text,banner_url text,business_name text,updated_at timestamptz DEFAULT now());CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text,is_active boolean DEFAULT true);`)
+	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY,avatar_url text,updated_at timestamptz DEFAULT now()); CREATE TABLE provider_organizations(id uuid PRIMARY KEY,owner_user_id uuid,is_active boolean DEFAULT true,logo_url text,banner_url text,business_name text,updated_at timestamptz DEFAULT now());CREATE TABLE provider_members(provider_id uuid,user_id uuid,role text,is_active boolean DEFAULT true);`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider, owner, viewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	_, err = db.Exec(ctx, `INSERT INTO provider_organizations(id,logo_url,banner_url,business_name)VALUES($1,'photo','banner','Business')`, provider)
+	_, err = db.Exec(ctx, `INSERT INTO provider_organizations(id,owner_user_id,logo_url,banner_url,business_name)VALUES($1,$2,'photo','banner','Business')`, provider, owner)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO users(id,avatar_url) VALUES($1,'photo'),($2,'staff-photo')`, owner, viewer); err != nil {
 		t.Fatal(err)
 	}
 	for user, role := range map[string]string{owner: "owner", viewer: "member"} {
@@ -89,6 +92,11 @@ func TestProviderMediaRemovalPreservesOtherFieldsAndRequiresManager(t *testing.T
 	if err = db.QueryRow(ctx, `SELECT logo_url,banner_url,business_name FROM provider_organizations WHERE id=$1`, provider).Scan(&photo, &banner, &name); err != nil {
 		t.Fatal(err)
 	}
+	var removedAvatar string
+	_ = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&removedAvatar)
+	if removedAvatar != "" {
+		t.Fatal("linked personal photo was not removed", removedAvatar)
+	}
 	if photo != "" || banner != "banner" || name != "Business" {
 		t.Fatalf("unexpected profile %q/%q/%q", photo, banner, name)
 	}
@@ -113,7 +121,65 @@ func TestProviderMediaRemovalPreservesOtherFieldsAndRequiresManager(t *testing.T
 			t.Fatalf("media %s got %d want %d", sample.url, response.StatusCode, sample.status)
 		}
 	}
-	if requests != 1 {
-		t.Fatalf("expected one verified storage HEAD, got %d", requests)
+	var avatar string
+	if err = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&avatar); err != nil || !strings.Contains(avatar, "/logo/photo.jpg") {
+		t.Fatal("owner photo not synced", avatar, err)
+	}
+	call := func(actor, body string) {
+		t.Helper()
+		req := httptest.NewRequest("PUT", "/media", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Actor", actor)
+		res, e := app.Test(req)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 204 {
+			t.Fatal("media update failed", res.StatusCode)
+		}
+	}
+	// Banner edits and delegated staff branding never replace personal photos.
+	call(owner, `{"banner_url":""}`)
+	if err = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&avatar); err != nil || !strings.Contains(avatar, "/logo/photo.jpg") {
+		t.Fatal("banner overwrote owner", avatar, err)
+	}
+	_, _ = db.Exec(ctx, `UPDATE provider_members SET role='manager' WHERE user_id=$1`, viewer)
+	call(viewer, `{"photo_url":"https://branding-test.s3.eu-north-1.amazonaws.com/user-uploads/providers/`+provider+`/logo/manager.jpg"}`)
+	var staffAvatar string
+	_ = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, viewer).Scan(&staffAvatar)
+	_ = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&avatar)
+	if staffAvatar != "staff-photo" || !strings.Contains(avatar, "/logo/photo.jpg") {
+		t.Fatal("staff branding changed personal identity", staffAvatar, avatar)
+	}
+	// A separately changed personal photo survives removal of a business logo.
+	_, _ = db.Exec(ctx, `UPDATE users SET avatar_url='personal-new' WHERE id=$1`, owner)
+	call(owner, `{"photo_url":""}`)
+	_ = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&avatar)
+	if avatar != "personal-new" {
+		t.Fatal("removal erased independent personal image", avatar)
+	}
+	// If personal synchronization fails, the business update must roll back too.
+	if _, err = db.Exec(ctx, `ALTER TABLE users ADD CONSTRAINT fixture_avatar_guard CHECK(avatar_url NOT LIKE '%blocked.jpg')`); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("PUT", "/media", strings.NewReader(`{"photo_url":"https://branding-test.s3.eu-north-1.amazonaws.com/user-uploads/providers/`+provider+`/logo/blocked.jpg"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Actor", owner)
+	res, e := app.Test(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	res.Body.Close()
+	if res.StatusCode != 500 {
+		t.Fatal("sync failure not reported", res.StatusCode)
+	}
+	_ = db.QueryRow(ctx, `SELECT logo_url FROM provider_organizations WHERE id=$1`, provider).Scan(&photo)
+	_ = db.QueryRow(ctx, `SELECT avatar_url FROM users WHERE id=$1`, owner).Scan(&avatar)
+	if photo != "" || avatar != "personal-new" {
+		t.Fatal("partial photo write", photo, avatar)
+	}
+	if requests != 3 {
+		t.Fatalf("expected three verified storage HEADs, got %d", requests)
 	}
 }
