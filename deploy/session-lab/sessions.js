@@ -84,7 +84,7 @@ export function setup(){
   const r=http.request(body?'POST':'GET',fixture.origin+'/api/v1'+path,body?JSON.stringify(body):null,{headers,tags:{name,phase:'warmup'},timeout:'12s',redirects:0,responseCallback:http.expectedStatuses(want)});
   let data=null;try{data=r.json();}catch{}
   warmupLatency.add(r.timings.duration,{op:name});
-  if(r.status!==want||!data)exec.test.abort('Authentication/preflight warmup failed: '+name+' status '+r.status);
+  if(r.status!==want||(want<400&&!data))exec.test.abort('Authentication/preflight warmup failed: '+name+' status '+r.status);
   return {r,data};
  };
  const ready=warm('warmup_ready','/ready');
