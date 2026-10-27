@@ -1,5 +1,5 @@
 import http from 'k6/http';
-import {sleep,check} from 'k6';
+import {sleep,check,randomSeed} from 'k6';
 import exec from 'k6/execution';
 import {Counter,Trend,Rate} from 'k6/metrics';
 import {randomBytes} from 'k6/crypto';
@@ -114,6 +114,7 @@ export function setup(){
 }
 export default function(data){
  if(!actor){
+  randomSeed(20261027+exec.vu.idInTest);
   actor={...sessions[exec.vu.idInTest-1]};if(!actor.id)exec.test.abort('Generator requested more VUs than distinct identities');
   if(established){actor=bindEstablished(actor,data.authenticated,cfg.target);}else{
    const login=req('login','/auth/login',null,{email:actor.email,password:fixture.password});

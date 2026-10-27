@@ -1,4 +1,4 @@
-name: Isolated notification-worker investigation
+name: Isolated external-ledger worker comparison
 on:
   workflow_dispatch:
 permissions:
@@ -11,8 +11,8 @@ jobs:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '100'
       LAB_DB_CPUS: '2'
-      LAB_SESSION_PROFILE: sustained
-      LAB_NOTIFICATION_WORKERS: '1'
+      LAB_SESSION_PROFILE: stage
+      LAB_NOTIFICATION_WORKERS: '0'
       LAB_SESSION_TARGET: '100'
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
@@ -26,7 +26,7 @@ jobs:
         with: {go-version: '1.27.3'}
       - name: Check unchanged gates and fixture accounting
         run: |
-          bash -n deploy/notification-lab/investigate.sh deploy/notification-lab/faults.sh
+          bash -n deploy/notification-lab/compare.sh deploy/notification-lab/investigate.sh deploy/notification-lab/faults.sh
           node deploy/session-lab/test-policy.mjs
           mkdir -p session-evidence
           go test -v ./cmd/capacity-lab ./internal/workers ./internal/middleware | tee session-evidence/harness-tests.log
@@ -61,17 +61,11 @@ jobs:
           sha256sum session-exchange/fixtures.json > session-evidence/fixture-sha256.txt
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps lifecycle > session-evidence/lifecycle.jsonl
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter /app/lab notification-prepare
+          docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pg_stat_statements;'
           cp deploy/notification-lab/* session-evidence/
           cp .github/workflows/notification-lab.yml session-evidence/notification-workflow.yml
       - name: Measure the 100 independent sessions
-        run: bash deploy/notification-lab/investigate.sh
-      - name: Reconcile every acknowledged write even after failure
-        if: always()
-        run: |
-          cp session-exchange/k6.log session-evidence/k6.log
-          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
-      - name: Evaluate software gates without advancing
-        run: node deploy/session-lab/advance.mjs session-exchange/summary.json session-evidence/reconciliation.jsonl > session-evidence/gate.json
+        run: bash deploy/notification-lab/compare.sh
       - name: Retain only non-secret evidence
         if: always()
         run: |
@@ -86,8 +80,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: notification-workers-${{ github.run_id }}
-          path: session-evidence/
+          name: external-ledger-workers-${{ github.run_id }}
+          path: |
+            session-evidence/
+            comparison-evidence/
           retention-days: 14
       - name: Remove only the disposable lab
         if: always()

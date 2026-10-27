@@ -1,14 +1,28 @@
-# Additional actual-worker loop process, bounded resources, no external dialer.
+# Isolated mock provider has no database connection, external egress or ports.
 services:
+  postgres:
+    command: [postgres, -c, shared_preload_libraries=pg_stat_statements, -c, log_min_duration_statement=100ms, -c, log_parameter_max_length=0, -c, log_parameter_max_length_on_error=0]
   exporter:
     environment:
-      LAB_NOTIFICATION_WORKERS: '1'
+      LAB_NOTIFICATION_WORKERS: '${LAB_NOTIFICATION_WORKERS:-0}'
     volumes: ['${LAB_EXCHANGE_DIR:?explicit lab exchange required}:/exchange']
+  notification-provider:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, notification-provider]
+    environment: {CAPACITY_LAB: disposable-compose-only}
+    volumes: ['${LAB_EXCHANGE_DIR:?explicit lab exchange required}:/exchange']
+    networks: [lab]
+    cpus: 0.25
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8081/health]
+      interval: 2s
+      timeout: 2s
+      retries: 15
   notification-worker:
     image: atlxpres-capacity-lab:local
     command: [/app/lab, notification-worker]
-    environment:
-      CAPACITY_LAB: disposable-compose-only
+    environment: {CAPACITY_LAB: disposable-compose-only}
     volumes: ['${LAB_EXCHANGE_DIR:?explicit lab exchange required}:/exchange:ro']
     networks: [lab]
     cpus: 1

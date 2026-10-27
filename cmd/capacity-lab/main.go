@@ -92,14 +92,23 @@ func main() {
 	_, cpuError := databaseCPU(os.Getenv("LAB_DB_CPUS"))
 	must(cpuError)
 	limit := 12 * time.Minute
-	if os.Args[1] == "observe-sessions" || os.Args[1] == "notification-worker" {
+	if os.Args[1] == "observe-sessions" || os.Args[1] == "notification-worker" || os.Args[1] == "notification-provider" {
 		limit = 40 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
+	if os.Args[1] == "notification-provider" {
+		must(runNotificationProvider(ctx))
+		return
+	}
 	cfg, err := pgxpool.ParseConfig(database)
 	must(err)
+	if os.Args[1] == "notification-worker" {
+		cfg.ConnConfig.User = "lab_worker"
+		cfg.ConnConfig.Password = "lab-worker-disposable"
+	}
 	cfg.MaxConns = 4
+	cfg.ConnConfig.RuntimeParams["application_name"] = "lab-" + os.Args[1]
 	db, err := pgxpool.NewWithConfig(ctx, cfg)
 	must(err)
 	defer db.Close()
