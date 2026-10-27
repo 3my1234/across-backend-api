@@ -1,0 +1,15 @@
+# Additional actual-worker loop process, bounded resources, no external dialer.
+services:
+  exporter:
+    environment:
+      LAB_NOTIFICATION_WORKERS: '1'
+    volumes: ['${LAB_EXCHANGE_DIR:?explicit lab exchange required}:/exchange']
+  notification-worker:
+    image: atlxpres-capacity-lab:local
+    command: [/app/lab, notification-worker]
+    environment:
+      CAPACITY_LAB: disposable-compose-only
+    volumes: ['${LAB_EXCHANGE_DIR:?explicit lab exchange required}:/exchange:ro']
+    networks: [lab]
+    cpus: 1
+    mem_limit: 512m

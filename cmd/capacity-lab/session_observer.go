@@ -122,7 +122,14 @@ func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 			return err
 		}
 		sample["queues"] = queueSamples
-		sample["workers_enabled"] = false
+		sample["workers_enabled"] = os.Getenv("LAB_NOTIFICATION_WORKERS") == "1"
+		if os.Getenv("LAB_NOTIFICATION_WORKERS") == "1" {
+			var raw []byte
+			if err := db.QueryRow(ctx, `SELECT json_build_object('provider', (SELECT json_agg(q) FROM(SELECT channel,count(*) AS keys,sum(attempts) AS attempts,sum(acceptances) AS acceptances,sum(acknowledgements) AS acknowledgements,sum(receipts) AS receipts FROM capacity_lab_mock_delivery GROUP BY channel)q),'due_receipts',(SELECT count(*) FROM notification_push_deliveries WHERE status='sent' AND receipt_checked_at IS NULL AND sent_at<=now()-interval '15 minutes'))`).Scan(&raw); err != nil {
+				return err
+			}
+			sample["mock"] = json.RawMessage(raw)
+		}
 		if err := json.NewEncoder(out).Encode(sample); err != nil {
 			return err
 		}

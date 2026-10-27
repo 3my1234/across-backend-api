@@ -1,0 +1,93 @@
+name: Isolated notification-worker investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  worker_investigation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      LAB_SCENARIO: large-busy
+      LAB_ACTOR_PAIRS: '100'
+      LAB_DB_CPUS: '2'
+      LAB_SESSION_PROFILE: sustained
+      LAB_NOTIFICATION_WORKERS: '1'
+      LAB_SESSION_TARGET: '100'
+      LAB_SESSION_AUTH_MODE: established
+      LAB_SESSION_APPROVAL: /exchange/approval.json
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Check unchanged gates and fixture accounting
+        run: |
+          node deploy/session-lab/test-policy.mjs
+          mkdir -p session-evidence
+          go test -v ./cmd/capacity-lab | tee session-evidence/harness-tests.log
+      - name: Prepare fixed isolated lab and synthetic sessions
+        run: |
+          mkdir -p session-exchange session-evidence
+          git rev-parse HEAD > session-evidence/source-commit.txt
+          git diff a5e94496f90435a2610c3c46592af3d0ea33e055 -- internal/ > session-evidence/runtime-diff.patch
+          test ! -s session-evidence/runtime-diff.patch
+          cp deploy/session-lab/{policy.mjs,sessions.js,established.mjs,compose.yml} session-evidence/
+          cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
+          cp .github/workflows/session-lab.yml session-evidence/workflow.yml
+          cp cmd/capacity-lab/session_observer.go session-evidence/session_observer.go
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml pull sessions
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter > session-exchange/fixtures.json
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          from datetime import datetime,timezone
+          data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          profile=os.environ['LAB_SESSION_PROFILE']
+          assert profile in ('stage','sustained')
+          approval={'authorized':True,'environment':'isolated-staging','profile':profile,'max_sessions':100,'max_duration_seconds':180 if profile=='stage' else 1800,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User approval: actual notification workers with mocks, existing isolated resources, max100 sessions, no production or500'}
+          Path('session-exchange/approval.json').write_text(json.dumps(approval))
+          data.pop('sessions')
+          Path('session-exchange/run.json').write_text(json.dumps(data))
+          PY
+          docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'ANALYZE;'
+          docker run --rm --network none atlxpres-capacity-lab:local sha256sum /app/api /app/lab > session-evidence/binaries.sha256
+          docker image inspect postgres:16-alpine redis:7.2-alpine haproxy:3.0-alpine grafana/k6:2.3.0 > session-evidence/images.json
+          sha256sum session-exchange/fixtures.json > session-evidence/fixture-sha256.txt
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps lifecycle > session-evidence/lifecycle.jsonl
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter /app/lab notification-prepare
+          cp deploy/notification-lab/* session-evidence/
+          cp .github/workflows/notification-lab.yml session-evidence/notification-workflow.yml
+      - name: Measure the 100 independent sessions
+        run: bash deploy/notification-lab/investigate.sh
+      - name: Reconcile every acknowledged write even after failure
+        if: always()
+        run: |
+          cp session-exchange/k6.log session-evidence/k6.log
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
+      - name: Evaluate software gates without advancing
+        run: node deploy/session-lab/advance.mjs session-exchange/summary.json session-evidence/reconciliation.jsonl > session-evidence/gate.json
+      - name: Retain only non-secret evidence
+        if: always()
+        run: |
+          test ! -f session-exchange/summary.json || cp session-exchange/summary.json session-evidence/
+          test ! -f session-exchange/timeseries.json || cp session-exchange/timeseries.json session-evidence/
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color > session-evidence/services.log
+          docker stats --no-stream --format '{{json .}}' > session-evidence/final-stats.jsonl
+          docker inspect $(docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml ps -q) > session-evidence/container-limits.json
+          lscpu > session-evidence/runner-cpu.txt
+          free -h > session-evidence/runner-memory.txt
+          sudo chown -R "$(id -u):$(id -g)" session-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notification-workers-${{ github.run_id }}
+          path: session-evidence/
+          retention-days: 14
+      - name: Remove only the disposable lab
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml down --volumes --remove-orphans

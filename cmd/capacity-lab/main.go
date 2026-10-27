@@ -92,7 +92,7 @@ func main() {
 	_, cpuError := databaseCPU(os.Getenv("LAB_DB_CPUS"))
 	must(cpuError)
 	limit := 12 * time.Minute
-	if os.Args[1] == "observe-sessions" {
+	if os.Args[1] == "observe-sessions" || os.Args[1] == "notification-worker" {
 		limit = 40 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
@@ -128,6 +128,12 @@ func main() {
 		must(verifySessions(ctx, db, os.Stdout))
 	case "lifecycle":
 		must(sessionLifecycle(ctx, db, os.Stdout))
+	case "notification-prepare":
+		must(prepareNotificationLab(ctx, db))
+	case "notification-worker":
+		must(runNotificationWorker(ctx, db))
+	case "notification-verify":
+		must(verifyNotificationLab(ctx, db, os.Stdout))
 	case "queue-check":
 		must(sessionQueueCheck(ctx, db, os.Stdout))
 	case "media-check":
