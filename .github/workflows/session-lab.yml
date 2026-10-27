@@ -5,7 +5,7 @@ on:
       profile:
         description: 'Smoke4 or launch-authorized100-session/180s isolated stage; no production targets'
         type: choice
-        options: [smoke, stage, gradual, qualification-stage, qualification-sustained]
+        options: [smoke, stage, gradual, qualification-stage, qualification-sustained, login-bursts]
         default: smoke
   pull_request:
     branches: [main]
@@ -14,7 +14,7 @@ permissions:
   contents: read
 jobs:
   smoke:
-    if: ${{ inputs.profile != 'qualification-stage' && inputs.profile != 'qualification-sustained' }}
+    if: ${{ inputs.profile != 'qualification-stage' && inputs.profile != 'qualification-sustained' && inputs.profile != 'login-bursts' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -191,6 +191,79 @@ jobs:
         run: |
           test ! -f session-exchange/summary.json || cp session-exchange/summary.json session-evidence/
           test ! -f session-exchange/timeseries.json || cp session-exchange/timeseries.json session-evidence/
+          docker compose -f deploy/capacity-lab/compose.yml logs --no-color > session-evidence/services.log
+          docker stats --no-stream --format '{{json .}}' > session-evidence/final-stats.jsonl
+          docker inspect $(docker compose -f deploy/capacity-lab/compose.yml ps -q) > session-evidence/container-limits.json
+          lscpu > session-evidence/runner-cpu.txt
+          free -h > session-evidence/runner-memory.txt
+          sudo chown -R "$(id -u):$(id -g)" session-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: independent-100-${{ inputs.profile }}-${{ github.run_id }}
+          path: session-evidence/
+          retention-days: 14
+      - name: Remove only the disposable lab
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml down --volumes --remove-orphans
+  login_bursts:
+    if: ${{ inputs.profile == 'login-bursts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LAB_SCENARIO: large-busy
+      LAB_ACTOR_PAIRS: '100'
+      LAB_DB_CPUS: '2'
+      LAB_SESSION_PROFILE: stage
+      LAB_SESSION_TARGET: '100'
+      LAB_SESSION_AUTH_MODE: established
+      LAB_SESSION_APPROVAL: /exchange/approval.json
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Check unchanged gates and fixture accounting
+        run: |
+          node deploy/session-lab/test-policy.mjs
+          go test ./cmd/capacity-lab
+      - name: Prepare fixed isolated lab and synthetic sessions
+        run: |
+          mkdir -p session-exchange session-evidence
+          git rev-parse HEAD > session-evidence/source-commit.txt
+          git diff a5e94496f90435a2610c3c46592af3d0ea33e055 -- internal/ > session-evidence/runtime-diff.patch
+          test ! -s session-evidence/runtime-diff.patch
+          cp deploy/session-lab/{policy.mjs,login-bursts.sh,sample-login-cgroups.py,compose.yml} session-evidence/
+          cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
+          cp .github/workflows/session-lab.yml session-evidence/workflow.yml
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml pull sessions
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps exporter > session-exchange/fixtures.json
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          from datetime import datetime,timezone
+          data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          profile=os.environ['LAB_SESSION_PROFILE']
+          assert profile in ('stage','sustained')
+          approval={'authorized':True,'environment':'isolated-staging','profile':profile,'max_sessions':100,'max_duration_seconds':180 if profile=='stage' else 1800,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User approval27October2026: isolated100independent sessions on existing resources; stop before500'}
+          Path('session-exchange/approval.json').write_text(json.dumps(approval))
+          data.pop('sessions')
+          Path('session-exchange/run.json').write_text(json.dumps(data))
+          PY
+          docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'ANALYZE;'
+          docker run --rm --network none atlxpres-capacity-lab:local sha256sum /app/api /app/lab > session-evidence/binaries.sha256
+          docker image inspect postgres:16-alpine redis:7.2-alpine haproxy:3.0-alpine grafana/k6:2.3.0 > session-evidence/images.json
+          sha256sum session-exchange/fixtures.json > session-evidence/fixture-sha256.txt
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps lifecycle > session-evidence/lifecycle.jsonl
+      - name: Investigate20/50/100login bursts without changing admission
+        run: bash deploy/session-lab/login-bursts.sh
+      - name: Retain only non-secret evidence
+        if: always()
+        run: |
           docker compose -f deploy/capacity-lab/compose.yml logs --no-color > session-evidence/services.log
           docker stats --no-stream --format '{{json .}}' > session-evidence/final-stats.jsonl
           docker inspect $(docker compose -f deploy/capacity-lab/compose.yml ps -q) > session-evidence/container-limits.json
