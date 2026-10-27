@@ -168,7 +168,8 @@ func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 	if err != nil {
 		return err
 	}
-	passed := confirmed == market+hall+offers && duplicate == 0
+	exactErr := verifySessionAcknowledgements(ctx, db, runID, confirmed, out)
+	passed := confirmed == market+hall+offers && duplicate == 0 && exactErr == nil
 	if err = json.NewEncoder(out).Encode(map[string]any{"run_id": runID, "confirmed_writes": confirmed, "stored_marketplace_messages": market, "stored_town_hall_messages": hall, "stored_offers": offers, "duplicate_messages": duplicate, "delivery_receipt_rows": receipts, "write_reconciliation_passed": passed, "external_delivery_tested": false}); err != nil {
 		return err
 	}

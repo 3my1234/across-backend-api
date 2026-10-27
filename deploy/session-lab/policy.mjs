@@ -3,7 +3,7 @@ export const RAMP=[100,500,1000,2500,5000,10000,12000];
 export const mixes={mixed:{browse:40,chat:30,hall:20,support:5,admin:5},'chat-heavy':{browse:15,chat:50,hall:30,support:3,admin:2},'upload-heavy':null};
 export function plan(profile='smoke',target=4){
  if(!Number.isInteger(target)||target<2||target>15000)throw Error('Target must be 2–15000 distinct sessions');
- const common={profile,target,think_min:3,think_max:12,p95_ms:500,p99_ms:1500,error_rate:0.01,poll_every_ms:15000,poll_p95_ms:17000,poll_p99_ms:20000};
+ const common={profile,target,think_min:3,think_max:12,p95_ms:500,p99_ms:1500,error_rate:0.005,poll_every_ms:15000,poll_p95_ms:17000,poll_p99_ms:20000};
  switch(profile){
  case 'smoke':if(target>20)throw Error('Smoke is capped at 20 sessions');return {...common,seconds:45,executor:'constant-vus'};
  case 'stage':return {...common,seconds:180,executor:'constant-vus'};

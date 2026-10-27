@@ -20,7 +20,7 @@ export function nextStage(summary,reconciliation){
  if((metrics.dropped_iterations?.values.count||0)>0)throw Error('Generator dropped arrivals');
  for(const metric of Object.values(metrics))for(const threshold of Object.values(metric.thresholds||{}))if(threshold.ok!==true)throw Error('A previous threshold failed');
  if(!metrics.successful_latency||metrics.successful_latency.values['p(95)']>=500||metrics.successful_latency.values['p(99)']>=1500)throw Error('Successful latency gate failed');
- if(metrics.unexpected_failure?.values.rate>=0.01||metrics.controlled_overload?.values.rate!==0||metrics.content_valid?.values.rate!==1)throw Error('Previous stage was unhealthy');
+ if(metrics.unexpected_failure?.values.rate>=0.005||metrics.controlled_overload?.values.rate!==0||metrics.content_valid?.values.rate!==1)throw Error('Previous stage was unhealthy');
  if(summary.configuration?.poll_every_ms===15000){
   const poll=metrics.poll_delivery_latency?.values;
   if(!Number.isFinite(poll?.['p(95)'])||!Number.isFinite(poll?.['p(99)'])||poll['p(95)']>=17000||poll['p(99)']>=20000||(metrics.recipient_observations?.values.count||0)<1)throw Error('Independent chat polling latency gate failed');

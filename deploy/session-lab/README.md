@@ -82,7 +82,7 @@ larger workloads need reviewed sharded verification rather than silent sampling.
 - Successful API latency per operation: p95 <500 ms; p99 <1,500 ms. These initial
   usability targets expose server delays while leaving a separate budget for
   internet/device/rendering time. Percentiles of failed responses cannot pass.
-- Unexpected response/content failure <1%; every content/identity assertion must
+- Unexpected response failure <0.5%; every content/identity assertion must
   pass. Normal session stages permit no 429/503. Burst mode records controlled
   JSON overload with positive Retry-After separately; HTML/timeouts are failures.
 - Both replicas must serve requests; planned VUs must actually start; no dropped
@@ -102,7 +102,7 @@ larger workloads need reviewed sharded verification rather than silent sampling.
 `reconnect` (2m) and independent `burst` (90s). The ramp target sequence is 100,
 500, 1,000, 2,500, 5,000, 10,000, 12,000. Run each step independently so cumulative
 percentiles cannot hide a newly failing stage. Review its complete summary and
-reconciliation before advancing. Current CI exposes smoke only.
+reconciliation before advancing. CI exposes bounded 100-session stage/gradual runs as well as smoke. The 27 October qualification workflow is fixed at 100 sessions and uses the audit error gate of 0.5%.
 
 Non-smoke profiles require `LAB_SESSION_APPROVAL` to name a mounted JSON file
 with `authorized`, `environment: isolated-staging`, matching profile,
