@@ -8,3 +8,19 @@ func businessThreadMembers(root string) string {
  JOIN provider_conversations member ON member.id=requested.id OR (member.provider_id=requested.provider_id AND member.user_id=requested.user_id)
  WHERE requested.id=` + root + ` AND COALESCE(to_jsonb(member)->>'thread_id',member.id::text)=COALESCE(to_jsonb(requested)->>'thread_id',requested.id::text)`
 }
+
+// Each physical conversation can contribute at most the requested page size to
+// the globally newest page. Bound its ordered index scan before merging thread
+// members, rather than reading/projecting their entire histories and sorting.
+// Keep the exact membership helper and optional JSON fields for old schemas.
+// Arguments: conversation UUID, cursor timestamp, cursor UUID, page size + 1.
+func businessHistoryPageSQL() string {
+	return `SELECT msg.id::text,msg.sender_type,msg.body,msg.created_at,msg.media_keys,to_jsonb(msg)->'location',COALESCE(to_jsonb(msg)->'context','{}'::jsonb)
+	FROM (` + businessThreadMembers("$1::uuid") + `) member
+	CROSS JOIN LATERAL (
+	 SELECT msg.* FROM provider_conversation_messages msg
+	 WHERE msg.conversation_id=member.id
+	 AND ($2::timestamptz IS NULL OR (msg.created_at,msg.id)<($2,$3::uuid))
+	 ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4
+	) msg ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4`
+}
