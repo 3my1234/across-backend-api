@@ -40,6 +40,9 @@ restore() {
   dc down --volumes --remove-orphans
   dc up -d --wait --wait-timeout 120 postgres redis
   dc exec -T postgres pg_restore -U lab -d capacity_lab --no-owner --exit-on-error < "$task_snapshot"
+  # pg_dump does not carry pg_statistic column distributions into a restored DB.
+  # Match the seeded lab's ANALYZE before warming or measuring either variant.
+  dc exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'ANALYZE;'
 }
 fingerprint() {
   dc exec -T postgres psql -U lab -d capacity_lab -X -At -v ON_ERROR_STOP=1 -c "SELECT json_build_object('actors',(SELECT md5(string_agg(row_to_json(a)::text,'' ORDER BY slot)) FROM capacity_lab_actors a),'messages',(SELECT count(*) FROM provider_conversation_messages),'shared_messages',(SELECT count(*) FROM chat_messages),'rooms',(SELECT count(*) FROM chat_rooms),'revision',(SELECT sum(history_revision) FROM provider_conversations));"
