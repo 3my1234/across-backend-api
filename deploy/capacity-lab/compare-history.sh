@@ -27,7 +27,7 @@ dc run --rm --no-deps runner /app/lab comparison-prepare
 dc exec -T postgres pg_dump -U lab -d capacity_lab -Fc --no-owner > "$task_snapshot"
 sha256sum "$task_snapshot" > capacity-comparison/snapshot-sha256.txt
 # Explicitly loopback-only tests in the disposable PostgreSQL network namespace.
-docker run --rm --network container:atlxpres-capacity-lab-postgres-1 --cpus 1 --memory 512m \
+docker run --rm --network container:atlxpres-capacity-lab-postgres-1 --cpus 1 --memory 512m --user "$(id -u):$(id -g)" \
   --workdir /app/internal/controllers --mount "type=bind,src=$PWD/capacity-comparison/regression,dst=/evidence" \
   -e SETTLEMENT_TEST_LOCAL=true -e APP_ENV=test \
   -e 'DATABASE_URL=postgres://lab:lab-disposable-only@127.0.0.1:5432/postgres?sslmode=disable' \
