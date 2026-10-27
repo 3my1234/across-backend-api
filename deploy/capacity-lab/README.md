@@ -3,15 +3,24 @@
 Run the `Isolated capacity lab` GitHub Actions workflow on a reviewed branch.
 It creates its own PostgreSQL, Redis, two real API processes, HAProxy and a load
 runner on an internal Docker network. No ports, host database volumes, production
-networks, credentials or database dumps are used. API migrations run once in the
+networks, credentials or production database dumps are used. API migrations run once in the
 seed service. Network egress is unavailable at runtime; worker/email/push/payment
 delivery is deliberately not started. The image build can download dependencies.
 
-The runner accepts only `seed` or `run`, requires the lab marker, uses fixed
+The runner exposes bounded lab commands including `seed` and `run`, requires the lab marker, uses fixed
 Compose service addresses and checks a synthetic database identity. It does not
 accept a target URL or production environment file. Its HTTP transport ignores
 proxy environment variables and refuses redirects. Do not expose these lab
 services publicly or reuse their deliberately disposable credentials.
+
+The manual `comparison` profile is a separately approved, fixed A/B/B/A history
+experiment: PostgreSQL at two CPUs, the `large-busy` synthetic snapshot restored
+and analyzed before every run, and the same 20/50/100-pair 90-second stages. It
+adds success-only p50/p95/p99, private pool-wait counters, server query timings,
+cgroup CPU and exact acknowledged-write verification. The original controller
+comes from `b422273`; both variants use identical measurement code. This is not
+an independent-session qualification or permission to target production. See
+[the 27 October results](../../docs/CHAT_HISTORY_MIXED_COMPARISON_2026-10-27.md).
 
 All scenarios use 100 buyer/provider pairs with approved paid Gold provider fixtures (synthetic NGN5,000 receipts, 60 combined posts and 10 simultaneous Town Hall rooms),
 100 marketplace conversations and 2,000 Support messages. Choose `scenario` in
