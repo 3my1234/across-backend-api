@@ -48,3 +48,11 @@ assert.throws(()=>bindEstablished({id:'a'},[{id:'b',token:'synthetic'}],1));
 assert.throws(()=>bindEstablished({id:'a'},[{id:'a',token:'one'},{id:'a',token:'two'}],2));
 assert.equal(bindEstablished({id:'a'},[{id:'a',token:'synthetic'}],1).token,'synthetic');
 console.log('Established population binding rejects incomplete/duplicate/mismatched identities.');
+
+const {chronologicalPage}=await import('./established.mjs');
+const chronological=[{id:'old',created_at:'2026-10-27T12:00:00Z'},{id:'new',created_at:'2026-10-27T12:00:01Z'}];
+assert.equal(chronologicalPage(chronological),true);
+assert.equal(chronologicalPage([...chronological].reverse()),false);
+assert.equal(chronologicalPage([chronological[0],chronological[0]]),false);
+assert.equal(chronologicalPage([{id:'bad',created_at:'invalid'}]),false);
+console.log('Chronological API-page regression: correct order accepted; reversed/duplicate/invalid rejected.');

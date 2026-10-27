@@ -5,7 +5,7 @@ import {Counter,Trend,Rate} from 'k6/metrics';
 import {randomBytes} from 'k6/crypto';
 import {SharedArray} from 'k6/data';
 import {plan,mixes,validateFixture,requireApproval,chooseActivity} from './policy.mjs';
-import {establishedMode,bindEstablished} from './established.mjs';
+import {establishedMode,bindEstablished,chronologicalPage} from './established.mjs';
 const established=establishedMode(__ENV.LAB_SESSION_AUTH_MODE);
 
 const cfg=plan(__ENV.LAB_SESSION_PROFILE||'smoke',Number(__ENV.LAB_SESSION_TARGET||4));
@@ -65,8 +65,7 @@ function history(){
  if(!result.passed)return;
  const items=result.data.items;
  valid.add(Array.isArray(items)&&items.length>0&&items.length<=40,{op:'history_shape'});
- const inbound=[];const ids=new Set();let previous=Infinity;
- for(const message of items||[]){const stamp=Date.parse(message.created_at);valid.add(Number.isFinite(stamp)&&stamp<=previous&&!ids.has(message.id),{op:'history_order'});previous=stamp;ids.add(message.id);}
+ const inbound=[];valid.add(chronologicalPage(items),{op:'history_order'});
  for(const message of items||[]){
   if(message.sender_type===actor.role||!String(message.body).startsWith('sessions-'+fixture.run_id+':')||observed.has(message.id))continue;
   const marker=String(message.body).split(':');const intended=marker[2]===actor.peer_id;

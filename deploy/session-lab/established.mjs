@@ -9,3 +9,11 @@ export function bindEstablished(actor, authenticated, expectedCount) {
  if(!match?.token||authenticated.filter(item=>item.id===actor.id).length!==1)throw Error('Authenticated identity binding mismatch');
  return {...actor,token:match.token};
 }
+
+// API returns each selected message page in chronological display order.
+export function chronologicalPage(items) {
+ if(!Array.isArray(items)||items.length===0)return false;
+ const ids=new Set();let previous=-Infinity;
+ for(const item of items){const stamp=Date.parse(item.created_at);if(!Number.isFinite(stamp)||stamp<previous||ids.has(item.id))return false;previous=stamp;ids.add(item.id);}
+ return true;
+}
