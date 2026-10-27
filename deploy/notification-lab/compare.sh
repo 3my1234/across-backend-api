@@ -28,6 +28,9 @@ for mode in off on on off; do
  dc exec -T postgres dropdb -U lab --force capacity_lab
  dc exec -T postgres createdb -U lab capacity_lab
  dc exec -T postgres pg_restore -U lab -d capacity_lab < session-exchange/comparison-baseline.dump
+ # pg_dump does not retain pg_statistic: rebuild identical planner statistics
+ # before either arm, just as the original session campaign did after seeding.
+ sql 'ANALYZE;' >/dev/null
  dc exec -T redis redis-cli FLUSHDB >/dev/null
  # Explicit known disposable journal only; preserve every previous stage first.
  if test -f session-exchange/provider-journal.jsonl; then mv session-exchange/provider-journal.jsonl "comparison-evidence/provider-previous-${index}.jsonl"; fi
