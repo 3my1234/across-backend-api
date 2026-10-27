@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -104,6 +105,8 @@ func main() {
 		must(seed(ctx, db))
 	case "run":
 		must(run(ctx, db))
+	case "comparison-prepare":
+		must(prepareComparison(ctx, db))
 	case "release-check":
 		must(releaseJourneys(ctx, db))
 	case "export":
@@ -238,14 +241,15 @@ func checkFixtures(ctx context.Context, db *pgxpool.Pool, plan fixturePlan) (map
 }
 
 type sample struct {
-	Name              string
-	Status            int
-	Elapsed           time.Duration
-	Write             bool
-	Backend           string
-	Valid             bool
-	Controlled        bool // JSON overload response with a positive Retry-After.
-	AdmissionRejected bool
+	Name               string
+	Status             int
+	Elapsed            time.Duration
+	Write              bool
+	Backend            string
+	Valid              bool
+	Controlled         bool // JSON overload response with a positive Retry-After.
+	AdmissionRejected  bool
+	AcknowledgementKey string
 }
 type metric struct {
 	Requests int         `json:"requests"`
@@ -253,6 +257,8 @@ type metric struct {
 	Busy     int         `json:"busy"`
 	Errors   int         `json:"errors"`
 	P95MS    float64     `json:"successful_p95_ms"`
+	P50MS    float64     `json:"successful_p50_ms"`
+	P99MS    float64     `json:"successful_p99_ms"`
 	Statuses map[int]int `json:"status_counts"`
 	times    []time.Duration
 }
@@ -275,7 +281,9 @@ func (m *metric) add(s sample) {
 func (m *metric) finish() {
 	sort.Slice(m.times, func(i, j int) bool { return m.times[i] < m.times[j] })
 	if len(m.times) > 0 {
+		m.P50MS = float64(m.times[(len(m.times)*50+99)/100-1].Microseconds()) / 1000
 		m.P95MS = float64(m.times[(len(m.times)*95+99)/100-1].Microseconds()) / 1000
+		m.P99MS = float64(m.times[(len(m.times)*99+99)/100-1].Microseconds()) / 1000
 	}
 }
 
@@ -393,6 +401,9 @@ func request(c *http.Client, op operation, index int) sample {
 	s.Status = res.StatusCode
 	s.Backend = res.Header.Get("X-Lab-Backend")
 	s.Valid = err == nil && res.StatusCode == op.Want && validPayload(op, raw)
+	if s.Valid && op.Write {
+		s.AcknowledgementKey = operationWriteKey(op)
+	}
 	s.Controlled = err == nil && controlledOverload(res.StatusCode, res.Header.Get("Retry-After"), raw)
 	var overload struct {
 		Error string `json:"error"`
@@ -403,7 +414,7 @@ func request(c *http.Client, op operation, index int) sample {
 	return s
 }
 
-func run(ctx context.Context, db *pgxpool.Pool) error {
+func run(ctx context.Context, db *pgxpool.Pool) (runError error) {
 	dbCPUs, err := databaseCPU(os.Getenv("LAB_DB_CPUS"))
 	if err != nil {
 		return err
@@ -479,8 +490,29 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 		return runBurst(ctx, db, actors, prefix, plan.Name, dbCPUs, c)
 	}
 	var confirmed int
+	acknowledged := map[string]int{}
+	if os.Getenv("LAB_COMPARISON") == "true" {
+		defer func() {
+			verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			runError = errors.Join(runError, reconcileAcknowledged(verifyCtx, db, prefix, acknowledged))
+		}()
+	}
 	var stageError error
 	for _, users := range []int{20, 50, 100} {
+		var poolBefore any
+		if os.Getenv("LAB_COMPARISON") == "true" {
+			if err := comparisonHTTPChecks(ctx, db, c, actors[0], actors[1]); err != nil {
+				return err
+			}
+			poolBefore, err = comparisonPools(c)
+			if err != nil {
+				return err
+			}
+			if _, err = db.Exec(ctx, "SELECT pg_stat_statements_reset()"); err != nil {
+				return err
+			}
+		}
 		started := time.Now()
 		deadline := started.Add(duration)
 		samples := make(chan sample, 1000)
@@ -512,6 +544,7 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 			}
 			if s.Write && s.Valid {
 				confirmed++
+				acknowledged[s.AcknowledgementKey]++
 			}
 			if !s.Valid {
 				if s.Status == 429 || s.Status == 503 {
@@ -528,7 +561,25 @@ func run(ctx context.Context, db *pgxpool.Pool) error {
 				latencyPassed = false
 			}
 		}
-		report := map[string]any{"scenario": plan.Name, "profile": os.Getenv("LAB_PROFILE"), "simulated_active_pairs": users, "elapsed_seconds": time.Since(started).Seconds(), "requests_per_second": float64(total) / time.Since(started).Seconds(), "operations": metrics, "backends": backends, "unexpected_errors": errors, "busy": busy, "latency_target_ms": 500, "latency_target_passed": latencyPassed, "scope": "isolated Docker host; no internet/media/worker delivery capacity claim"}
+		ended := time.Now()
+		succeeded := 0
+		for _, m := range metrics {
+			succeeded += m.Success
+		}
+		report := map[string]any{"scenario": plan.Name, "profile": os.Getenv("LAB_PROFILE"), "simulated_active_pairs": users, "stage_started_at": started.UTC(), "stage_ended_at": ended.UTC(), "elapsed_seconds": ended.Sub(started).Seconds(), "requests_per_second": float64(total) / ended.Sub(started).Seconds(), "successful_requests_per_second": float64(succeeded) / ended.Sub(started).Seconds(), "operations": metrics, "backends": backends, "unexpected_errors": errors, "busy": busy, "latency_target_ms": 500, "latency_target_passed": latencyPassed, "scope": "isolated Docker host; no internet/media/worker delivery capacity claim"}
+		if os.Getenv("LAB_COMPARISON") == "true" {
+			poolAfter, e := comparisonPools(c)
+			if e != nil {
+				return e
+			}
+			report["pool_before"] = poolBefore
+			report["pool_after"] = poolAfter
+			statements, e := comparisonStatements(ctx, db)
+			if e != nil {
+				return e
+			}
+			report["query_execution"] = statements
+		}
 		report["database_cpus"] = dbCPUs
 		must(json.NewEncoder(os.Stdout).Encode(report))
 		if errors > 0 || busy > 0 {

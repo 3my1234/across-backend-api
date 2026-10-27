@@ -2,7 +2,7 @@
 name: atlxpres-capacity-lab
 x-api: &api
   build: {context: ../.., dockerfile: deploy/capacity-lab/Dockerfile}
-  image: atlxpres-capacity-lab:local
+  image: ${LAB_API_IMAGE:-atlxpres-capacity-lab:local}
   command: [/app/api]
   environment:
     # Synthetic no-egress fixture, not a production-like security environment.
@@ -86,6 +86,7 @@ services:
       LAB_SCENARIO: ${LAB_SCENARIO:-standard}
       LAB_DB_CPUS: ${LAB_DB_CPUS:-1}
       LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-100}
+      LAB_COMPARISON: ${LAB_COMPARISON:-false}
     depends_on: {gateway: {condition: service_started}}
     networks:
       lab: {ipv4_address: 172.29.248.20}

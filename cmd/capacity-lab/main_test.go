@@ -30,6 +30,22 @@ func TestMetricsDoNotCountOverloadOrFastFailuresAsSuccess(t *testing.T) {
 	}
 }
 
+func TestComparisonPercentilesAndAcknowledgementKeys(t *testing.T) {
+	m := &metric{}
+	for i := 1; i <= 100; i++ {
+		m.add(sample{Status: 200, Valid: true, Elapsed: time.Duration(i) * time.Millisecond})
+	}
+	m.finish()
+	if m.P50MS != 50 || m.P95MS != 95 || m.P99MS != 99 {
+		t.Fatalf("wrong percentile ranks: %+v", m)
+	}
+	for _, v := range []struct{ body, want string }{{`{"message":"synthetic"}`, "synthetic"}, {`{"terms":"offer"}`, "offer"}, {`invalid`, ""}} {
+		if got := operationWriteKey(operation{Body: v.body}); got != v.want {
+			t.Fatalf("write key got %q want %q", got, v.want)
+		}
+	}
+}
+
 // Creates only a randomly named disposable database on an explicitly supplied
 // loopback PostgreSQL, never migrates the caller's database or loads .env.
 func TestFreshLabMigrationsAndFixtures(t *testing.T) {

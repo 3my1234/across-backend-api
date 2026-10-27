@@ -5,7 +5,7 @@ on:
       profile:
         description: Smoke, sustained baseline or independently paced burst/recovery; isolated only
         type: choice
-        options: [smoke, baseline, burst]
+        options: [smoke, baseline, burst, comparison]
         default: smoke
       scenario:
         description: Dataset growth and busy Town Hall contention
@@ -24,6 +24,7 @@ permissions:
   contents: read
 jobs:
   lab:
+    if: ${{ inputs.profile != 'comparison' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -69,3 +70,30 @@ jobs:
       - name: Remove disposable lab containers and data
         if: always()
         run: docker compose -f deploy/capacity-lab/compose.yml down --volumes --remove-orphans
+  comparison:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'comparison' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LAB_SCENARIO: large-busy
+      LAB_DB_CPUS: '2'
+      LAB_ACTOR_PAIRS: '100'
+      LAB_COMPARISON: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Check observer and request accounting
+        run: go test ./cmd/capacity-lab
+      - name: Run matched original-optimized-optimized-original experiment
+        run: bash deploy/capacity-lab/compare-history.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: history-mixed-comparison-${{ github.run_id }}
+          path: capacity-comparison/
+          retention-days: 14
+      - name: Remove only the disposable comparison lab
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/capacity-lab/comparison-compose.yml down --volumes --remove-orphans
