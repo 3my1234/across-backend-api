@@ -26,9 +26,10 @@ jobs:
         with: {go-version: '1.27.3'}
       - name: Check unchanged gates and fixture accounting
         run: |
+          bash -n deploy/notification-lab/investigate.sh deploy/notification-lab/faults.sh
           node deploy/session-lab/test-policy.mjs
           mkdir -p session-evidence
-          go test -v ./cmd/capacity-lab | tee session-evidence/harness-tests.log
+          go test -v ./cmd/capacity-lab ./internal/workers ./internal/middleware | tee session-evidence/harness-tests.log
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
