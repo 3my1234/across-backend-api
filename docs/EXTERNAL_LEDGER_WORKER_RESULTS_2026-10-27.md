@@ -76,7 +76,7 @@ At final verification there were 6,501 mock-receipt-confirmed rows and 26,254 se
 
 The unchanged code requests at most 100 receipts per 15-second tick after the 15-minute age guard: a theoretical ceiling of 6.67 checks/second per loop. Approximately 32,755 pushes were submitted in this 30-minute experiment, around 18.2/second of active time. Confirmation cannot keep pace at that arrival rate with one such loop, even though sending and API latency remain healthy.
 
-Do not simply add parallel receipt workers: the current receipt SELECT does not claim/lease its rows, so concurrent loops can poll the same records. Prepare a separate experimental proposal for bounded backlog draining with safe coordination, unchanged receipt age, vendor limits, timeout/restart handling and idempotent completion. Compare it under the same workload before recommending deployment. Do not change password hashing/admission limits, production settings or purchase resources to mask this finding.
+Do not simply add parallel receipt workers: the current receipt SELECT does not claim/lease its rows, so concurrent loops can poll the same records. Prepare a separate experimental proposal for a receipt-specific bounded drain budget, keeping the existing send batch unchanged. Retain the fifteen-minute age guard and current per-request receipt size, coordinate ownership across overlapping workers, and test timeout/restart/idempotent completion before selecting a processing budget. Compare it under the same workload before recommending deployment. Do not change password hashing/admission limits, production settings or purchase resources to mask this finding.
 
 ## Recommendation and remaining limits
 
