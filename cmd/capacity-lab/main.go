@@ -118,6 +118,8 @@ func main() {
 	case "prepare-sessions":
 		must(prepareSessions(ctx, db))
 		must(exportSessions(ctx, db, os.Stdout))
+	case "signup-bursts":
+		must(signupBursts(ctx, db, os.Stdout))
 	case "login-bursts":
 		must(loginBursts(ctx, db, os.Stdout))
 	case "observe-sessions":
