@@ -1,0 +1,1108 @@
+[
+  {
+    "stage": "1-off",
+    "planned_active_seconds": 180,
+    "first_offered_to_last_completed_seconds": 183.0358898639679,
+    "offered_requests": 8460,
+    "completed_workload_requests": 8460,
+    "completed_rps_request_window": 46.220443467603346,
+    "k6_reported_offered_rate_including_setup": 38.08866979018924,
+    "established_sessions": 100,
+    "http_error_rate": 0,
+    "dropped_iterations": 0,
+    "overall_latency_ms": {
+      "p(99)": 113.83873044999986,
+      "max": 510.2299,
+      "min": 0.454751,
+      "med": 3.533761,
+      "p(95)": 25.52379649999999
+    },
+    "operations": {
+      "successful_latency{op:hall_send}": {
+        "med": 7.1004295,
+        "p(95)": 11.11606025,
+        "p(99)": 13.793404499999989,
+        "max": 16.067968,
+        "min": 2.968469
+      },
+      "successful_latency{op:receipts}": {
+        "min": 1.721081,
+        "med": 2.20349,
+        "p(95)": 6.1957227,
+        "p(99)": 46.51706505999994,
+        "max": 92.078747
+      },
+      "successful_latency{op:service_detail}": {
+        "max": 13.88503,
+        "min": 0.454751,
+        "med": 3.2098744999999997,
+        "p(95)": 4.989745,
+        "p(99)": 6.898776660000001
+      },
+      "successful_latency{op:services}": {
+        "max": 92.243418,
+        "min": 0.519278,
+        "med": 0.8009135000000001,
+        "p(95)": 47.73715509999996,
+        "p(99)": 55.68305525000001
+      },
+      "successful_latency{op:market_send}": {
+        "max": 369.441057,
+        "min": 3.883734,
+        "med": 6.280632000000001,
+        "p(95)": 99.36639725,
+        "p(99)": 189.27456449999966
+      },
+      "successful_latency{op:support_history}": {
+        "min": 1.261123,
+        "med": 1.74168,
+        "p(95)": 3.712659499999999,
+        "p(99)": 4.0225167200000005,
+        "max": 4.041353
+      },
+      "successful_latency{op:session}": {
+        "max": 6.300797,
+        "min": 2.778131,
+        "med": 3.920326,
+        "p(95)": 5.2851966,
+        "p(99)": 5.9017457800000015
+      },
+      "successful_latency{op:inbox}": {
+        "min": 8.881072,
+        "med": 14.988598,
+        "p(95)": 147.43241425,
+        "p(99)": 262.4478288999993,
+        "max": 510.2299
+      },
+      "successful_latency{op:hall_offer}": {
+        "min": 0,
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0
+      },
+      "successful_latency{op:market_history}": {
+        "min": 2.096239,
+        "med": 3.7172349999999996,
+        "p(95)": 20.280770049999994,
+        "p(99)": 73.48587896000001,
+        "max": 144.167684
+      },
+      "successful_latency{op:product_detail}": {
+        "p(95)": 7.562127649999995,
+        "p(99)": 13.095296919999997,
+        "max": 18.279347,
+        "min": 0.484588,
+        "med": 3.7690855
+      },
+      "successful_latency{op:admin_overview}": {
+        "p(95)": 4.279249999999999,
+        "p(99)": 6.475316879999997,
+        "max": 7.897776,
+        "min": 1.215424,
+        "med": 1.625214
+      },
+      "successful_latency{op:hall_history}": {
+        "min": 1.330018,
+        "med": 2.3037384999999997,
+        "p(95)": 4.70993775,
+        "p(99)": 6.618217149999997,
+        "max": 7.225224
+      },
+      "successful_latency{op:catalogue}": {
+        "med": 1.4710375,
+        "p(95)": 24.849746449999998,
+        "p(99)": 30.683612080000003,
+        "max": 46.311401,
+        "min": 0.972763
+      },
+      "successful_latency{op:login}": {
+        "min": 0,
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0
+      }
+    },
+    "cpu_percent_one_core_measured_samples": {
+      "atlxpres-session-observer": {
+        "samples": 23,
+        "mean": 0.04217391304347826,
+        "peak": 0.28
+      },
+      "atlxpres-capacity-lab-sessions-run-ea9972bf982e": {
+        "samples": 23,
+        "mean": 5.852173913043479,
+        "peak": 11.73
+      },
+      "atlxpres-capacity-lab-api2-1": {
+        "samples": 23,
+        "mean": 4.009130434782609,
+        "peak": 6.41
+      },
+      "atlxpres-capacity-lab-api1-1": {
+        "samples": 23,
+        "mean": 3.9356521739130432,
+        "peak": 6.18
+      },
+      "atlxpres-capacity-lab-notification-provider-1": {
+        "samples": 23,
+        "mean": 1.118695652173913,
+        "peak": 2.82
+      },
+      "atlxpres-capacity-lab-gateway-1": {
+        "samples": 23,
+        "mean": 0.9113043478260869,
+        "peak": 1.58
+      },
+      "atlxpres-capacity-lab-postgres-1": {
+        "samples": 23,
+        "mean": 16.37913043478261,
+        "peak": 27.14
+      },
+      "atlxpres-capacity-lab-redis-1": {
+        "samples": 23,
+        "mean": 1.9460869565217391,
+        "peak": 3.33
+      }
+    },
+    "maximum_sampled_lock_waiters": 0,
+    "redis_peak_sampled_bytes": 2571856,
+    "bracketed_pool_deltas": {
+      "api1": {
+        "acquire_count": 14024,
+        "empty_acquires": 237,
+        "empty_acquire_wait_ms_total": 794,
+        "cancelled_acquires": 0
+      },
+      "api2": {
+        "acquire_count": 13787,
+        "empty_acquires": 250,
+        "empty_acquire_wait_ms_total": 939,
+        "cancelled_acquires": 0
+      }
+    },
+    "sampled_send_backlog_peak_including_setup_recovery": {
+      "email": 424,
+      "native_push": 3284
+    },
+    "sampled_send_backlog_oldest_age_seconds_including_setup_recovery": {
+      "email": 299.989814,
+      "native_push": 249.216489
+    },
+    "write_reconciliation": {
+      "confirmed_writes": 1232,
+      "delivery_receipt_rows": 788,
+      "duplicate_messages": 0,
+      "external_delivery_tested": false,
+      "run_id": "44cc1777-18ac-47d3-85a6-4029e5a4de35",
+      "stored_marketplace_messages": 796,
+      "stored_offers": 0,
+      "stored_town_hall_messages": 436,
+      "write_reconciliation_passed": true
+    },
+    "write_journal": {
+      "offered_write_keys": 1232,
+      "exact_acknowledged_keys": 1232,
+      "stored_write_keys": 1232,
+      "missing_acknowledged_keys": 0,
+      "duplicate_stored_keys": 0,
+      "unknown_stored_keys": 0,
+      "unconfirmed_committed_keys": 0,
+      "offered_keys_not_stored": 0,
+      "load_process_completed": true,
+      "all_acknowledged_keys_stored_once": true,
+      "journal_consistent": true,
+      "normal_completion_inventory_matched": true
+    },
+    "notifications": {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "pending": 424
+      },
+      "killed_jobs": 0,
+      "killed_jobs_recovered": 0,
+      "provider": {
+        "channels": {},
+        "journal_events": 0,
+        "journal_nanoseconds": 0
+      },
+      "push_status": {
+        "pending": 3284
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T21:41:10.942294+00:00"
+    },
+    "top80_sql_execution_ms_by_role_including_setup_recovery": {
+      "lab": 35028.83844899998
+    },
+    "inbox_sql": [
+      {
+        "calls": 796,
+        "mean_exec_time": 17.764008135678385,
+        "max_exec_time": 249.64398400000002,
+        "total_exec_time": 14140.15047599998,
+        "shared_blks_read": 1739,
+        "shared_blks_hit": 2575022
+      }
+    ],
+    "postload_custom_then_generic_repeat_plan_execution_ms": [
+      15.689,
+      10.586,
+      11.163,
+      9.648
+    ],
+    "first2s_inbox_samples": 59,
+    "first2s_inbox_max_ms": 510.2299,
+    "notes": [
+      "CPU/lock samples are roughly5s, not continuous peak detection.",
+      "Pool counters bracket measurement within the observer sampling interval.",
+      "SQL statistics include login setup and readiness recovery; top80 statements only.",
+      "EXPLAIN runs after load; its buffers are warmed, not a true cold-cache experiment.",
+      "Mock ACK counter records response generation; worker sent state is separate evidence. No real recipient delivery."
+    ]
+  },
+  {
+    "stage": "2-on",
+    "planned_active_seconds": 180,
+    "first_offered_to_last_completed_seconds": 183.0267550945282,
+    "offered_requests": 8460,
+    "completed_workload_requests": 8460,
+    "completed_rps_request_window": 46.222750305717035,
+    "k6_reported_offered_rate_including_setup": 38.04689870067342,
+    "established_sessions": 100,
+    "http_error_rate": 0,
+    "dropped_iterations": 0,
+    "overall_latency_ms": {
+      "p(95)": 27.68574754999997,
+      "p(99)": 111.50373918999992,
+      "max": 346.919105,
+      "min": 0.471106,
+      "med": 3.6685245
+    },
+    "operations": {
+      "successful_latency{op:catalogue}": {
+        "max": 86.501929,
+        "min": 0.976172,
+        "med": 1.47524,
+        "p(95)": 25.121654,
+        "p(99)": 30.436749120000005
+      },
+      "successful_latency{op:market_send}": {
+        "min": 4.895924,
+        "med": 6.453342,
+        "p(95)": 84.5006689,
+        "p(99)": 174.00677973999984,
+        "max": 343.93786
+      },
+      "successful_latency{op:receipts}": {
+        "min": 1.724492,
+        "med": 2.3106495000000002,
+        "p(95)": 7.363846699999997,
+        "p(99)": 47.64117762999994,
+        "max": 88.822609
+      },
+      "successful_latency{op:session}": {
+        "min": 2.9622,
+        "med": 4.046521,
+        "p(95)": 5.8217620000000005,
+        "p(99)": 6.445895380000001,
+        "max": 6.771985
+      },
+      "successful_latency{op:service_detail}": {
+        "p(99)": 9.01705630000002,
+        "max": 19.366251,
+        "min": 0.493069,
+        "med": 3.21793,
+        "p(95)": 5.269689
+      },
+      "successful_latency{op:product_detail}": {
+        "min": 0.471861,
+        "med": 3.7958155,
+        "p(95)": 6.871265549999998,
+        "p(99)": 11.224850579999996,
+        "max": 55.679833
+      },
+      "successful_latency{op:admin_overview}": {
+        "p(99)": 6.103156,
+        "max": 7.762826,
+        "min": 1.23022,
+        "med": 1.670742,
+        "p(95)": 5.3388294
+      },
+      "successful_latency{op:login}": {
+        "min": 0,
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0
+      },
+      "successful_latency{op:support_history}": {
+        "max": 7.202392,
+        "min": 1.068773,
+        "med": 1.908484,
+        "p(95)": 4.180893999999998,
+        "p(99)": 6.183320200000002
+      },
+      "successful_latency{op:inbox}": {
+        "max": 346.919105,
+        "min": 9.757442,
+        "med": 15.233848,
+        "p(95)": 147.19076579999964,
+        "p(99)": 281.5349004399991
+      },
+      "successful_latency{op:hall_send}": {
+        "min": 3.040558,
+        "med": 7.2529225,
+        "p(95)": 12.32791825,
+        "p(99)": 14.698164899999998,
+        "max": 18.079202
+      },
+      "successful_latency{op:market_history}": {
+        "min": 2.904991,
+        "med": 3.9354864999999997,
+        "p(95)": 23.6214175,
+        "p(99)": 70.14363130999999,
+        "max": 183.758621
+      },
+      "successful_latency{op:hall_offer}": {
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0,
+        "min": 0,
+        "med": 0
+      },
+      "successful_latency{op:hall_history}": {
+        "min": 1.400168,
+        "med": 2.5112889999999997,
+        "p(95)": 5.41239275,
+        "p(99)": 8.913898399999956,
+        "max": 51.581802
+      },
+      "successful_latency{op:services}": {
+        "min": 0.471106,
+        "med": 0.809296,
+        "p(95)": 47.678884199999985,
+        "p(99)": 63.27744672,
+        "max": 101.472878
+      }
+    },
+    "cpu_percent_one_core_measured_samples": {
+      "atlxpres-session-observer": {
+        "samples": 22,
+        "mean": 0.03727272727272727,
+        "peak": 0.31
+      },
+      "atlxpres-capacity-lab-sessions-run-513faf912e0b": {
+        "samples": 22,
+        "mean": 6.135909090909091,
+        "peak": 10.71
+      },
+      "atlxpres-capacity-lab-notification-worker-1": {
+        "samples": 22,
+        "mean": 0.9027272727272727,
+        "peak": 6.77
+      },
+      "atlxpres-capacity-lab-notification-provider-1": {
+        "samples": 22,
+        "mean": 2.0095454545454547,
+        "peak": 5.68
+      },
+      "atlxpres-capacity-lab-api2-1": {
+        "samples": 22,
+        "mean": 3.940909090909091,
+        "peak": 7.89
+      },
+      "atlxpres-capacity-lab-api1-1": {
+        "samples": 22,
+        "mean": 3.859090909090909,
+        "peak": 7.5
+      },
+      "atlxpres-capacity-lab-gateway-1": {
+        "samples": 22,
+        "mean": 0.9504545454545454,
+        "peak": 1.66
+      },
+      "atlxpres-capacity-lab-postgres-1": {
+        "samples": 22,
+        "mean": 17.626363636363635,
+        "peak": 34.07
+      },
+      "atlxpres-capacity-lab-redis-1": {
+        "samples": 22,
+        "mean": 2.041818181818182,
+        "peak": 3.56
+      }
+    },
+    "maximum_sampled_lock_waiters": 0,
+    "redis_peak_sampled_bytes": 2620744,
+    "bracketed_pool_deltas": {
+      "api1": {
+        "acquire_count": 13891,
+        "empty_acquires": 216,
+        "empty_acquire_wait_ms_total": 724,
+        "cancelled_acquires": 0
+      },
+      "api2": {
+        "acquire_count": 13912,
+        "empty_acquires": 207,
+        "empty_acquire_wait_ms_total": 647,
+        "cancelled_acquires": 0
+      }
+    },
+    "sampled_send_backlog_peak_including_setup_recovery": {
+      "email": 25,
+      "native_push": 100
+    },
+    "sampled_send_backlog_oldest_age_seconds_including_setup_recovery": {
+      "email": 3.165899,
+      "native_push": 2.835531
+    },
+    "write_reconciliation": {
+      "confirmed_writes": 1231,
+      "delivery_receipt_rows": 788,
+      "duplicate_messages": 0,
+      "external_delivery_tested": false,
+      "run_id": "44cc1777-18ac-47d3-85a6-4029e5a4de35",
+      "stored_marketplace_messages": 795,
+      "stored_offers": 0,
+      "stored_town_hall_messages": 436,
+      "write_reconciliation_passed": true
+    },
+    "write_journal": {
+      "offered_write_keys": 1231,
+      "exact_acknowledged_keys": 1231,
+      "stored_write_keys": 1231,
+      "missing_acknowledged_keys": 0,
+      "duplicate_stored_keys": 0,
+      "unknown_stored_keys": 0,
+      "unconfirmed_committed_keys": 0,
+      "offered_keys_not_stored": 0,
+      "load_process_completed": true,
+      "all_acknowledged_keys_stored_once": true,
+      "journal_consistent": true,
+      "normal_completion_inventory_matched": true
+    },
+    "notifications": {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "sent": 423
+      },
+      "killed_jobs": 0,
+      "killed_jobs_recovered": 0,
+      "provider": {
+        "channels": {
+          "email": {
+            "acceptances": 423,
+            "acknowledgements": 423,
+            "attempts": 423,
+            "keys": 423,
+            "receipts": 0
+          },
+          "push": {
+            "acceptances": 3283,
+            "acknowledgements": 3283,
+            "attempts": 3283,
+            "keys": 3283,
+            "receipts": 0
+          }
+        },
+        "journal_events": 11118,
+        "journal_nanoseconds": 5501192953
+      },
+      "push_status": {
+        "sent": 3283
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T21:46:10.079934+00:00"
+    },
+    "top80_sql_execution_ms_by_role_including_setup_recovery": {
+      "lab": 37163.860298000014,
+      "lab_worker": 1107.454809
+    },
+    "inbox_sql": [
+      {
+        "calls": 795,
+        "mean_exec_time": 19.125814742138395,
+        "max_exec_time": 231.05931299999997,
+        "total_exec_time": 15205.022720000003,
+        "shared_blks_read": 1738,
+        "shared_blks_hit": 2570615
+      }
+    ],
+    "postload_custom_then_generic_repeat_plan_execution_ms": [
+      16.094,
+      11.13,
+      12.609,
+      10.628
+    ],
+    "first2s_inbox_samples": 55,
+    "first2s_inbox_max_ms": 346.919105,
+    "notes": [
+      "CPU/lock samples are roughly5s, not continuous peak detection.",
+      "Pool counters bracket measurement within the observer sampling interval.",
+      "SQL statistics include login setup and readiness recovery; top80 statements only.",
+      "EXPLAIN runs after load; its buffers are warmed, not a true cold-cache experiment.",
+      "Mock ACK counter records response generation; worker sent state is separate evidence. No real recipient delivery."
+    ]
+  },
+  {
+    "stage": "3-on",
+    "planned_active_seconds": 180,
+    "first_offered_to_last_completed_seconds": 183.04369592666626,
+    "offered_requests": 8464,
+    "completed_workload_requests": 8464,
+    "completed_rps_request_window": 46.24032506091319,
+    "k6_reported_offered_rate_including_setup": 38.09952741610333,
+    "established_sessions": 100,
+    "http_error_rate": 0,
+    "dropped_iterations": 0,
+    "overall_latency_ms": {
+      "min": 0.449751,
+      "med": 3.4415275000000003,
+      "p(95)": 24.162070249999974,
+      "p(99)": 93.32829078000105,
+      "max": 397.219391
+    },
+    "operations": {
+      "successful_latency{op:receipts}": {
+        "med": 2.146148,
+        "p(95)": 4.491192149999999,
+        "p(99)": 18.18392517999998,
+        "max": 71.456185,
+        "min": 1.648302
+      },
+      "successful_latency{op:hall_offer}": {
+        "min": 0,
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0
+      },
+      "successful_latency{op:market_history}": {
+        "min": 2.870382,
+        "med": 3.646441,
+        "p(95)": 17.848670249999998,
+        "p(99)": 59.49530675,
+        "max": 219.325899
+      },
+      "successful_latency{op:admin_overview}": {
+        "min": 1.19829,
+        "med": 1.574321,
+        "p(95)": 5.402952,
+        "p(99)": 27.665456799999898,
+        "max": 63.265655
+      },
+      "successful_latency{op:inbox}": {
+        "p(95)": 123.74517,
+        "p(99)": 232.3723732999996,
+        "max": 397.219391,
+        "min": 9.670054,
+        "med": 14.9054645
+      },
+      "successful_latency{op:service_detail}": {
+        "min": 0.449751,
+        "med": 3.100385,
+        "p(95)": 5.2577175,
+        "p(99)": 8.151608800000002,
+        "max": 28.288753
+      },
+      "successful_latency{op:catalogue}": {
+        "med": 1.407855,
+        "p(95)": 24.0623422,
+        "p(99)": 32.868756280000014,
+        "max": 92.841891,
+        "min": 0.925652
+      },
+      "successful_latency{op:hall_history}": {
+        "min": 1.361516,
+        "med": 2.234723,
+        "p(95)": 4.60766925,
+        "p(99)": 6.067647349999998,
+        "max": 14.571251
+      },
+      "successful_latency{op:market_send}": {
+        "min": 4.672077,
+        "med": 6.1777125,
+        "p(95)": 73.37524775,
+        "p(99)": 158.27155214999988,
+        "max": 291.21852
+      },
+      "successful_latency{op:services}": {
+        "max": 83.609064,
+        "min": 0.503711,
+        "med": 0.779258,
+        "p(95)": 45.81313139999998,
+        "p(99)": 58.68854520000002
+      },
+      "successful_latency{op:session}": {
+        "med": 3.681572,
+        "p(95)": 5.6687855,
+        "p(99)": 6.883564680000003,
+        "max": 7.530526,
+        "min": 2.667803
+      },
+      "successful_latency{op:hall_send}": {
+        "min": 2.868348,
+        "med": 6.7297645,
+        "p(95)": 12.2012295,
+        "p(99)": 15.785591299999988,
+        "max": 89.788523
+      },
+      "successful_latency{op:product_detail}": {
+        "p(99)": 9.236147279999994,
+        "max": 14.528391,
+        "min": 0.456112,
+        "med": 3.642551,
+        "p(95)": 6.439176
+      },
+      "successful_latency{op:login}": {
+        "p(99)": 0,
+        "max": 0,
+        "min": 0,
+        "med": 0,
+        "p(95)": 0
+      },
+      "successful_latency{op:support_history}": {
+        "min": 1.119115,
+        "med": 1.638895,
+        "p(95)": 3.124577,
+        "p(99)": 4.12765014,
+        "max": 4.360557
+      }
+    },
+    "cpu_percent_one_core_measured_samples": {
+      "atlxpres-capacity-lab-sessions-run-84b3d877cacf": {
+        "samples": 23,
+        "mean": 5.147826086956521,
+        "peak": 13.43
+      },
+      "atlxpres-session-observer": {
+        "samples": 23,
+        "mean": 0.03739130434782609,
+        "peak": 0.3
+      },
+      "atlxpres-capacity-lab-notification-worker-1": {
+        "samples": 23,
+        "mean": 0.8756521739130435,
+        "peak": 3.59
+      },
+      "atlxpres-capacity-lab-notification-provider-1": {
+        "samples": 23,
+        "mean": 1.8291304347826087,
+        "peak": 5.29
+      },
+      "atlxpres-capacity-lab-api2-1": {
+        "samples": 23,
+        "mean": 3.9608695652173913,
+        "peak": 8.72
+      },
+      "atlxpres-capacity-lab-api1-1": {
+        "samples": 23,
+        "mean": 3.6943478260869567,
+        "peak": 6.27
+      },
+      "atlxpres-capacity-lab-gateway-1": {
+        "samples": 23,
+        "mean": 0.83,
+        "peak": 1.6
+      },
+      "atlxpres-capacity-lab-postgres-1": {
+        "samples": 23,
+        "mean": 16.45521739130435,
+        "peak": 38.76
+      },
+      "atlxpres-capacity-lab-redis-1": {
+        "samples": 23,
+        "mean": 1.6165217391304347,
+        "peak": 2.97
+      }
+    },
+    "maximum_sampled_lock_waiters": 0,
+    "redis_peak_sampled_bytes": 2592128,
+    "bracketed_pool_deltas": {
+      "api1": {
+        "acquire_count": 13889,
+        "empty_acquires": 13,
+        "empty_acquire_wait_ms_total": 145,
+        "cancelled_acquires": 0
+      },
+      "api2": {
+        "acquire_count": 13925,
+        "empty_acquires": 10,
+        "empty_acquire_wait_ms_total": 137,
+        "cancelled_acquires": 0
+      }
+    },
+    "sampled_send_backlog_peak_including_setup_recovery": {
+      "email": 25,
+      "native_push": 92
+    },
+    "sampled_send_backlog_oldest_age_seconds_including_setup_recovery": {
+      "email": 3.545762,
+      "native_push": 2.786303
+    },
+    "write_reconciliation": {
+      "confirmed_writes": 1232,
+      "delivery_receipt_rows": 788,
+      "duplicate_messages": 0,
+      "external_delivery_tested": false,
+      "run_id": "44cc1777-18ac-47d3-85a6-4029e5a4de35",
+      "stored_marketplace_messages": 796,
+      "stored_offers": 0,
+      "stored_town_hall_messages": 436,
+      "write_reconciliation_passed": true
+    },
+    "write_journal": {
+      "offered_write_keys": 1232,
+      "exact_acknowledged_keys": 1232,
+      "stored_write_keys": 1232,
+      "missing_acknowledged_keys": 0,
+      "duplicate_stored_keys": 0,
+      "unknown_stored_keys": 0,
+      "unconfirmed_committed_keys": 0,
+      "offered_keys_not_stored": 0,
+      "load_process_completed": true,
+      "all_acknowledged_keys_stored_once": true,
+      "journal_consistent": true,
+      "normal_completion_inventory_matched": true
+    },
+    "notifications": {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "sent": 424
+      },
+      "killed_jobs": 0,
+      "killed_jobs_recovered": 0,
+      "provider": {
+        "channels": {
+          "email": {
+            "acceptances": 424,
+            "acknowledgements": 424,
+            "attempts": 424,
+            "keys": 424,
+            "receipts": 0
+          },
+          "push": {
+            "acceptances": 3284,
+            "acknowledgements": 3284,
+            "attempts": 3284,
+            "keys": 3284,
+            "receipts": 0
+          }
+        },
+        "journal_events": 11124,
+        "journal_nanoseconds": 4820099823
+      },
+      "push_status": {
+        "sent": 3284
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T21:51:09.310876+00:00"
+    },
+    "top80_sql_execution_ms_by_role_including_setup_recovery": {
+      "lab": 33803.12614199999,
+      "lab_worker": 1084.6920360000004
+    },
+    "inbox_sql": [
+      {
+        "calls": 796,
+        "mean_exec_time": 16.89595164824121,
+        "max_exec_time": 205.824949,
+        "total_exec_time": 13449.177511999991,
+        "shared_blks_read": 1739,
+        "shared_blks_hit": 2575799
+      }
+    ],
+    "postload_custom_then_generic_repeat_plan_execution_ms": [
+      15.931,
+      10.447,
+      11.095,
+      9.618
+    ],
+    "first2s_inbox_samples": 61,
+    "first2s_inbox_max_ms": 397.219391,
+    "notes": [
+      "CPU/lock samples are roughly5s, not continuous peak detection.",
+      "Pool counters bracket measurement within the observer sampling interval.",
+      "SQL statistics include login setup and readiness recovery; top80 statements only.",
+      "EXPLAIN runs after load; its buffers are warmed, not a true cold-cache experiment.",
+      "Mock ACK counter records response generation; worker sent state is separate evidence. No real recipient delivery."
+    ]
+  },
+  {
+    "stage": "4-off",
+    "planned_active_seconds": 180,
+    "first_offered_to_last_completed_seconds": 183.02809715270996,
+    "offered_requests": 8462,
+    "completed_workload_requests": 8462,
+    "completed_rps_request_window": 46.233338660237,
+    "k6_reported_offered_rate_including_setup": 38.100761266256754,
+    "established_sessions": 100,
+    "http_error_rate": 0,
+    "dropped_iterations": 0,
+    "overall_latency_ms": {
+      "med": 3.3948735,
+      "p(95)": 22.449765099999993,
+      "p(99)": 85.71135060999974,
+      "max": 368.735627,
+      "min": 0.440301
+    },
+    "operations": {
+      "successful_latency{op:hall_offer}": {
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0,
+        "min": 0
+      },
+      "successful_latency{op:hall_send}": {
+        "min": 2.915357,
+        "med": 6.7992215,
+        "p(95)": 10.93304975,
+        "p(99)": 12.782370499999997,
+        "max": 14.80421
+      },
+      "successful_latency{op:service_detail}": {
+        "min": 0.440301,
+        "med": 3.029943,
+        "p(95)": 4.6381835,
+        "p(99)": 6.891876500000004,
+        "max": 8.50382
+      },
+      "successful_latency{op:login}": {
+        "min": 0,
+        "med": 0,
+        "p(95)": 0,
+        "p(99)": 0,
+        "max": 0
+      },
+      "successful_latency{op:catalogue}": {
+        "min": 0.953786,
+        "med": 1.330908,
+        "p(95)": 23.5863724,
+        "p(99)": 28.727572480000006,
+        "max": 68.174066
+      },
+      "successful_latency{op:product_detail}": {
+        "p(95)": 6.782259499999999,
+        "p(99)": 9.842424379999995,
+        "max": 26.080518,
+        "min": 0.464585,
+        "med": 3.582964
+      },
+      "successful_latency{op:market_history}": {
+        "min": 2.8978,
+        "med": 3.641872,
+        "p(95)": 15.634869599999986,
+        "p(99)": 56.625833439999965,
+        "max": 177.310487
+      },
+      "successful_latency{op:admin_overview}": {
+        "min": 1.171014,
+        "med": 1.525507,
+        "p(95)": 4.348423599999999,
+        "p(99)": 7.394414359999988,
+        "max": 9.366628
+      },
+      "successful_latency{op:support_history}": {
+        "med": 1.502709,
+        "p(95)": 2.836326699999999,
+        "p(99)": 3.694633560000001,
+        "max": 4.119201,
+        "min": 1.075422
+      },
+      "successful_latency{op:receipts}": {
+        "min": 1.678843,
+        "med": 2.131066,
+        "p(95)": 3.9444177999999934,
+        "p(99)": 16.257638239999988,
+        "max": 64.214192
+      },
+      "successful_latency{op:services}": {
+        "min": 0.496162,
+        "med": 0.744843,
+        "p(95)": 46.632312799999994,
+        "p(99)": 57.10267336000001,
+        "max": 74.229689
+      },
+      "successful_latency{op:inbox}": {
+        "max": 368.735627,
+        "min": 9.6915,
+        "med": 14.858102500000001,
+        "p(95)": 98.24106225,
+        "p(99)": 226.28631109999847
+      },
+      "successful_latency{op:hall_history}": {
+        "min": 1.287082,
+        "med": 2.167898,
+        "p(95)": 4.2051195,
+        "p(99)": 6.791968799999999,
+        "max": 19.241809
+      },
+      "successful_latency{op:session}": {
+        "min": 2.763115,
+        "med": 3.697235,
+        "p(95)": 5.7835129,
+        "p(99)": 6.618980360000002,
+        "max": 7.002743
+      },
+      "successful_latency{op:market_send}": {
+        "min": 4.798726,
+        "med": 6.173303,
+        "p(95)": 70.677679,
+        "p(99)": 143.66375059999984,
+        "max": 210.213858
+      }
+    },
+    "cpu_percent_one_core_measured_samples": {
+      "atlxpres-capacity-lab-sessions-run-d87661d16728": {
+        "samples": 23,
+        "mean": 6.284782608695652,
+        "peak": 12.97
+      },
+      "atlxpres-session-observer": {
+        "samples": 23,
+        "mean": 0.034782608695652174,
+        "peak": 0.29
+      },
+      "atlxpres-capacity-lab-notification-provider-1": {
+        "samples": 23,
+        "mean": 1.0830434782608696,
+        "peak": 2.72
+      },
+      "atlxpres-capacity-lab-api2-1": {
+        "samples": 23,
+        "mean": 3.763913043478261,
+        "peak": 6.9
+      },
+      "atlxpres-capacity-lab-api1-1": {
+        "samples": 23,
+        "mean": 3.621304347826087,
+        "peak": 7.01
+      },
+      "atlxpres-capacity-lab-gateway-1": {
+        "samples": 23,
+        "mean": 0.8573913043478261,
+        "peak": 1.62
+      },
+      "atlxpres-capacity-lab-postgres-1": {
+        "samples": 23,
+        "mean": 17.340869565217393,
+        "peak": 32.99
+      },
+      "atlxpres-capacity-lab-redis-1": {
+        "samples": 23,
+        "mean": 1.8934782608695653,
+        "peak": 3.15
+      }
+    },
+    "maximum_sampled_lock_waiters": 0,
+    "redis_peak_sampled_bytes": 2492128,
+    "bracketed_pool_deltas": {
+      "api1": {
+        "acquire_count": 13874,
+        "empty_acquires": 23,
+        "empty_acquire_wait_ms_total": 169,
+        "cancelled_acquires": 0
+      },
+      "api2": {
+        "acquire_count": 13934,
+        "empty_acquires": 41,
+        "empty_acquire_wait_ms_total": 217,
+        "cancelled_acquires": 0
+      }
+    },
+    "sampled_send_backlog_peak_including_setup_recovery": {
+      "email": 424,
+      "native_push": 3284
+    },
+    "sampled_send_backlog_oldest_age_seconds_including_setup_recovery": {
+      "email": 1197.29042,
+      "native_push": 249.114069
+    },
+    "write_reconciliation": {
+      "confirmed_writes": 1232,
+      "delivery_receipt_rows": 788,
+      "duplicate_messages": 0,
+      "external_delivery_tested": false,
+      "run_id": "44cc1777-18ac-47d3-85a6-4029e5a4de35",
+      "stored_marketplace_messages": 796,
+      "stored_offers": 0,
+      "stored_town_hall_messages": 436,
+      "write_reconciliation_passed": true
+    },
+    "write_journal": {
+      "offered_write_keys": 1232,
+      "exact_acknowledged_keys": 1232,
+      "stored_write_keys": 1232,
+      "missing_acknowledged_keys": 0,
+      "duplicate_stored_keys": 0,
+      "unknown_stored_keys": 0,
+      "unconfirmed_committed_keys": 0,
+      "offered_keys_not_stored": 0,
+      "load_process_completed": true,
+      "all_acknowledged_keys_stored_once": true,
+      "journal_consistent": true,
+      "normal_completion_inventory_matched": true
+    },
+    "notifications": {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "pending": 424
+      },
+      "killed_jobs": 0,
+      "killed_jobs_recovered": 0,
+      "provider": {
+        "channels": {},
+        "journal_events": 0,
+        "journal_nanoseconds": 0
+      },
+      "push_status": {
+        "pending": 3284
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T21:56:08.34941+00:00"
+    },
+    "top80_sql_execution_ms_by_role_including_setup_recovery": {
+      "lab": 31316.177828999997
+    },
+    "inbox_sql": [
+      {
+        "calls": 796,
+        "mean_exec_time": 15.657634721105518,
+        "max_exec_time": 188.527779,
+        "total_exec_time": 12463.477237999998,
+        "shared_blks_read": 1738,
+        "shared_blks_hit": 2575708
+      }
+    ],
+    "postload_custom_then_generic_repeat_plan_execution_ms": [
+      15.404,
+      10.213,
+      10.45,
+      9.122
+    ],
+    "first2s_inbox_samples": 65,
+    "first2s_inbox_max_ms": 368.735627,
+    "notes": [
+      "CPU/lock samples are roughly5s, not continuous peak detection.",
+      "Pool counters bracket measurement within the observer sampling interval.",
+      "SQL statistics include login setup and readiness recovery; top80 statements only.",
+      "EXPLAIN runs after load; its buffers are warmed, not a true cold-cache experiment.",
+      "Mock ACK counter records response generation; worker sent state is separate evidence. No real recipient delivery."
+    ]
+  }
+]

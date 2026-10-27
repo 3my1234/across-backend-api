@@ -1,0 +1,360 @@
+{
+  "source_commit": "66d9567602ad21dd9f0b4aaa483b59310aa8a205",
+  "sessions": 100,
+  "active_seconds": 1800,
+  "request_window_seconds": 1803.5242500305176,
+  "offered_completed_requests": 81341,
+  "request_window_rps": 45.10114016965595,
+  "overall_latency_ms": {
+    "min": 0.310851,
+    "med": 2.636991,
+    "p(95)": 13.423619,
+    "p(99)": 28.500087600000555,
+    "max": 229.849563
+  },
+  "operations": {
+    "successful_latency{op:admin_overview}": {
+      "p(99)": 4.757857379999999,
+      "max": 7.479925,
+      "min": 0.89645,
+      "med": 1.6980035,
+      "p(95)": 2.589033449999999
+    },
+    "successful_latency{op:market_history}": {
+      "med": 2.6321635,
+      "p(95)": 4.223373799999999,
+      "p(99)": 7.288095099999995,
+      "max": 69.094487,
+      "min": 1.576889
+    },
+    "successful_latency{op:hall_history}": {
+      "min": 0.976944,
+      "med": 2.017666,
+      "p(95)": 3.3488575999999983,
+      "p(99)": 6.146408640000013,
+      "max": 11.103332
+    },
+    "successful_latency{op:inbox}": {
+      "p(99)": 22.667832280000006,
+      "max": 53.393448,
+      "min": 6.964783,
+      "med": 11.657646,
+      "p(95)": 17.063679199999996
+    },
+    "successful_latency{op:services}": {
+      "p(99)": 44.42194574,
+      "max": 102.89331,
+      "min": 0.328926,
+      "med": 0.5944069999999999,
+      "p(95)": 35.45060840000001
+    },
+    "successful_latency{op:product_detail}": {
+      "max": 19.258739,
+      "min": 0.318447,
+      "med": 3.2108305,
+      "p(95)": 5.328822849999999,
+      "p(99)": 8.445561799999991
+    },
+    "successful_latency{op:support_history}": {
+      "min": 0.731116,
+      "med": 1.355059,
+      "p(95)": 2.294185,
+      "p(99)": 3.5094027999999997,
+      "max": 4.594716
+    },
+    "successful_latency{op:service_detail}": {
+      "min": 0.310851,
+      "med": 2.756148,
+      "p(95)": 4.201652399999998,
+      "p(99)": 7.023851390000001,
+      "max": 58.255137
+    },
+    "successful_latency{op:receipts}": {
+      "min": 1.326373,
+      "med": 1.85296,
+      "p(95)": 3.1696016999999994,
+      "p(99)": 6.671111519999977,
+      "max": 144.725813
+    },
+    "successful_latency{op:hall_send}": {
+      "min": 2.195799,
+      "med": 5.445621,
+      "p(95)": 8.831401599999994,
+      "p(99)": 14.634623040000012,
+      "max": 89.838631
+    },
+    "successful_latency{op:session}": {
+      "min": 2.219724,
+      "med": 3.231024,
+      "p(95)": 5.153170499999997,
+      "p(99)": 8.569476880000003,
+      "max": 13.159847
+    },
+    "successful_latency{op:market_send}": {
+      "med": 4.486992,
+      "p(95)": 7.628289799999995,
+      "p(99)": 14.494206720000001,
+      "max": 229.849563,
+      "min": 3.1155
+    },
+    "successful_latency{op:hall_offer}": {
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "min": 0,
+      "med": 0
+    },
+    "successful_latency{op:login}": {
+      "max": 0,
+      "min": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0
+    },
+    "successful_latency{op:catalogue}": {
+      "min": 0.661534,
+      "med": 1.314121,
+      "p(95)": 18.66278665,
+      "p(99)": 24.034928039999983,
+      "max": 83.162084
+    }
+  },
+  "http_errors_rate": 0,
+  "dropped_iterations": 0,
+  "poll_latency_ms": {
+    "max": 15012,
+    "min": 6,
+    "med": 5505,
+    "p(95)": 13670.45,
+    "p(99)": 14737.45
+  },
+  "write_journal": {
+    "offered_write_keys": 12018,
+    "exact_acknowledged_keys": 12018,
+    "stored_write_keys": 12018,
+    "missing_acknowledged_keys": 0,
+    "duplicate_stored_keys": 0,
+    "unknown_stored_keys": 0,
+    "unconfirmed_committed_keys": 0,
+    "offered_keys_not_stored": 0,
+    "load_process_completed": true,
+    "all_acknowledged_keys_stored_once": true,
+    "journal_consistent": true,
+    "normal_completion_inventory_matched": true
+  },
+  "writes": {
+    "confirmed_writes": 12018,
+    "delivery_receipt_rows": 7292,
+    "duplicate_messages": 0,
+    "external_delivery_tested": false,
+    "run_id": "783fb2f7-b87b-4d77-b091-436e7ad15711",
+    "stored_marketplace_messages": 7305,
+    "stored_offers": 0,
+    "stored_town_hall_messages": 4713,
+    "write_reconciliation_passed": true
+  },
+  "recipient_visibility": {
+    "device_or_push_delivery_tested": false,
+    "expected_marketplace_messages": 7305,
+    "history_pages": 200,
+    "in_workload_latency_check": false,
+    "post_run_recipient_visibility_passed": true,
+    "visible_to_intended_peer": 7305
+  },
+  "cpu_percent_one_core_measured_5s_samples": {
+    "atlxpres-session-observer": {
+      "samples": 230,
+      "mean": 0.026434782608695653,
+      "peak": 0.32
+    },
+    "atlxpres-capacity-lab-sessions-run-dc81648b82a3": {
+      "samples": 230,
+      "mean": 5.584260869565218,
+      "peak": 19.0
+    },
+    "atlxpres-capacity-lab-notification-worker-1": {
+      "samples": 230,
+      "mean": 0.6526086956521739,
+      "peak": 5.67
+    },
+    "atlxpres-capacity-lab-notification-provider-1": {
+      "samples": 230,
+      "mean": 2.042608695652174,
+      "peak": 11.19
+    },
+    "atlxpres-capacity-lab-gateway-1": {
+      "samples": 230,
+      "mean": 0.8708695652173913,
+      "peak": 3.62
+    },
+    "atlxpres-capacity-lab-api2-1": {
+      "samples": 230,
+      "mean": 3.4220434782608695,
+      "peak": 10.9
+    },
+    "atlxpres-capacity-lab-api1-1": {
+      "samples": 230,
+      "mean": 3.4393478260869563,
+      "peak": 11.62
+    },
+    "atlxpres-capacity-lab-postgres-1": {
+      "samples": 230,
+      "mean": 16.46086956521739,
+      "peak": 70.89
+    },
+    "atlxpres-capacity-lab-redis-1": {
+      "samples": 230,
+      "mean": 1.4546521739130436,
+      "peak": 4.21
+    }
+  },
+  "pool_delta": {
+    "api1": {
+      "acquire_count": 131153,
+      "empty_acquires": 1,
+      "empty_acquire_wait_ms_total": 4,
+      "cancelled_acquires": 0
+    },
+    "api2": {
+      "acquire_count": 130760,
+      "empty_acquires": 1,
+      "empty_acquire_wait_ms_total": 5,
+      "cancelled_acquires": 0
+    }
+  },
+  "sampled_lock_waiters_max": 1,
+  "sampled_redis_used_memory_max": 3130840,
+  "sampled_send_backlog_peak": {
+    "email": 58,
+    "native_push": 508
+  },
+  "sampled_send_backlog_age_max_seconds": {
+    "email": 299.687918,
+    "native_push": 303.099079
+  },
+  "notifications": {
+    "due_receipt_backlog": 11311,
+    "email_status": {
+      "sent": 3702
+    },
+    "killed_jobs": 89,
+    "killed_jobs_recovered": 89,
+    "provider": {
+      "channels": {
+        "email": {
+          "acceptances": 3707,
+          "acknowledgements": 3706,
+          "attempts": 3765,
+          "keys": 3702,
+          "receipts": 0,
+          "repeated_acceptance_keys": 5
+        },
+        "push": {
+          "acceptances": 32812,
+          "acknowledgements": 32755,
+          "attempts": 33288,
+          "keys": 32755,
+          "receipts": 6501,
+          "repeated_acceptance_keys": 57
+        }
+      },
+      "journal_events": 116534,
+      "journal_nanoseconds": 60927176016
+    },
+    "push_status": {
+      "delivered": 6501,
+      "sent": 26254
+    },
+    "sent_without_mock_ack": {
+      "email": 0,
+      "push": 0
+    },
+    "time": "2026-10-27T22:34:08.974936+00:00"
+  },
+  "lease_snapshots": [
+    {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "sending": 8,
+        "sent": 1031
+      },
+      "killed_jobs": 89,
+      "killed_jobs_recovered": 0,
+      "provider": {
+        "channels": {
+          "email": {
+            "acceptances": 1031,
+            "acknowledgements": 1031,
+            "attempts": 1093,
+            "keys": 1035,
+            "receipts": 0
+          },
+          "push": {
+            "acceptances": 8751,
+            "acknowledgements": 8751,
+            "attempts": 9227,
+            "keys": 8751,
+            "receipts": 0
+          }
+        },
+        "journal_events": 29884,
+        "journal_nanoseconds": 11207114530
+      },
+      "push_status": {
+        "sending": 81,
+        "sent": 8751
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T22:11:00.743672+00:00"
+    },
+    {
+      "due_receipt_backlog": 0,
+      "email_status": {
+        "pending": 2,
+        "sent": 1642
+      },
+      "killed_jobs": 89,
+      "killed_jobs_recovered": 89,
+      "provider": {
+        "channels": {
+          "email": {
+            "acceptances": 1646,
+            "acknowledgements": 1646,
+            "attempts": 1704,
+            "keys": 1642,
+            "receipts": 0,
+            "repeated_acceptance_keys": 4
+          },
+          "push": {
+            "acceptances": 14415,
+            "acknowledgements": 14415,
+            "attempts": 14891,
+            "keys": 14415,
+            "receipts": 0
+          }
+        },
+        "journal_events": 48717,
+        "journal_nanoseconds": 19208941120
+      },
+      "push_status": {
+        "pending": 23,
+        "sent": 14415
+      },
+      "sent_without_mock_ack": {
+        "email": 0,
+        "push": 0
+      },
+      "time": "2026-10-27T22:16:01.236535+00:00"
+    }
+  ],
+  "approx_provider_ack_based_due_receipt_keys": 11311,
+  "approx_provider_ack_based_oldest_due_age_seconds": 1519.0972270965576,
+  "provider_ack_to_mock_receipt_mean_seconds": 1203.7874726269213,
+  "provider_ack_to_mock_receipt_max_seconds": 1513.6747839450836,
+  "limitation": "Five-second CPU/queue sampling; provider ACK generation is distinct from worker completion and real recipient delivery. Receipt ages above are provider-journal approximations, not database sent_at ages.",
+  "observed_vus_100_samples": 1800,
+  "sampled_dwell_100_seconds": 1800.0002300739288
+}
