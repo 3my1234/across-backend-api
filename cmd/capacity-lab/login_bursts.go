@@ -75,7 +75,7 @@ func passwordSnapshot(c *http.Client, token string) (map[string]any, error) {
 		err = json.NewDecoder(io.LimitReader(response.Body, 65536)).Decode(&payload)
 		response.Body.Close()
 		if err != nil || response.StatusCode != 200 || payload.Password == nil {
-			return nil, fmt.Errorf("password observer response invalid")
+			return nil, fmt.Errorf("password observer response invalid: status=%d", response.StatusCode)
 		}
 		result[backend] = payload.Password
 	}
@@ -128,7 +128,7 @@ func loginBursts(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {
 				select {
 				case <-stop:
 					return
-				case <-time.After(20 * time.Millisecond):
+				case <-time.After(200 * time.Millisecond):
 					sample, e := passwordSnapshot(client, token)
 					if e != nil {
 						sampleErr = e

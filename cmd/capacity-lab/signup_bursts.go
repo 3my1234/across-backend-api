@@ -134,7 +134,7 @@ func signupBursts(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {
 				select {
 				case <-stop:
 					return
-				case <-time.After(20 * time.Millisecond):
+				case <-time.After(200 * time.Millisecond):
 					sample, e := passwordSnapshot(client, token)
 					if e != nil {
 						sampleErr = e
