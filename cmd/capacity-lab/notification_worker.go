@@ -307,7 +307,7 @@ func (m *notificationMock) smtp(ctx context.Context, connection net.Conn, certif
 
 // Provider is a separate bounded process, with no database connection at all.
 func runNotificationProvider(ctx context.Context) error {
-	file, err := os.OpenFile("/exchange/provider-journal.jsonl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := os.OpenFile("/exchange/provider-journal.jsonl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}

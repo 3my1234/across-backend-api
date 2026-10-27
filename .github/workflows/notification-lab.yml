@@ -76,7 +76,7 @@ jobs:
           docker inspect $(docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml ps -q) > session-evidence/container-limits.json
           lscpu > session-evidence/runner-cpu.txt
           free -h > session-evidence/runner-memory.txt
-          sudo chown -R "$(id -u):$(id -g)" session-evidence
+          sudo chown -R "$(id -u):$(id -g)" session-evidence comparison-evidence
       - uses: actions/upload-artifact@v4
         if: always()
         with:

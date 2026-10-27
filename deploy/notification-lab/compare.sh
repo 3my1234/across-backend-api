@@ -37,7 +37,7 @@ for mode in off on on off; do
  # Evidence filenames are reused by the original harness; retain then reset.
  find session-evidence -maxdepth 1 -type f -delete
  for file in summary.json timeseries.json k6.log k6-exit-code.txt; do rm -f "session-exchange/$file"; done
- dc up -d --wait --wait-timeout 180 api1 api2 gateway notification-provider
+ dc up -d --no-deps --wait --wait-timeout 180 api1 api2 gateway notification-provider
  if test "$mode" = on; then dc up -d notification-worker; fi
  sql 'SELECT pg_stat_statements_reset();' >/dev/null
  date -u +%FT%TZ > session-evidence/comparison-start.txt
