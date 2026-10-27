@@ -41,3 +41,10 @@ assert.equal(plan('gradual',100).ramp_seconds,30);assert.equal(plan('gradual',10
 
 assert.equal(plan('stage',100).error_rate,0.005);
 assert.throws(()=>nextStage({...evidence,metrics:{...evidence.metrics,unexpected_failure:{values:{rate:0.005}}}},recon));
+
+const {bindEstablished,establishedMode}=await import('./established.mjs');
+assert.equal(establishedMode('established'),true);assert.throws(()=>establishedMode('unknown'));
+assert.throws(()=>bindEstablished({id:'a'},[{id:'b',token:'synthetic'}],1));
+assert.throws(()=>bindEstablished({id:'a'},[{id:'a',token:'one'},{id:'a',token:'two'}],2));
+assert.equal(bindEstablished({id:'a'},[{id:'a',token:'synthetic'}],1).token,'synthetic');
+console.log('Established population binding rejects incomplete/duplicate/mismatched identities.');

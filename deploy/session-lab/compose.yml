@@ -36,6 +36,7 @@ services:
       LAB_SESSION_PROFILE: ${LAB_SESSION_PROFILE:-smoke}
       LAB_SESSION_TARGET: ${LAB_SESSION_TARGET:-4}
       LAB_SESSION_MIX: ${LAB_SESSION_MIX:-mixed}
+      LAB_SESSION_AUTH_MODE: ${LAB_SESSION_AUTH_MODE:-live}
       LAB_SESSION_APPROVAL: ${LAB_SESSION_APPROVAL:-}
     volumes: [../session-lab:/suite:ro, '${LAB_EXCHANGE_DIR:?explicit disposable exchange directory required}:/exchange']
     # A synthetic trusted edge, separate from the Go fixture runner. Never a

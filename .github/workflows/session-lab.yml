@@ -134,6 +134,7 @@ jobs:
       LAB_DB_CPUS: '2'
       LAB_SESSION_PROFILE: ${{ inputs.profile == 'qualification-sustained' && 'sustained' || 'stage' }}
       LAB_SESSION_TARGET: '100'
+      LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
     steps:
@@ -153,7 +154,7 @@ jobs:
           git rev-parse HEAD > session-evidence/source-commit.txt
           git diff a5e94496f90435a2610c3c46592af3d0ea33e055 -- internal/ > session-evidence/runtime-diff.patch
           test ! -s session-evidence/runtime-diff.patch
-          cp deploy/session-lab/{policy.mjs,sessions.js,compose.yml} session-evidence/
+          cp deploy/session-lab/{policy.mjs,sessions.js,established.mjs,compose.yml} session-evidence/
           cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
           cp .github/workflows/session-lab.yml session-evidence/workflow.yml
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml pull sessions

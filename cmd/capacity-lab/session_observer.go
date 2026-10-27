@@ -78,7 +78,8 @@ func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 				return fmt.Errorf("pool observer %s failed", backend)
 			}
 			var data struct {
-				Pool map[string]any `json:"database_pool"`
+				Pool     map[string]any `json:"database_pool"`
+				Password map[string]any `json:"password_admission"`
 			}
 			err = json.NewDecoder(io.LimitReader(response.Body, 65536)).Decode(&data)
 			response.Body.Close()
@@ -86,6 +87,7 @@ func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 				return fmt.Errorf("pool observer %s invalid response", backend)
 			}
 			sample[backend] = data.Pool
+			sample[backend+"_password"] = data.Password
 		}
 		if err := json.NewEncoder(out).Encode(sample); err != nil {
 			return err

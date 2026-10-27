@@ -5,6 +5,8 @@ import {Counter,Trend,Rate} from 'k6/metrics';
 import {randomBytes} from 'k6/crypto';
 import {SharedArray} from 'k6/data';
 import {plan,mixes,validateFixture,requireApproval,chooseActivity} from './policy.mjs';
+import {establishedMode,bindEstablished} from './established.mjs';
+const established=establishedMode(__ENV.LAB_SESSION_AUTH_MODE);
 
 const cfg=plan(__ENV.LAB_SESSION_PROFILE||'smoke',Number(__ENV.LAB_SESSION_TARGET||4));
 const fixture=JSON.parse(open('/exchange/run.json'));
@@ -17,9 +19,11 @@ function randomUUID(){const b=new Uint8Array(randomBytes(16));b[6]=(b[6]&15)|64;
 // Tokens are synthetic and are never logged. Pin semantic names and exclude URL
 // and error tags so signed URLs/private values cannot enter raw artifacts.
 const offered=new Counter('offered_requests');
+const authenticated=new Counter('authenticated_sessions'),warmupAuthenticated=new Counter('warmup_authenticated_sessions'),warmupLatency=new Trend('warmup_latency',true);
 const confirmed=new Counter('confirmed_writes'),unexpected=new Rate('unexpected_failure'),overload=new Rate('controlled_overload'),valid=new Rate('content_valid'),success=new Trend('successful_latency',true),started=new Counter('session_starts'),actions=new Counter('session_actions'),sent=new Counter('messages_confirmed'),received=new Counter('recipient_observations'),delivery=new Trend('poll_delivery_latency',true),backends=new Counter('backend_responses');
 const perOperation=['login','session','catalogue','services','product_detail','service_detail','market_history','market_send','hall_history','hall_send','hall_offer','support_history','admin_overview','receipts','inbox'];
 const threshold={unexpected_failure:[{threshold:'rate<0.005',abortOnFail:true,delayAbortEval:'10s'}],content_valid:[{threshold:'rate==1',abortOnFail:true,delayAbortEval:'10s'}],controlled_overload:cfg.profile==='burst'?['rate<=1']:[{threshold:'rate==0',abortOnFail:true,delayAbortEval:'10s'}],successful_latency:[{threshold:'p(95)<500',abortOnFail:true,delayAbortEval:'15s'},'p(99)<1500'],confirmed_writes:['count>0']};
+if(established){threshold.authenticated_sessions=['count==100'];threshold.warmup_authenticated_sessions=['count==100'];}
 threshold['backend_responses{backend:api1}']=['count>0'];threshold['backend_responses{backend:api2}']=['count>0'];
 if(cfg.executor!=='constant-arrival-rate'){
  threshold.recipient_observations=['count>0'];
@@ -27,7 +31,7 @@ if(cfg.executor!=='constant-arrival-rate'){
 }
 for(const op of perOperation)threshold[`successful_latency{op:${op}}`]=['p(95)<500','p(99)<1500'];
 if(cfg.executor!=='constant-arrival-rate')threshold.session_starts=[`count>=${cfg.target}`];else threshold.dropped_iterations=['count==0'];
-export const options={scenarios:{sessions:cfg.executor==='ramping-vus'?{executor:'ramping-vus',startVUs:0,stages:[{duration:`${cfg.ramp_seconds}s`,target:cfg.target},{duration:`${cfg.seconds-cfg.ramp_seconds}s`,target:cfg.target}],gracefulStop:'15s'}:cfg.executor==='constant-vus'?{executor:'constant-vus',vus:cfg.target,duration:`${cfg.seconds}s`,gracefulStop:'15s'}:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:`${cfg.seconds}s`,preAllocatedVUs:Math.min(cfg.target,100),maxVUs:cfg.target,gracefulStop:'15s'}},thresholds:threshold,summaryTrendStats:['min','med','p(95)','p(99)','max'],systemTags:['status','method','name','scenario','expected_response'],maxRedirects:0,discardResponseBodies:false};
+export const options={setupTimeout:'180s',scenarios:{sessions:cfg.executor==='ramping-vus'?{executor:'ramping-vus',startVUs:0,stages:[{duration:`${cfg.ramp_seconds}s`,target:cfg.target},{duration:`${cfg.seconds-cfg.ramp_seconds}s`,target:cfg.target}],gracefulStop:'15s'}:cfg.executor==='constant-vus'?{executor:'constant-vus',vus:cfg.target,duration:`${cfg.seconds}s`,gracefulStop:'15s'}:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:`${cfg.seconds}s`,preAllocatedVUs:Math.min(cfg.target,100),maxVUs:cfg.target,gracefulStop:'15s'}},thresholds:threshold,summaryTrendStats:['min','med','p(95)','p(99)','max'],systemTags:['status','method','name','scenario','expected_response'],maxRedirects:0,discardResponseBodies:false};
 let actor=null,loggedIn=false,cycle=0,nextPollAt=0;const observed=new Set();
 // An active conversation continues polling while its user thinks or browses.
 // Do not wait for the random activity selector to choose chat again. Missed
@@ -40,7 +44,7 @@ function waitWithPolling(seconds){
  }
 }
 function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=true){
- const params={headers:{'Content-Type':'application/json','X-Forwarded-For':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op},redirects:0,timeout:'12s'};
+ const params={headers:{'Content-Type':'application/json','X-Forwarded-For':`10.${Math.floor((__VU-1)/65025)%250}.${Math.floor((__VU-1)/255)%255}.${(__VU-1)%255+1}`},tags:{name:op,op,phase:'measured'},redirects:0,timeout:'12s'};
  params.responseCallback=http.expectedStatuses(want);
  if(token)params.headers.Authorization=`Bearer ${token}`;
  offered.add(1,{op});
@@ -71,18 +75,55 @@ function history(){
  }
  if(inbound.length)req('receipts','/messaging/receipts',actor.token,{channel:'business',conversation_id:actor.conversation,message_ids:inbound,read:true},204);
 }
+// Real password authentication is serial, one login in flight, 250ms pause.
+// Warmup HTTP metrics have their own phase and never enter successful_latency.
 export function setup(){
- const ready=http.get(fixture.origin+'/api/v1/ready',{redirects:0,timeout:'10s',tags:{name:'preflight_ready'}});
- if(ready.status!==200||ready.headers['X-Atl-Capacity-Lab']!==fixture.marker)exec.test.abort('Isolated target marker/readiness missing; no workload launched');
+ const warm=(name,path,token,body,want=200,index=0)=>{
+  const headers={'Content-Type':'application/json','X-Forwarded-For':`10.0.${Math.floor(index/255)}.${index%255+1}`};
+  if(token)headers.Authorization=`Bearer ${token}`;
+  const r=http.request(body?'POST':'GET',fixture.origin+'/api/v1'+path,body?JSON.stringify(body):null,{headers,tags:{name,phase:'warmup'},timeout:'12s',redirects:0,responseCallback:http.expectedStatuses(want)});
+  let data=null;try{data=r.json();}catch{}
+  warmupLatency.add(r.timings.duration,{op:name});
+  if(r.status!==want||!data)exec.test.abort('Authentication/preflight warmup failed: '+name+' status '+r.status);
+  return {r,data};
+ };
+ const ready=warm('warmup_ready','/ready');
+ if(ready.r.headers['X-Atl-Capacity-Lab']!==fixture.marker)exec.test.abort('Isolated target marker missing');
  const first=sessions[0],peer=sessions[2];
- const who=req('session','/auth/session',first.token);if(!who.passed||who.data.user_id!==first.id)exec.test.abort('Synthetic identity does not match target');
- const expired=req('expired_session','/auth/session',fixture.expired_token,null,401);if(!expired.passed)exec.test.abort('Expired session did not return the required 401');
- const privateCheck=req('outsider_history','/marketplace/conversations/'+first.conversation+'/messages?limit=40&mark_read=false',peer.token,null,404);
- if(!privateCheck.passed)exec.test.abort('Conversation outsider authorization failed');
- return {run_id:fixture.run_id};
+ const who=warm('warmup_session','/auth/session',first.token);
+ if(who.data.user_id!==first.id)exec.test.abort('Synthetic identity does not match target');
+ warm('expired_session','/auth/session',fixture.expired_token,null,401);
+ warm('outsider_history','/marketplace/conversations/'+first.conversation+'/messages?limit=40&mark_read=false',peer.token,null,404);
+ const bound=[];
+ if(established){
+  if(cfg.target!==100)exec.test.abort('Reviewed established-session phase is capped at exactly100');
+  for(let i=0;i<cfg.target;i++){
+   const actor=sessions[i];
+   const login=warm('warmup_login','/auth/login',null,{email:actor.email,password:fixture.password},200,i);
+   if(login.data.user_id!==actor.id||!login.data.access_token)exec.test.abort('Warmup login identity failed');
+   bound.push({id:actor.id,token:login.data.access_token});
+   sleep(0.25);
+  }
+  // Validate the entire population after the last login, before any measurement.
+  for(let i=0;i<bound.length;i++){
+   const session=warm('warmup_verify','/auth/session',bound[i].token,null,200,i);
+   if(session.data.user_id!==bound[i].id)exec.test.abort('Final warmup session binding failed');
+   warmupAuthenticated.add(1);
+  }
+ }
+ return {run_id:fixture.run_id,authenticated:bound};
 }
-export default function(){
- if(!actor){actor={...sessions[exec.vu.idInTest-1]};if(!actor.id)exec.test.abort('Generator requested more VUs than distinct identities');started.add(1);const login=req('login','/auth/login',null,{email:actor.email,password:fixture.password});if(!login.passed||login.data.user_id!==actor.id||!login.data.access_token)exec.test.abort('Synthetic login failed');actor.token=login.data.access_token;const session=req('session','/auth/session',actor.token);if(!session.passed||session.data.user_id!==actor.id)exec.test.abort('Session binding failed');loggedIn=true;sleep(Math.random()*3);}
+export default function(data){
+ if(!actor){
+  actor={...sessions[exec.vu.idInTest-1]};if(!actor.id)exec.test.abort('Generator requested more VUs than distinct identities');
+  if(established){actor=bindEstablished(actor,data.authenticated,cfg.target);}else{
+   const login=req('login','/auth/login',null,{email:actor.email,password:fixture.password});
+   if(!login.passed||login.data.user_id!==actor.id||!login.data.access_token)exec.test.abort('Synthetic login failed');
+   actor.token=login.data.access_token;
+   const session=req('session','/auth/session',actor.token);if(!session.passed||session.data.user_id!==actor.id)exec.test.abort('Session binding failed');
+  }
+  authenticated.add(1);started.add(1);loggedIn=true;sleep(Math.random()*3);
+ }
  if(!loggedIn)return;
  if(!nextPollAt||Date.now()>=nextPollAt){history();nextPollAt=Date.now()+cfg.poll_every_ms;}
  actions.add(1);cycle++;
@@ -107,6 +148,6 @@ export default function(){
  waitWithPolling(cfg.think_min+Math.random()*(cfg.think_max-cfg.think_min));
 }
 export function handleSummary(data){
- const evidence={...data,run_id:fixture.run_id,configuration:cfg,mix,limitations:['internal Docker network','generator shares CI host','all sessions keep an active conversation polling at 15s','no real media or full worker process drain in this workload','signup/login spikes not qualified','VU session counts differ from requests in flight','no native rendering qualification']};
+ const evidence={...data,run_id:fixture.run_id,configuration:cfg,authentication_mode:established?'established':'live',mix,limitations:['internal Docker network','generator shares CI host','all sessions keep an active conversation polling at 15s','no real media or full worker process drain in this workload','signup/login spikes not qualified','VU session counts differ from requests in flight','no native rendering qualification']};
  return {'/exchange/summary.json':JSON.stringify(evidence,null,2),stdout:JSON.stringify({run_id:fixture.run_id,profile:cfg.profile,planned_concurrent_sessions:cfg.target,session_starts:data.metrics.session_starts?.values.count,actions:data.metrics.session_actions?.values.count,confirmed_writes:data.metrics.confirmed_writes?.values.count,recipient_observations:data.metrics.recipient_observations?.values.count,scope:'isolated HTTP/polling sessions; not phone delivery'})+'\n'};
 }
