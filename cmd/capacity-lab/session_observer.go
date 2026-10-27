@@ -87,6 +87,42 @@ func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 			sample[backend] = data.Pool
 			sample[backend+"_password"] = data.Password
 		}
+		// Synthetic lab only: observe backlog without inspecting recipients/payloads
+		// or starting delivery workers. Native delivery has no created_at column;
+		// use its parent notification's creation time and label that basis.
+		queues, err := db.Query(ctx, `
+		 SELECT 'email' AS queue, status, count(*),
+		        greatest(0, extract(epoch FROM (now()-min(created_at))))::float8 AS oldest_age_seconds
+		 FROM email_outbox GROUP BY status
+		 UNION ALL
+		 SELECT 'native_push', d.status, count(*),
+		        greatest(0, extract(epoch FROM (now()-min(n.created_at))))::float8
+		 FROM notification_push_deliveries d JOIN notifications n ON n.id=d.notification_id GROUP BY d.status
+		 UNION ALL
+		 SELECT 'web_push', status, count(*),
+		        greatest(0, extract(epoch FROM (now()-min(created_at))))::float8
+		 FROM web_push_deliveries GROUP BY status`)
+		if err != nil {
+			return fmt.Errorf("queue observer failed: %w", err)
+		}
+		queueSamples := []map[string]any{}
+		for queues.Next() {
+			var name, status string
+			var count int64
+			var age float64
+			if err := queues.Scan(&name, &status, &count, &age); err != nil {
+				queues.Close()
+				return err
+			}
+			queueSamples = append(queueSamples, map[string]any{"queue": name, "status": status, "count": count, "oldest_age_seconds": age})
+		}
+		err = queues.Err()
+		queues.Close()
+		if err != nil {
+			return err
+		}
+		sample["queues"] = queueSamples
+		sample["workers_enabled"] = false
 		if err := json.NewEncoder(out).Encode(sample); err != nil {
 			return err
 		}

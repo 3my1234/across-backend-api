@@ -165,6 +165,7 @@ jobs:
           cp deploy/session-lab/{policy.mjs,sessions.js,established.mjs,compose.yml} session-evidence/
           cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
           cp .github/workflows/session-lab.yml session-evidence/workflow.yml
+          cp cmd/capacity-lab/session_observer.go session-evidence/session_observer.go
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml pull sessions
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps exporter > session-exchange/fixtures.json
