@@ -33,7 +33,8 @@ jobs:
       - name: Validate safeguards and accounting
         run: |
           node deploy/session-lab/test-policy.mjs
-          go test ./cmd/capacity-lab
+          mkdir -p session-evidence
+          go test -v ./cmd/capacity-lab | tee session-evidence/harness-tests.log
       - name: Start isolated application and fixtures
         run: |
           mkdir -p session-exchange session-evidence
@@ -69,7 +70,13 @@ jobs:
           ) > session-evidence/resources.log 2>&1 &
           sampler=$!
           trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          set +e
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml run --rm --no-deps sessions > session-evidence/k6.log 2>&1
+          result=$?
+          set -e
+          cp session-evidence/k6.log session-exchange/k6.log
+          echo "$result" > session-exchange/k6-exit-code.txt
+          exit "$result"
       - name: Reconcile confirmed writes even on failed thresholds
         if: always()
         run: |
@@ -147,7 +154,8 @@ jobs:
       - name: Check unchanged gates and fixture accounting
         run: |
           node deploy/session-lab/test-policy.mjs
-          go test ./cmd/capacity-lab
+          mkdir -p session-evidence
+          go test -v ./cmd/capacity-lab | tee session-evidence/harness-tests.log
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
@@ -229,7 +237,8 @@ jobs:
       - name: Check unchanged gates and fixture accounting
         run: |
           node deploy/session-lab/test-policy.mjs
-          go test ./cmd/capacity-lab
+          mkdir -p session-evidence
+          go test -v ./cmd/capacity-lab | tee session-evidence/harness-tests.log
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence

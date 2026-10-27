@@ -7,52 +7,50 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
+	"strings"
 	"time"
 
 	"across/backend/internal/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Only synthetic acknowledgement keys are logged; no tokens or coordinates.
-func verifySessionAcknowledgements(ctx context.Context, db *pgxpool.Pool, run string, count int64, out io.Writer) error {
+// Journal every logical offer before HTTP, and every observed acknowledgement.
+// Aborted runs retain per-key outcomes but can never qualify a completed stage.
+func verifySessionAcknowledgements(ctx context.Context, db *pgxpool.Pool, run string, count int64, out io.Writer) (sessionJournalResult, error) {
 	raw, err := os.ReadFile("/exchange/k6.log")
 	if err != nil {
-		return err
+		return sessionJournalResult{}, err
 	}
-	expression := regexp.MustCompile(`ACK:(sessions-` + regexp.QuoteMeta(run) + `:[0-9]+:[a-f0-9-]{36}:[a-f0-9-]{36})`)
-	ack := map[string]int{}
-	for _, match := range expression.FindAllStringSubmatch(string(raw), -1) {
-		ack[match[1]]++
+	offered, ack := parseSessionJournal(string(raw), run)
+	exitRaw, err := os.ReadFile("/exchange/k6-exit-code.txt")
+	if err != nil {
+		return sessionJournalResult{}, err
 	}
-	if int64(len(ack)) != count {
-		return fmt.Errorf("acknowledgement inventory incomplete")
-	}
+	completed := strings.TrimSpace(string(exitRaw)) == "0"
 	rows, err := db.Query(ctx, `SELECT body FROM provider_conversation_messages WHERE body LIKE $1 UNION ALL SELECT body FROM chat_messages WHERE body LIKE $1`, "sessions-"+run+":%")
 	if err != nil {
-		return err
+		return sessionJournalResult{}, err
 	}
 	defer rows.Close()
 	stored := map[string]int{}
 	for rows.Next() {
 		var body string
 		if err = rows.Scan(&body); err != nil {
-			return err
+			return sessionJournalResult{}, err
 		}
 		stored[body]++
 	}
 	if err = rows.Err(); err != nil {
-		return err
+		return sessionJournalResult{}, err
 	}
-	if len(stored) != len(ack) {
-		return fmt.Errorf("stored key inventory differs")
+	result := reconcileSessionJournal(offered, ack, stored, count, completed)
+	if err = json.NewEncoder(out).Encode(result); err != nil {
+		return result, err
 	}
-	for key, n := range ack {
-		if n != 1 || stored[key] != 1 {
-			return fmt.Errorf("acknowledged write missing or duplicated")
-		}
+	if !result.AcknowledgementsPreserved || !result.JournalConsistent {
+		return result, fmt.Errorf("session write-key journal or acknowledged persistence failed")
 	}
-	return json.NewEncoder(out).Encode(map[string]any{"exact_acknowledged_keys": len(ack), "all_acknowledged_keys_stored_once": true})
+	return result, nil
 }
 
 func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {

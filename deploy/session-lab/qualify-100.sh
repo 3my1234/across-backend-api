@@ -25,6 +25,7 @@ result=$?
 set -e
 date -u +%FT%TZ > session-evidence/measurement-end.txt
 echo "$result" > session-evidence/k6-exit-code.txt
+echo "$result" > session-exchange/k6-exit-code.txt
 # Observe readiness continuously through the audit's 60-second recovery window.
 for tick in $(seq 1 12); do
  date -u +%FT%TZ >> session-evidence/recovery.log

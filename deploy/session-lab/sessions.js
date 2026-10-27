@@ -133,13 +133,13 @@ export default function(data){
   req('services','/marketplace/listings?limit=20&search='+term);
   if(cycle%2===0)req('product_detail','/products/'+actor.product);else req('service_detail','/marketplace/listings/'+actor.listing);
  }else if(activity==='chat'){
-  history();const path=actor.role==='buyer'?'/marketplace/conversations/':'/providers/me/conversations/';const message=body(),saved=req('market_send',path+actor.conversation+'/messages',actor.token,message,201);
+  history();const path=actor.role==='buyer'?'/marketplace/conversations/':'/providers/me/conversations/';const message=body();console.log('OFFER:'+message.message);const saved=req('market_send',path+actor.conversation+'/messages',actor.token,message,201);
   if(saved.passed){console.log('ACK:'+message.message);confirmed.add(1);sent.add(1);if(cycle===1){const replay=req('market_retry',path+actor.conversation+'/messages',actor.token,message,201);valid.add(replay.passed&&replay.data.id===saved.data.id,{op:'idempotent_message'});}}
   req('inbox','/chat/inbox?limit=25',actor.token);
  }else if(activity==='hall'){
   const room=actor.role==='provider'&&actor.hot_room?actor.hot_room:actor.room;
   req('hall_history','/chat/conversations/'+room+'/messages?limit=40&mark_read=false',actor.token);
-  const message=body();const saved=req('hall_send','/chat/conversations/'+room+'/messages',actor.token,message,201);if(saved.passed){console.log('ACK:'+message.message);confirmed.add(1);}
+  const message=body();console.log('OFFER:'+message.message);const saved=req('hall_send','/chat/conversations/'+room+'/messages',actor.token,message,201);if(saved.passed){console.log('ACK:'+message.message);confirmed.add(1);}
  }else if(activity==='support'){
   if(actor.role==='buyer')req('support_history','/support/tickets/'+actor.ticket+'/messages?limit=40',actor.token);else req('session','/providers/me',actor.token);
  }else if(activity==='admin')req('admin_overview','/admin/business-overview',fixture.admin_token);

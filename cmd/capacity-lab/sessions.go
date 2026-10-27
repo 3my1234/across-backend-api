@@ -168,17 +168,20 @@ func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 	if err != nil {
 		return err
 	}
-	exactErr := verifySessionAcknowledgements(ctx, db, runID, confirmed, out)
-	passed := confirmed == market+hall+offers && duplicate == 0 && exactErr == nil
+	journal, exactErr := verifySessionAcknowledgements(ctx, db, runID, confirmed, out)
+	passed := journal.NormalInventoryMatched && confirmed == market+hall+offers && duplicate == 0 && exactErr == nil
 	if err = json.NewEncoder(out).Encode(map[string]any{"run_id": runID, "confirmed_writes": confirmed, "stored_marketplace_messages": market, "stored_town_hall_messages": hall, "stored_offers": offers, "duplicate_messages": duplicate, "delivery_receipt_rows": receipts, "write_reconciliation_passed": passed, "external_delivery_tested": false}); err != nil {
 		return err
 	}
+	if market > 0 {
+		if err = verifyRecipientVisibility(ctx, db, prefix, out); err != nil {
+			return err
+		}
+	}
 	if !passed {
-		return fmt.Errorf("confirmed/stored writes differ or duplicated messages")
+		return fmt.Errorf("stage incomplete or write inventory failed; see independent per-key results")
 	}
-	if err = verifyRecipientVisibility(ctx, db, prefix, out); err != nil {
-		return err
-	}
+
 	// Queue aggregates include generated work, without sending external messages.
 	for _, table := range []string{"email_outbox", "notification_push_deliveries", "web_push_deliveries"} {
 		var n int64
