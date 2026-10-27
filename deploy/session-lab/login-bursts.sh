@@ -7,7 +7,7 @@ cpu_sampler=$!
 trap 'kill "$cpu_sampler" 2>/dev/null || true' EXIT
 date -u +%FT%TZ > session-evidence/burst-start.txt
 set +e
-dc run --name atlxpres-login-bursts --rm --no-deps exporter /app/lab login-bursts > session-evidence/login-bursts.jsonl
+dc run --name atlxpres-login-bursts --rm --no-deps runner /app/lab login-bursts > session-evidence/login-bursts.jsonl
 result=$?
 set -e
 date -u +%FT%TZ > session-evidence/burst-end.txt

@@ -16,17 +16,19 @@ import (
 )
 
 type loginAttempt struct {
-	Burst         int       `json:"burst"`
-	Client        int       `json:"synthetic_client"`
-	Attempt       int       `json:"attempt"`
-	Status        int       `json:"status"`
-	ValidIdentity bool      `json:"valid_identity"`
-	ValidOverload bool      `json:"valid_overload"`
-	RetryAfter    int       `json:"retry_after_seconds"`
-	WaitMS        float64   `json:"wait_since_previous_response_ms"`
-	DurationMS    float64   `json:"duration_ms"`
-	Started       time.Time `json:"started"`
-	Finished      time.Time `json:"finished"`
+	Burst              int       `json:"burst"`
+	Client             int       `json:"synthetic_client"`
+	Attempt            int       `json:"attempt"`
+	Status             int       `json:"status"`
+	ValidIdentity      bool      `json:"valid_identity"`
+	ValidOverload      bool      `json:"valid_overload"`
+	RateLimitRemaining int       `json:"rate_limit_remaining"`
+	RateLimitPresent   bool      `json:"rate_limit_header_present"`
+	RetryAfter         int       `json:"retry_after_seconds"`
+	WaitMS             float64   `json:"wait_since_previous_response_ms"`
+	DurationMS         float64   `json:"duration_ms"`
+	Started            time.Time `json:"started"`
+	Finished           time.Time `json:"finished"`
 }
 
 // This intentionally records only an index, never login credentials or tokens.
@@ -47,6 +49,9 @@ func labPasswordLogin(c *http.Client, actor sessionFixture, burst, index, attemp
 		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 65536)).Decode(&payload)
 		response.Body.Close()
 		result.RetryAfter, _ = strconv.Atoi(response.Header.Get("Retry-After"))
+		remaining, headerErr := strconv.Atoi(response.Header.Get("X-RateLimit-Remaining"))
+		result.RateLimitRemaining = remaining
+		result.RateLimitPresent = headerErr == nil
 		result.ValidIdentity = decodeErr == nil && result.Status == 200 && payload.ID == actor.ID && payload.Token != ""
 		result.ValidOverload = decodeErr == nil && result.Status == 503 && payload.Error != "" && result.RetryAfter > 0
 	}
@@ -156,6 +161,15 @@ func loginBursts(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {
 				close(stop)
 				<-done
 				return fmt.Errorf("unexpected first-wave login outcome; stop")
+			}
+		}
+		if size == 20 {
+			for _, attempt := range first {
+				if !attempt.RateLimitPresent || attempt.RateLimitRemaining != 19 {
+					close(stop)
+					<-done
+					return fmt.Errorf("distinct-IP first-wave rate accounting failed; stop before retries")
+				}
 			}
 		}
 		attempts := make([][]loginAttempt, size)
