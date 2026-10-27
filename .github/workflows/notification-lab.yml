@@ -1,8 +1,18 @@
 name: Isolated external-ledger worker comparison
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [compare, faults]
+        default: compare
+      comparison_run:
+        description: Successful four-stage comparison run required for faults
+        type: string
+        required: false
 permissions:
   contents: read
+  actions: read
 jobs:
   worker_investigation:
     runs-on: ubuntu-latest
@@ -11,8 +21,10 @@ jobs:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '100'
       LAB_DB_CPUS: '2'
-      LAB_SESSION_PROFILE: stage
-      LAB_NOTIFICATION_WORKERS: '0'
+      LAB_SESSION_PROFILE: ${{ github.event.inputs.phase == 'faults' && 'sustained' || 'stage' }}
+      LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase == 'faults' && '1' || '0' }}
+      LAB_INVESTIGATION_PHASE: ${{ github.event.inputs.phase || 'compare' }}
+      COMPARISON_RUN: ${{ github.event.inputs.comparison_run }}
       LAB_SESSION_TARGET: '100'
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
@@ -30,6 +42,17 @@ jobs:
           node deploy/session-lab/test-policy.mjs
           mkdir -p session-evidence
           go test -v ./cmd/capacity-lab ./internal/workers ./internal/middleware | tee session-evidence/harness-tests.log
+      - name: Require passing comparison evidence before fault phase
+        if: github.event.inputs.phase == 'faults'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$COMPARISON_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$COMPARISON_RUN" --json conclusion,headBranch,headSha > comparison-proof.json
+          gh run download "$COMPARISON_RUN" --name "external-ledger-workers-$COMPARISON_RUN" --dir approved-comparison
+          python3 deploy/notification-lab/verify-comparison.py
+          proof_source=$(python3 -c 'import json;print(json.load(open("comparison-proof.json"))["headSha"])')
+          git diff --exit-code "$proof_source" HEAD -- internal/ cmd/capacity-lab/ deploy/session-lab/
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
@@ -65,7 +88,21 @@ jobs:
           cp deploy/notification-lab/* session-evidence/
           cp .github/workflows/notification-lab.yml session-evidence/notification-workflow.yml
       - name: Measure the 100 independent sessions
-        run: bash deploy/notification-lab/compare.sh
+        run: |
+          if test "$LAB_INVESTIGATION_PHASE" = faults; then
+            cmp session-evidence/binaries.sha256 approved-comparison/comparison-evidence/binaries.sha256
+            bash deploy/notification-lab/investigate.sh
+          else
+            bash deploy/notification-lab/compare.sh
+          fi
+      - name: Reconcile fault workload even after abort
+        if: always() && github.event.inputs.phase == 'faults'
+        run: |
+          test ! -f session-exchange/k6.log || cp session-exchange/k6.log session-evidence/k6.log
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
+      - name: Check fault workload software gates
+        if: github.event.inputs.phase == 'faults'
+        run: node deploy/session-lab/advance.mjs session-exchange/summary.json session-evidence/reconciliation.jsonl > session-evidence/gate.json
       - name: Retain only non-secret evidence
         if: always()
         run: |
@@ -76,6 +113,7 @@ jobs:
           docker inspect $(docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml ps -q) > session-evidence/container-limits.json
           lscpu > session-evidence/runner-cpu.txt
           free -h > session-evidence/runner-memory.txt
+          mkdir -p comparison-evidence
           sudo chown -R "$(id -u):$(id -g)" session-evidence comparison-evidence
       - uses: actions/upload-artifact@v4
         if: always()
