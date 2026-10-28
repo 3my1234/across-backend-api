@@ -4,7 +4,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [compare, faults]
+        options: [compare, faults, receipts]
         default: compare
       comparison_run:
         description: Successful four-stage comparison run required for faults
@@ -16,13 +16,13 @@ permissions:
 jobs:
   worker_investigation:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 75
     env:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '100'
       LAB_DB_CPUS: '2'
-      LAB_SESSION_PROFILE: ${{ github.event.inputs.phase == 'faults' && 'sustained' || 'stage' }}
-      LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase == 'faults' && '1' || '0' }}
+      LAB_SESSION_PROFILE: ${{ github.event.inputs.phase != 'compare' && 'sustained' || 'stage' }}
+      LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase != 'compare' && '1' || '0' }}
       LAB_INVESTIGATION_PHASE: ${{ github.event.inputs.phase || 'compare' }}
       COMPARISON_RUN: ${{ github.event.inputs.comparison_run }}
       LAB_SESSION_TARGET: '100'
@@ -53,12 +53,32 @@ jobs:
           python3 deploy/notification-lab/verify-comparison.py
           proof_source=$(python3 -c 'import json;print(json.load(open("comparison-proof.json"))["headSha"])')
           git diff --exit-code "$proof_source" HEAD -- internal/ cmd/capacity-lab/ deploy/session-lab/
+      - name: Require passing receipt regressions and matched policy proof
+        if: github.event.inputs.phase == 'receipts'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$COMPARISON_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$COMPARISON_RUN" --json conclusion,headBranch,headSha,workflowName > receipt-proof.json
+          gh run download "$COMPARISON_RUN" --name "receipt-qualification-$COMPARISON_RUN" --dir approved-receipts
+          python3 - <<'PYPROOF'
+          import json,re
+          from pathlib import Path
+          p=json.loads(Path('receipt-proof.json').read_text())
+          assert p['conclusion']=='success' and p['headBranch']=='perf/receipt-throughput'
+          assert p['workflowName']=='Worker role isolation qualification'
+          raw=Path('approved-receipts/policy-comparison.log').read_text()
+          rows=re.findall(r'RECEIPT_POLICY_RESULT arm=(\d) candidate=(true|false) rows=(\d+)',raw)
+          assert rows==[('1','false','200'),('2','true','1000'),('3','true','1000'),('4','false','200')],rows
+          PYPROOF
+          proof_source=$(python3 -c 'import json;print(json.load(open("receipt-proof.json"))["headSha"])')
+          git diff --exit-code "$proof_source" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
           git rev-parse HEAD > session-evidence/source-commit.txt
           git diff a5e94496f90435a2610c3c46592af3d0ea33e055 -- internal/ > session-evidence/runtime-diff.patch
-          test ! -s session-evidence/runtime-diff.patch
+          if test "$LAB_INVESTIGATION_PHASE" != receipts; then test ! -s session-evidence/runtime-diff.patch; fi
           cp deploy/session-lab/{policy.mjs,sessions.js,established.mjs,compose.yml} session-evidence/
           cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
           cp .github/workflows/session-lab.yml session-evidence/workflow.yml
@@ -89,19 +109,22 @@ jobs:
           cp .github/workflows/notification-lab.yml session-evidence/notification-workflow.yml
       - name: Measure the 100 independent sessions
         run: |
-          if test "$LAB_INVESTIGATION_PHASE" = faults; then
+          if test "$LAB_INVESTIGATION_PHASE" = receipts; then
+            bash deploy/notification-lab/investigate.sh
+            bash deploy/notification-lab/receipt-tail.sh
+          elif test "$LAB_INVESTIGATION_PHASE" = faults; then
             cmp session-evidence/binaries.sha256 approved-comparison/comparison-evidence/binaries.sha256
             bash deploy/notification-lab/investigate.sh
           else
             bash deploy/notification-lab/compare.sh
           fi
       - name: Reconcile fault workload even after abort
-        if: always() && github.event.inputs.phase == 'faults'
+        if: always() && github.event.inputs.phase != 'compare'
         run: |
           test ! -f session-exchange/k6.log || cp session-exchange/k6.log session-evidence/k6.log
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps verifier > session-evidence/reconciliation.jsonl
       - name: Check fault workload software gates
-        if: github.event.inputs.phase == 'faults'
+        if: github.event.inputs.phase != 'compare'
         run: node deploy/session-lab/advance.mjs session-exchange/summary.json session-evidence/reconciliation.jsonl > session-evidence/gate.json
       - name: Retain only non-secret evidence
         if: always()
