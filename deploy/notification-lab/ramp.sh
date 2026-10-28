@@ -7,10 +7,17 @@ dc up -d --wait notification-provider
 dc up -d notification-worker
 sql 'SELECT pg_stat_statements_reset();' >/dev/null
 date -u +%FT%TZ >session-evidence/ramp-sql-window-start.txt
+capture_sql() {
+ date -u +%FT%TZ >session-evidence/ramp-sql-window-end.txt
+ sql "SELECT coalesce(json_agg(s),'[]') FROM(SELECT r.rolname,queryid::text,calls,total_exec_time,mean_exec_time,max_exec_time,rows,query FROM pg_stat_statements s JOIN pg_roles r ON r.oid=s.userid WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY total_exec_time DESC LIMIT 100)s;" >session-evidence/ramp-sql-statements.json
+}
+# Includes authentication, active traffic and bounded recovery; never lose
+# the SQL profile when an unchanged performance gate aborts the workload.
+trap 'capture_sql || true' EXIT
 sed 's@-f deploy/session-lab/compose.yml@-f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml@g' deploy/session-lab/qualify-ramp.sh >session-exchange/ramp-qualify.sh
 bash session-exchange/ramp-qualify.sh
-date -u +%FT%TZ >session-evidence/ramp-sql-window-end.txt
-sql "SELECT coalesce(json_agg(s),'[]') FROM(SELECT r.rolname,queryid::text,calls,total_exec_time,mean_exec_time,max_exec_time,rows,query FROM pg_stat_statements s JOIN pg_roles r ON r.oid=s.userid WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY total_exec_time DESC LIMIT 100)s;" >session-evidence/ramp-sql-statements.json
+capture_sql
+trap - EXIT
 # Reconcile writes before spending time on drain/recovery. Failed performance
 # stages never proceed here; the workflow still retains their abort inventory.
 dc run --rm --no-deps verifier >session-evidence/reconciliation.jsonl
