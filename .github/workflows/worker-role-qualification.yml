@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 20
     env:
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/generator-exchange
+      LAB_GENERATOR_SUITE_DIR: ${{ github.workspace }}/deploy/session-lab
       LAB_INVESTIGATION_PHASE: system
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +32,7 @@ jobs:
           CGO_ENABLED=0 go build -o deploy/generator-lab/generator-target ./deploy/generator-lab
           docker build -t atlxpres-generator-target:local deploy/generator-lab
           docker compose -f deploy/generator-lab/compose.yml pull sessions
-      - name: Measure conservative synthetic journeys at three generator CPUs
+      - name: Compare original and locally prepared generator at two CPUs
         run: bash deploy/generator-lab/run.sh
       - uses: actions/upload-artifact@v4
         if: always()

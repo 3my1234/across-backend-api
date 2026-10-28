@@ -7,13 +7,23 @@ git rev-parse HEAD >generator-evidence/source.txt
 sha256sum deploy/session-lab/{sessions.js,policy.mjs,transport.mjs,established.mjs} >generator-evidence/unchanged-harness.sha256
 lscpu >generator-evidence/runner-cpu.txt
 free -h >generator-evidence/runner-memory.txt
-cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh} generator-evidence/
+cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh,prewarm.py,test_prewarm.py} generator-evidence/
 GENERATOR_LAB=synthetic-only deploy/generator-lab/generator-target prepare generator-exchange
 chmod -R a+rwX generator-exchange
-for quota in 3; do
+for mode in baseline prewarm; do
+ quota=2
+ export LAB_GENERATOR_SUITE_DIR="$PWD/generator-suite-${mode}"
+ mkdir -p "$LAB_GENERATOR_SUITE_DIR"
+ cp deploy/session-lab/* "$LAB_GENERATOR_SUITE_DIR/"
+ if [[ "$mode" == prewarm ]]; then
+   python3 deploy/generator-lab/prewarm.py deploy/session-lab/sessions.js "$LAB_GENERATOR_SUITE_DIR/sessions.js"
+ fi
+ node --check "$LAB_GENERATOR_SUITE_DIR/sessions.js"
  export LAB_GENERATOR_CPUS="$quota"
- arm="generator-evidence/cpu-${quota}"
+ arm="generator-evidence/cpu-${quota}-${mode}"
  mkdir -p "$arm"
+ cp "$LAB_GENERATOR_SUITE_DIR/sessions.js" "$arm/executed-sessions.js"
+ sha256sum "$LAB_GENERATOR_SUITE_DIR/"* >"$arm/executed-suite.sha256"
  dc down --remove-orphans >/dev/null 2>&1 || true
  dc up -d gateway
  dc run -d --name atlxpres-generator-sessions-measured --no-deps sessions >"$arm/container-id.txt"
@@ -42,6 +52,7 @@ python3 - <<'PYGATE'
 import json
 from pathlib import Path
 arms=[json.loads(p.read_text()) for p in Path('generator-evidence').glob('cpu-*/gate.json')]
-assert len(arms)==1,'The three-CPU synthetic arm must produce interpretable evidence'
-assert any(a['independent_generator_gate_passed'] for a in arms),'No generator resource setting has qualified; do not repeat full application 500 test'
+assert len(arms)==2,'Both baseline and locally prepared arms must produce interpretable evidence'
+assert json.loads(Path('generator-evidence/cpu-2-prewarm/gate.json').read_text())['independent_generator_gate_passed'],'Local preparation candidate did not qualify; do not repeat application500'
+assert json.loads(Path('generator-evidence/cpu-2-baseline/gate.json').read_text())['assertions']['original_thresholds_pass'],'Baseline workload correctness failed'
 PYGATE
