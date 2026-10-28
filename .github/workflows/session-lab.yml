@@ -14,6 +14,10 @@ on:
         description: Passing expanded sustained predecessor required before higher concurrency
         type: string
         required: false
+      selection_run:
+        description: Passing exact-source thread selection and retry regressions for experimental candidate
+        type: string
+        required: false
       inbox_run:
         description: Successful inbox differential qualification when testing the inbox candidate
         type: string
@@ -56,6 +60,7 @@ jobs:
       LAB_SESSION_TARGET: ${{ github.event.inputs.phase == 'ramp' && github.event.inputs.target || '100' }}
       LAB_GENERATOR_MEMORY: ${{ github.event.inputs.phase == 'ramp' && (github.event.inputs.target == '1000' && '4g' || '2g') || '512m' }}
       PREVIOUS_RUN: ${{ github.event.inputs.previous_run }}
+      SELECTION_RUN: ${{ github.event.inputs.selection_run }}
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
@@ -205,7 +210,29 @@ jobs:
           PYRAMP
           node deploy/session-lab/advance.mjs ramp-predecessor/session-evidence/summary.json ramp-predecessor/session-evidence/reconciliation.jsonl > ramp-predecessor-gate.json
           previous=$(python3 -c 'import json;print(json.load(open("ramp-predecessor.json"))["headSha"])')
-          git diff --exit-code "$previous" HEAD -- internal/ migrations/ cmd/ ':(exclude)cmd/capacity-lab/main.go' ':(exclude)cmd/capacity-lab/main_test.go' deploy/session-lab/sessions.js deploy/session-lab/transport.mjs deploy/session-lab/policy.mjs deploy/session-lab/established.mjs
+          git diff --exit-code "$previous" HEAD -- migrations/ cmd/ ':(exclude)cmd/capacity-lab/main.go' ':(exclude)cmd/capacity-lab/main_test.go' deploy/session-lab/sessions.js deploy/session-lab/transport.mjs deploy/session-lab/policy.mjs deploy/session-lab/established.mjs
+          if test -n "$SELECTION_RUN"; then
+            [[ "$SELECTION_RUN" =~ ^[0-9]+$ ]]
+            git diff --name-only "$previous" HEAD -- internal/ > selection-runtime-files.txt
+            gh run view "$SELECTION_RUN" --json conclusion,headBranch,headSha > selection-proof.json
+            gh run download "$SELECTION_RUN" --name "inbox-regressions-$SELECTION_RUN" --dir selection-proof
+            python3 - <<'PYSELECT'
+          import json
+          from pathlib import Path
+          allowed={'internal/controllers/provider_conversation_controller.go','internal/controllers/provider_threads.go','internal/controllers/thread_write_baseline_test.go','internal/controllers/thread_write_selection_test.go'}
+          assert set(Path('selection-runtime-files.txt').read_text().splitlines()) <= allowed
+          proof=json.loads(Path('selection-proof.json').read_text())
+          assert proof['conclusion']=='success' and proof['headBranch']=='perf/thread-write-selection'
+          log=Path('selection-proof/tests.log').read_text()
+          for test in ('ThreadWriteSelectionBoundedMatchesLegacy','ProductChatGroupedHistoryMigrationAndReceipts','ProductChatMigrationPermissionsAttachmentsAndRetries','CommunityLocationPinsPrivateAndIdempotent'):
+              assert '--- PASS: Test'+test in log
+          assert 'THREAD_SELECTION_RESULT' in log
+          PYSELECT
+            selected=$(python3 -c 'import json;print(json.load(open("selection-proof.json"))["headSha"])')
+            git diff --exit-code "$selected" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
+          else
+            git diff --exit-code "$previous" HEAD -- internal/
+          fi
           # Only historical import/reconstructed fixture metadata may differ.
           gh run view "$FIXTURE_RUN" --json conclusion,headBranch,headSha > ramp-fixture-proof.json
           gh run download "$FIXTURE_RUN" --name "expanded-regressions-$FIXTURE_RUN" --dir ramp-fixture
@@ -217,7 +244,8 @@ jobs:
           assert '--- PASS: TestFreshLabMigrationsAndFixtures' in Path('ramp-fixture/tests.log').read_text()
           PYFIXTURE
           fixture=$(python3 -c 'import json;print(json.load(open("ramp-fixture-proof.json"))["headSha"])')
-          git diff --exit-code "$fixture" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
+          git diff --exit-code "$fixture" HEAD -- migrations/ cmd/ deploy/session-lab/
+          if test -z "$SELECTION_RUN"; then git diff --exit-code "$fixture" HEAD -- internal/; fi
           # Same measurement/recovery body; only allowed-target/profile guards differ.
           python3 - <<'PYBODY'
           from pathlib import Path
