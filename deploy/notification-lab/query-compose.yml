@@ -1,0 +1,5 @@
+# Diagnostics only: same database quota, isolated SQL client, actual source read-only.
+services:
+  exporter:
+    cpus: 1
+    volumes: ['../..:/source:ro']

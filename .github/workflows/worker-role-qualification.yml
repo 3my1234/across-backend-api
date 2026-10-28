@@ -6,11 +6,95 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system]
+        options: [roles, receipts, expanded, inbox, system, queries]
         default: roles
 permissions:
   contents: read
 jobs:
+  query-diagnostic:
+    if: github.event.inputs.phase == 'queries'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LAB_INVESTIGATION_PHASE: system
+      LAB_SCENARIO: large-busy
+      LAB_ACTOR_PAIRS: '500'
+      LAB_DB_CPUS: '2'
+      LAB_SESSION_TARGET: '500'
+      LAB_SESSION_PROFILE: stage
+      LAB_SESSION_AUTH_MODE: established
+      LAB_SESSION_APPROVAL: /exchange/approval.json
+      LAB_GENERATOR_MEMORY: 2g
+      LAB_EXPANDED_JOURNEYS: '1'
+      LAB_NOTIFICATION_WORKERS: '0'
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Verify unchanged original application and diagnostic safety
+        run: |
+          git diff --exit-code 19e6b25 -- internal/ migrations/ cmd/api/ deploy/session-lab/policy.mjs
+          bash -n deploy/notification-lab/query.sh
+          python3 -m py_compile deploy/notification-lab/cgroup_sampler.py
+          node --check deploy/session-lab/sessions.js
+          node deploy/session-lab/test-policy.mjs
+          node deploy/session-lab/test-transport.mjs
+          go test -race -p 1 ./cmd/capacity-lab ./internal/middleware ./internal/workers
+          python3 - <<'PYMEM'
+          from pathlib import Path
+          available=int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:')))*1024
+          assert available>=10*1024**3, 'Insufficient existing runner headroom: stop, not an application result'
+          PYMEM
+      - name: Prepare identical synthetic baseline for all ABBA arms
+        run: |
+          mkdir -p session-exchange system-evidence
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml pull sessions
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml run --rm --no-deps exporter >session-exchange/fixtures.json
+          python3 - <<'PYAPPROVAL'
+          import json
+          from pathlib import Path
+          from datetime import datetime,timezone
+          data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          data.pop('sessions')
+          Path('session-exchange/run.json').write_text(json.dumps(data))
+          approval={'authorized':True,'environment':'isolated-staging','profile':'stage','max_sessions':500,'max_duration_seconds':180,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User-approved system-wide500 burst investigation; existing isolated public standard runner; no production, purchases or qualification claim'}
+          Path('session-exchange/approval.json').write_text(json.dumps(approval))
+          PYAPPROVAL
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter /app/lab notification-prepare
+          docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pg_stat_statements; ANALYZE;'
+      - name: Independent actual-query plans and bounded throughput
+        run: bash deploy/notification-lab/query.sh
+      - name: Retain exact query diagnostic source
+        if: always()
+        run: |
+          mkdir -p query-evidence
+          cp cmd/capacity-lab/query_diagnostic.go deploy/notification-lab/query.sh deploy/notification-lab/query-compose.yml query-evidence/
+      - name: Preserve collection provenance and failure evidence
+        if: always()
+        run: |
+          mkdir -p system-evidence
+          git rev-parse HEAD >system-evidence/source.txt
+          cp .github/workflows/worker-role-qualification.yml system-evidence/workflow.yml
+          cp deploy/notification-lab/{system.sh,system-compose.yml,cgroup_sampler.py} system-evidence/
+          cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} system-evidence/
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color >system-evidence/final-services.log
+          sudo chown -R "$(id -u):$(id -g)" system-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: query-diagnostic-${{ github.run_id }}
+          path: |
+            system-evidence/
+            query-evidence/
+          retention-days: 14
+      - name: Remove only isolated disposable lab
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml down --volumes --remove-orphans
   system-burst:
     if: github.event.inputs.phase == 'system'
     runs-on: ubuntu-latest

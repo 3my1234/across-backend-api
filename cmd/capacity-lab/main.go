@@ -141,6 +141,8 @@ func main() {
 		must(observeSessions(ctx, db, os.Stdout))
 	case "observe-system":
 		must(observeSystemBurst(ctx, db, os.Stdout))
+	case "query-diagnostic":
+		must(queryDiagnostic(ctx, db, os.Stdout))
 	case "verify-sessions":
 		must(verifySessions(ctx, db, os.Stdout))
 	case "lifecycle":
