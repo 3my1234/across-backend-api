@@ -148,6 +148,7 @@ jobs:
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
       LAB_GENERATOR_MEMORY: 2g
+      LAB_CALIBRATION_SUITE_DIR: ${{ github.workspace }}/session-exchange/calibration-suite
       LAB_EXPANDED_JOURNEYS: '1'
       LAB_NOTIFICATION_WORKERS: '0'
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
@@ -164,10 +165,18 @@ jobs:
         run: |
           python3 - <<'PYPROOF'
           import json,subprocess
-          for run in ('40745887634','40746907768'):
+          for run in ('40747865966','40746907768'):
               result=json.loads(subprocess.check_output(['gh','run','view',run,'--repo','3my1234/across-backend-api','--json','status,conclusion']))
               assert result['status']=='completed' and result['conclusion']=='success', 'Prerequisite did not pass; do not run calibration'
           PYPROOF
+          gh run download 40747865966 --repo 3my1234/across-backend-api --name generator-headroom-40747865966 --dir /tmp/generator-proof
+          python3 - <<'PYGEN'
+          from pathlib import Path
+          import json,hashlib
+          p=next(Path('/tmp/generator-proof').rglob('cpu-2-prewarm/gate.json'))
+          assert json.loads(p.read_text())['independent_generator_gate_passed'], 'Generator headroom not qualified'
+          assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_bytes()).hexdigest()=='455c71cf581718787e1258c1da783acc38fe6e642316bdccdac83b1afd99fe88'
+          PYGEN
       - name: Verify unchanged original application and diagnostic safety
         run: |
           git diff --exit-code 5ff5908 -- migrations/ cmd/api/ deploy/session-lab/policy.mjs
@@ -186,6 +195,10 @@ jobs:
       - name: Prepare identical synthetic baseline for all ABBA arms
         run: |
           mkdir -p session-exchange calibration-evidence
+          mkdir -p "$LAB_CALIBRATION_SUITE_DIR"
+          cp deploy/session-lab/* "$LAB_CALIBRATION_SUITE_DIR/"
+          python3 deploy/notification-lab/generator_prewarm.py deploy/session-lab/sessions.js "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
+          node --check "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml pull sessions
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml up -d --build --wait --wait-timeout 480 gateway
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml run --rm --no-deps exporter >session-exchange/fixtures.json
@@ -209,7 +222,7 @@ jobs:
           mkdir -p calibration-evidence
           git rev-parse HEAD >calibration-evidence/source.txt
           cp .github/workflows/worker-role-qualification.yml calibration-evidence/workflow.yml
-          cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py} calibration-evidence/
+          cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py,generator_prewarm.py} calibration-evidence/
           cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} calibration-evidence/
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color >calibration-evidence/final-services.log
           sudo chown -R "$(id -u):$(id -g)" calibration-evidence

@@ -4,6 +4,13 @@ set -euo pipefail
 dc() { docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml "$@"; }
 sql() { dc exec -T postgres psql -U lab -d capacity_lab -X -At -v ON_ERROR_STOP=1 -c "$1"; }
 mkdir -p calibration-evidence
+export LAB_CALIBRATION_SUITE_DIR="$PWD/session-exchange/calibration-suite"
+mkdir -p "$LAB_CALIBRATION_SUITE_DIR"
+cp deploy/session-lab/* "$LAB_CALIBRATION_SUITE_DIR/"
+python3 deploy/notification-lab/generator_prewarm.py deploy/session-lab/sessions.js "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
+node --check "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
+cp "$LAB_CALIBRATION_SUITE_DIR/sessions.js" calibration-evidence/executed-sessions.js
+sha256sum "$LAB_CALIBRATION_SUITE_DIR/"* >calibration-evidence/executed-suite.sha256
 # Only synthetic credentials/snapshot in exchange; never uploaded.
 test "$(sql 'SELECT marker FROM capacity_lab_identity;')" = disposable-compose-only
 dc exec -T postgres pg_dump -U lab -Fc capacity_lab >session-exchange/system-baseline.dump

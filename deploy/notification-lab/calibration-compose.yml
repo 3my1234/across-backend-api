@@ -1,4 +1,5 @@
 # Explicit generator-only resource change, never application/database/pool changes.
 services:
   sessions:
-    cpus: 3
+    cpus: 2
+    volumes: ['${LAB_CALIBRATION_SUITE_DIR:?explicit isolated suite required}:/suite:ro']
