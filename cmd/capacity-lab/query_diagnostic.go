@@ -169,8 +169,10 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 	if fenced == near {
 		return fmt.Errorf("actual nearby lookup changed; refuse stale experiment")
 	}
-	for _, original := range append([]scenario(nil), cases...) {
+	matched := []scenario{}
+	for _, original := range cases {
 		if !strings.HasPrefix(original.name, "nearby-") {
+			matched = append(matched, original)
 			continue
 		}
 		read := func(query string) ([][]any, error) {
@@ -200,8 +202,15 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		if len(before) == 0 || !reflect.DeepEqual(before, after) {
 			return fmt.Errorf("nearby differential failed for %s", original.name)
 		}
-		cases = append(cases, scenario{original.name + "-fenced-candidate", fenced, original.args})
+		for index, query := range []string{near, fenced, fenced, near} {
+			variant := "original"
+			if index == 1 || index == 2 {
+				variant = "fenced"
+			}
+			matched = append(matched, scenario{fmt.Sprintf("%s-arm%d-%s", original.name, index+1, variant), query, original.args})
+		}
 	}
+	cases = matched
 	encoder := json.NewEncoder(out)
 	for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 		cfg := db.Config().Copy()
