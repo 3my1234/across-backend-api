@@ -189,6 +189,7 @@ jobs:
         run: |
           [[ "$LAB_SESSION_TARGET" = 500 || "$LAB_SESSION_TARGET" = 1000 ]]
           [[ "$PREVIOUS_RUN" =~ ^[0-9]+$ ]]
+          [[ "$FIXTURE_RUN" =~ ^[0-9]+$ ]]
           gh run view "$PREVIOUS_RUN" --json conclusion,headBranch,headSha > ramp-predecessor.json
           gh run download "$PREVIOUS_RUN" --name "external-ledger-workers-$PREVIOUS_RUN" --dir ramp-predecessor
           python3 - <<'PYRAMP'
@@ -204,7 +205,19 @@ jobs:
           PYRAMP
           node deploy/session-lab/advance.mjs ramp-predecessor/session-evidence/summary.json ramp-predecessor/session-evidence/reconciliation.jsonl > ramp-predecessor-gate.json
           previous=$(python3 -c 'import json;print(json.load(open("ramp-predecessor.json"))["headSha"])')
-          git diff --exit-code "$previous" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/sessions.js deploy/session-lab/transport.mjs deploy/session-lab/policy.mjs deploy/session-lab/established.mjs
+          git diff --exit-code "$previous" HEAD -- internal/ migrations/ cmd/ ':(exclude)cmd/capacity-lab/main.go' ':(exclude)cmd/capacity-lab/main_test.go' deploy/session-lab/sessions.js deploy/session-lab/transport.mjs deploy/session-lab/policy.mjs deploy/session-lab/established.mjs
+          # Only historical import/reconstructed fixture metadata may differ.
+          gh run view "$FIXTURE_RUN" --json conclusion,headBranch,headSha > ramp-fixture-proof.json
+          gh run download "$FIXTURE_RUN" --name "expanded-regressions-$FIXTURE_RUN" --dir ramp-fixture
+          python3 - <<'PYFIXTURE'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('ramp-fixture-proof.json').read_text())
+          assert p['conclusion']=='success' and p['headBranch']=='experiment/expanded-capacity-ramp'
+          assert '--- PASS: TestFreshLabMigrationsAndFixtures' in Path('ramp-fixture/tests.log').read_text()
+          PYFIXTURE
+          fixture=$(python3 -c 'import json;print(json.load(open("ramp-fixture-proof.json"))["headSha"])')
+          git diff --exit-code "$fixture" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
           # Same measurement/recovery body; only allowed-target/profile guards differ.
           python3 - <<'PYBODY'
           from pathlib import Path
@@ -225,7 +238,10 @@ jobs:
           cp .github/workflows/session-lab.yml session-evidence/workflow.yml
           cp cmd/capacity-lab/session_observer.go session-evidence/session_observer.go
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml pull sessions
-          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway
+          if ! docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml up -d --build --wait --wait-timeout 480 gateway; then
+            docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -At -c "SELECT coalesce(json_agg(s),'[]') FROM(SELECT application_name,state,wait_event_type,wait_event,clock_timestamp()-query_start AS elapsed,left(query,300) AS synthetic_query_prefix FROM pg_stat_activity WHERE application_name='lab-seed')s;" > session-evidence/failed-setup-activity.json || true
+            exit 1
+          fi
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter > session-exchange/fixtures.json
           python3 - <<'PY'
           import json,os
