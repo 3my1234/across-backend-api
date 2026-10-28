@@ -1,0 +1,26 @@
+name: atlxpres-capacity-lab
+services:
+  gateway:
+    image: atlxpres-generator-target:local
+    cpus: 1
+    mem_limit: 512m
+    networks: [lab]
+  sessions:
+    image: grafana/k6:2.3.0
+    user: '0:0'
+    command: [run, --out, 'json=/exchange/timeseries.json', /suite/sessions.js]
+    environment:
+      K6_NO_USAGE_REPORT: 'true'
+      K6_NO_COLOR: 'true'
+      LAB_SESSION_PROFILE: stage
+      LAB_SESSION_TARGET: '500'
+      LAB_SESSION_MIX: mixed
+      LAB_SESSION_AUTH_MODE: established
+      LAB_SESSION_APPROVAL: /exchange/approval.json
+    volumes: ['../session-lab:/suite:ro', '${LAB_EXCHANGE_DIR:?explicit synthetic exchange required}:/exchange']
+    networks: [lab]
+    cpus: ${LAB_GENERATOR_CPUS:-1}
+    mem_limit: 2g
+networks:
+  lab:
+    internal: true
