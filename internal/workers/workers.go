@@ -131,7 +131,7 @@ func runPushReceiptLoop(ctx context.Context, db *pgxpool.Pool) {
 	for {
 		select {
 		case <-ticker.C:
-			if _, err := services.RunPushReceiptBatch(ctx, db, client); err != nil {
+			if _, err := services.RunPushReceiptDrain(ctx, db, client); err != nil {
 				log.Printf("push receipt worker error: %v", err)
 			}
 			heartbeat(ctx, "push_receipts")
