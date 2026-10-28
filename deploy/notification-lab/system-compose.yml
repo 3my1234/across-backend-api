@@ -1,0 +1,8 @@
+# Diagnostics only: same resource/pool/admission limits; label DB sessions.
+services:
+  api1:
+    environment:
+      DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=disable&application_name=system-api1
+  api2:
+    environment:
+      DATABASE_URL: postgres://lab:lab-disposable-only@postgres:5432/capacity_lab?sslmode=disable&application_name=system-api2

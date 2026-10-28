@@ -21,6 +21,7 @@ function randomUUID(){const b=new Uint8Array(randomBytes(16));b[6]=(b[6]&15)|64;
 // Tokens are synthetic and are never logged. Pin semantic names and exclude URL
 // and error tags so signed URLs/private values cannot enter raw artifacts.
 const offered=new Counter('offered_requests');
+const rejectionReasons=new Counter('rejection_reasons');
 const authenticated=new Counter('authenticated_sessions'),warmupAuthenticated=new Counter('warmup_authenticated_sessions'),warmupLatency=new Trend('warmup_latency',true);
 const confirmed=new Counter('confirmed_writes'),unexpected=new Rate('unexpected_failure'),overload=new Rate('controlled_overload'),valid=new Rate('content_valid'),success=new Trend('successful_latency',true),started=new Counter('session_starts'),actions=new Counter('session_actions'),sent=new Counter('messages_confirmed'),received=new Counter('recipient_observations'),delivery=new Trend('poll_delivery_latency',true),backends=new Counter('backend_responses');
 const perOperation=['login','session','catalogue','services','product_detail','service_detail','market_history','market_send','hall_history','hall_send','hall_offer','support_history','admin_overview','receipts','inbox'];
@@ -58,6 +59,7 @@ function req(op,path,token,body,want=200,method=body?'POST':'GET',expectBody=tru
  if(response.headers['X-Lab-Backend'])backends.add(1,{backend:response.headers['X-Lab-Backend']});
  let data=null;try{if(response.body)data=response.json();}catch{}
  const busy=[429,503].includes(response.status)&&!!data&&(typeof data.error==='string'||typeof data.message==='string')&&Number(response.headers['Retry-After'])>0;
+ if([429,503].includes(response.status)){const message=String(data?.error||data?.message||'');const reason=message==='Service busy. Please retry shortly.'?'request_admission':message==='Service restarting. Please retry shortly.'?'draining':message.includes('password')?'password_admission':message.includes('updating availability')?'presence_cadence':message.includes('catalog')?'catalogue':message.includes('Nearby')?'nearby_unavailable':'other';rejectionReasons.add(1,{op,reason,status:String(response.status)});}
  const passed=response.status===want&&(!expectBody||want>=400||want===204||!!data);
  unexpected.add(!passed&&!busy,{op});overload.add(busy,{op});valid.add(passed||busy,{op});
  if(passed&&want<400)success.add(response.timings.duration,{op});

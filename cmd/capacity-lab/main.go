@@ -92,7 +92,7 @@ func main() {
 	_, cpuError := databaseCPU(os.Getenv("LAB_DB_CPUS"))
 	must(cpuError)
 	limit := 12 * time.Minute
-	if os.Args[1] == "observe-sessions" {
+	if os.Args[1] == "observe-sessions" || os.Args[1] == "observe-system" {
 		limit = 40 * time.Minute
 	}
 	// A 30-minute workload needs at least another 15 minutes for its final
@@ -139,6 +139,8 @@ func main() {
 		must(loginBursts(ctx, db, os.Stdout))
 	case "observe-sessions":
 		must(observeSessions(ctx, db, os.Stdout))
+	case "observe-system":
+		must(observeSystemBurst(ctx, db, os.Stdout))
 	case "verify-sessions":
 		must(verifySessions(ctx, db, os.Stdout))
 	case "lifecycle":
