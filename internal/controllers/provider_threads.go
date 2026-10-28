@@ -24,3 +24,9 @@ func businessHistoryPageSQL() string {
 	 ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4
 	) msg ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4`
 }
+
+// Select at most one indexed message per physical conversation before merging.
+// Ownership and blocked-thread checks remain in the caller and this query.
+func businessWriteSelectionSQL() string {
+	return `SELECT COALESCE(to_jsonb(root)->>'thread_id',root.id::text),COALESCE((SELECT msg.conversation_id::text FROM (` + businessThreadMembers("root.id") + `) physical CROSS JOIN LATERAL (SELECT msg.conversation_id,msg.created_at,msg.id FROM provider_conversation_messages msg WHERE msg.conversation_id=physical.id ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1) msg ORDER BY msg.created_at DESC,msg.id DESC LIMIT 1),root.id::text),EXISTS(SELECT 1 FROM provider_conversations b WHERE b.id IN (` + businessThreadMembers("root.id") + `) AND b.status='blocked') FROM provider_conversations root WHERE root.id=$1::uuid`
+}
