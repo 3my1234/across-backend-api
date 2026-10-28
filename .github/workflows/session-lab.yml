@@ -4,8 +4,12 @@ on:
     inputs:
       phase:
         type: choice
-        options: [compare, faults, receipts]
+        options: [compare, faults, receipts, expanded]
         default: compare
+      fixture_run:
+        description: Successful expanded fixture regression run required for expanded phase
+        type: string
+        required: false
       comparison_run:
         description: Successful four-stage comparison run required for faults
         type: string
@@ -21,8 +25,10 @@ jobs:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '100'
       LAB_DB_CPUS: '2'
-      LAB_SESSION_PROFILE: ${{ github.event.inputs.phase != 'compare' && 'sustained' || 'stage' }}
+      LAB_SESSION_PROFILE: ${{ (github.event.inputs.phase == 'receipts' || github.event.inputs.phase == 'faults') && 'sustained' || 'stage' }}
       LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase != 'compare' && '1' || '0' }}
+      LAB_EXPANDED_JOURNEYS: ${{ github.event.inputs.phase == 'expanded' && '1' || '0' }}
+      FIXTURE_RUN: ${{ github.event.inputs.fixture_run }}
       LAB_INVESTIGATION_PHASE: ${{ github.event.inputs.phase || 'compare' }}
       COMPARISON_RUN: ${{ github.event.inputs.comparison_run }}
       LAB_SESSION_TARGET: '100'
@@ -73,12 +79,38 @@ jobs:
           PYPROOF
           proof_source=$(python3 -c 'import json;print(json.load(open("receipt-proof.json"))["headSha"])')
           git diff --exit-code "$proof_source" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
+      - name: Require sustained receipt proof and exact expanded fixture regression
+        if: github.event.inputs.phase == 'expanded'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$COMPARISON_RUN" =~ ^[0-9]+$ && "$FIXTURE_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$COMPARISON_RUN" --json conclusion,headBranch,headSha > expanded-predecessor.json
+          gh run download "$COMPARISON_RUN" --name "external-ledger-workers-$COMPARISON_RUN" --dir predecessor
+          gh run view "$FIXTURE_RUN" --json conclusion,headBranch,headSha > expanded-fixture-proof.json
+          gh run download "$FIXTURE_RUN" --name "expanded-regressions-$FIXTURE_RUN" --dir fixture-proof
+          python3 - <<'PYEXP'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('expanded-predecessor.json').read_text())
+          f=json.loads(Path('expanded-fixture-proof.json').read_text())
+          assert p['conclusion']=='success' and p['headBranch']=='perf/receipt-throughput'
+          assert f['conclusion']=='success' and f['headBranch']=='experiment/expanded-session-journeys'
+          assert Path('predecessor/session-evidence/receipts-drained.txt').read_text().strip()=='true'
+          summary=json.loads(Path('predecessor/session-evidence/summary.json').read_text())
+          assert summary['configuration']['target']==100 and summary['configuration']['profile']=='sustained'
+          PYEXP
+          node deploy/session-lab/advance.mjs predecessor/session-evidence/summary.json predecessor/session-evidence/reconciliation.jsonl
+          prior=$(python3 -c 'import json;print(json.load(open("expanded-predecessor.json"))["headSha"])')
+          fixture=$(python3 -c 'import json;print(json.load(open("expanded-fixture-proof.json"))["headSha"])')
+          git diff --exit-code "$prior" HEAD -- internal/ migrations/
+          git diff --exit-code "$fixture" HEAD -- cmd/ deploy/session-lab/ .github/workflows/worker-role-qualification.yml
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
           git rev-parse HEAD > session-evidence/source-commit.txt
           git diff a5e94496f90435a2610c3c46592af3d0ea33e055 -- internal/ > session-evidence/runtime-diff.patch
-          if test "$LAB_INVESTIGATION_PHASE" != receipts; then test ! -s session-evidence/runtime-diff.patch; fi
+          if test "$LAB_INVESTIGATION_PHASE" != receipts && test "$LAB_INVESTIGATION_PHASE" != expanded; then test ! -s session-evidence/runtime-diff.patch; fi
           cp deploy/session-lab/{policy.mjs,sessions.js,established.mjs,compose.yml} session-evidence/
           cp deploy/capacity-lab/compose.yml session-evidence/base-compose.yml
           cp .github/workflows/session-lab.yml session-evidence/workflow.yml
@@ -109,7 +141,9 @@ jobs:
           cp .github/workflows/notification-lab.yml session-evidence/notification-workflow.yml
       - name: Measure the 100 independent sessions
         run: |
-          if test "$LAB_INVESTIGATION_PHASE" = receipts; then
+          if test "$LAB_INVESTIGATION_PHASE" = expanded; then
+            bash deploy/notification-lab/expanded-pilot.sh
+          elif test "$LAB_INVESTIGATION_PHASE" = receipts; then
             bash deploy/notification-lab/investigate.sh
             bash deploy/notification-lab/receipt-tail.sh
           elif test "$LAB_INVESTIGATION_PHASE" = faults; then
