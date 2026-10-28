@@ -255,3 +255,53 @@ func TestReceiptRetryAfterParsing(t *testing.T) {
 		}
 	}
 }
+
+// Deliberately separate from the regressions: actual 15-second scheduling over
+// identical rows in ABBA order. This measures receipt policy capacity, not HTTP
+// session capacity, vendor delivery, or maximum backend throughput.
+func TestReceiptMatchedPolicyComparison(t *testing.T) {
+	if os.Getenv("RECEIPT_POLICY_COMPARE") != "true" {
+		t.Skip("explicitly enable the two-minute isolated policy comparison")
+	}
+	template := receiptTestDB(t)
+	seedReceipts(t, template, 1000)
+	schema := template.Config().ConnConfig.RuntimeParams["search_path"]
+	for arm, candidate := range []bool{false, true, true, false} {
+		db := receiptTestDB(t)
+		ctx := context.Background()
+		_, err := db.Exec(ctx, "INSERT INTO user_push_tokens SELECT * FROM "+schema+".user_push_tokens; INSERT INTO notification_push_deliveries SELECT * FROM "+schema+".notification_push_deliveries")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var calls atomic.Int32
+		client := successfulReceipts(t, &calls)
+		start := time.Now()
+		total := 0
+		for tick := 0; tick < 2; tick++ {
+			var n int
+			if candidate {
+				n, err = RunPushReceiptDrain(ctx, db, client)
+			} else {
+				n, err = runLegacyReceiptBatch(ctx, db, client)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += n
+			time.Sleep(time.Until(start.Add(time.Duration(tick+1) * 15 * time.Second)))
+		}
+		var stored int
+		if err := db.QueryRow(ctx, `SELECT count(*) FROM notification_push_deliveries WHERE status='delivered' AND receipt_checked_at IS NOT NULL`).Scan(&stored); err != nil || stored != total {
+			t.Fatal("comparison reconciliation", stored, total, err)
+		}
+		want := 200
+		if candidate {
+			want = 1000
+		}
+		if stored != want {
+			t.Fatalf("arm %d candidate=%v: stored=%d want=%d", arm, candidate, stored, want)
+		}
+		elapsed := time.Since(start).Seconds()
+		t.Logf("RECEIPT_POLICY_RESULT arm=%d candidate=%v rows=%d seconds=%.3f checks_per_second=%.3f requests=%d", arm+1, candidate, stored, elapsed, float64(stored)/elapsed, calls.Load())
+	}
+}
