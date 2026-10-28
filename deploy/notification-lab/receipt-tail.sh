@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-[[ ${GITHUB_ACTIONS:-} == true && ( ${LAB_INVESTIGATION_PHASE:-} == receipts || ${LAB_INVESTIGATION_PHASE:-} == expanded ) && ${LAB_SESSION_TARGET:-} == 100 && ${LAB_SESSION_PROFILE:-} == sustained ]]
+[[ ${GITHUB_ACTIONS:-} == true && ( ${LAB_INVESTIGATION_PHASE:-} == receipts || ${LAB_INVESTIGATION_PHASE:-} == expanded || ${LAB_INVESTIGATION_PHASE:-} == ramp ) && ( ${LAB_SESSION_TARGET:-} == 100 || ${LAB_SESSION_TARGET:-} == 500 || ${LAB_SESSION_TARGET:-} == 1000 ) && ${LAB_SESSION_PROFILE:-} == sustained ]]
 dc() { docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml "$@"; }
 sql() { dc exec -T postgres psql -U lab -d capacity_lab -X -At -v ON_ERROR_STOP=1 -c "$1"; }
 # Real wall-clock eligibility: do not age sent_at, shorten 15 minutes, or replay
