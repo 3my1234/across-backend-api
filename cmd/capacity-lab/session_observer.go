@@ -100,6 +100,11 @@ func observeSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		 SELECT 'native_push', d.status, count(*),
 		        greatest(0, extract(epoch FROM (now()-min(n.created_at))))::float8
 		 FROM notification_push_deliveries d JOIN notifications n ON n.id=d.notification_id GROUP BY d.status
+         UNION ALL
+         SELECT 'native_receipts','eligible',count(*),
+                greatest(0,extract(epoch FROM (now()-min(sent_at)))-900)::float8
+         FROM notification_push_deliveries
+         WHERE status='sent' AND receipt_checked_at IS NULL AND sent_at<=now()-interval '15 minutes'
 		 UNION ALL
 		 SELECT 'web_push', status, count(*),
 		        greatest(0, extract(epoch FROM (now()-min(created_at))))::float8
