@@ -89,8 +89,8 @@ func TestInboxBoundedPageMatchesLegacyAndPlans(t *testing.T) {
 	INSERT INTO provider_listings(id,provider_id,title,status)VALUES($6,$5,'Synthetic service','approved');
 	INSERT INTO provider_conversations(id,provider_id,user_id,listing_id,status,last_message_at,buyer_last_read_at,provider_last_read_at,thread_id)
 	VALUES($7,$5,$1,$6,'open','2026-01-31','2026-01-05','2026-01-05',$7),($8,$5,$1,$6,'closed','2026-01-30','2026-01-01','2026-01-01',$7),($9,$5,$3,$6,'open','2026-01-01',NULL,NULL,$9);
-	INSERT INTO provider_conversation_messages SELECT gen_random_uuid(),$7,'provider','2026-01-01'::timestamptz+i*interval '1 second','Synthetic older body' FROM generate_series(1,1000)i;
-	INSERT INTO provider_conversation_messages VALUES(gen_random_uuid(),$7,'provider','2026-01-10','Synthetic root unread'),(gen_random_uuid(),$8,'provider','2026-01-02','Synthetic alias unread'),
+	INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at,body) SELECT gen_random_uuid(),$7,'provider','2026-01-01'::timestamptz+i*interval '1 second','Synthetic older body' FROM generate_series(1,1000)i;
+	INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at,body) VALUES(gen_random_uuid(),$7,'provider','2026-01-10','Synthetic root unread'),(gen_random_uuid(),$8,'provider','2026-01-02','Synthetic alias unread'),
 	('00000000-0000-4000-8000-000000000001',$8,'provider','2026-01-30','Synthetic tied predecessor'),
 	('ffffffff-ffff-4fff-8fff-ffffffffffff',$8,'buyer','2026-01-30','Synthetic latest alias');
 	INSERT INTO chat_rooms(id,kind,owner_user_id,title,last_message_at)SELECT gen_random_uuid(),'town_hall',$1,'Synthetic room','2026-01-29'::timestamptz-i*interval '1 second' FROM generate_series(1,60)i;
@@ -162,6 +162,7 @@ func TestInboxBoundedPageMatchesLegacyAndPlans(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer tx.Rollback(ctx)
 			if _, err = tx.Exec(ctx, "SET LOCAL plan_cache_mode="+mode); err != nil {
 				t.Fatal(err)
 			}
