@@ -16,12 +16,20 @@ for tick in $(seq 1 30); do
  sleep 2
 done
 test "$ready" = true
+if test "${LAB_INVESTIGATION_PHASE:-}" = expanded; then
+ sql 'SELECT pg_stat_statements_reset();' >/dev/null
+ date -u +%FT%TZ >session-evidence/expanded-sql-window-start.txt
+fi
 bash deploy/notification-lab/faults.sh >session-evidence/faults.log 2>&1 &
 faults=$!
 trap 'kill "$faults" 2>/dev/null || true' EXIT
 # Same performance profile/gates. Override only the Compose overlay selection.
 sed 's@-f deploy/session-lab/compose.yml@-f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml@g' deploy/session-lab/qualify-100.sh >session-exchange/worker-qualify.sh
 bash session-exchange/worker-qualify.sh
+if test "${LAB_INVESTIGATION_PHASE:-}" = expanded; then
+ date -u +%FT%TZ >session-evidence/expanded-sql-window-end.txt
+ sql "SELECT coalesce(json_agg(s),'[]') FROM(SELECT r.rolname,queryid::text,calls,total_exec_time,mean_exec_time,max_exec_time,rows,shared_blks_hit,shared_blks_read,temp_blks_written,query FROM pg_stat_statements s JOIN pg_roles r ON r.oid=s.userid WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY total_exec_time DESC LIMIT 80)s;" >session-evidence/expanded-sql-statements.json
+fi
 wait "$faults"
 # Stop offering workload, then observe bounded send-backlog drain. Receipt
 # acknowledgement has the real 15-minute eligibility/100-per-15s policy;
