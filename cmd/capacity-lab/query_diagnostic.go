@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -183,8 +184,11 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 			matched = append(matched, original)
 			continue
 		}
+		var queryer interface {
+			Query(context.Context, string, ...any) (pgx.Rows, error)
+		} = db
 		read := func(query string) ([][]any, error) {
-			rows, err := db.Query(ctx, query, original.args...)
+			rows, err := queryer.Query(ctx, query, original.args...)
 			if err != nil {
 				return nil, err
 			}
@@ -209,6 +213,40 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		}
 		if len(before) == 0 || !reflect.DeepEqual(before, after) {
 			return fmt.Errorf("nearby differential failed for %s", original.name)
+		}
+		// Each revocation is rolled back before timing. Compare the same full
+		// ordered result set after more than one page of providers is excluded.
+		for _, mutation := range []string{
+			`UPDATE provider_organizations SET is_active=false WHERE id IN(SELECT provider FROM capacity_lab_actors WHERE slot%10 IN(1,2) ORDER BY slot LIMIT 30)`,
+			`DELETE FROM provider_subscription_payments WHERE subscription_id IN(SELECT s.id FROM provider_subscriptions s JOIN capacity_lab_actors a ON a.provider=s.provider_id WHERE a.slot%10 IN(1,2) ORDER BY a.slot LIMIT 30)`,
+			`UPDATE provider_verification_documents SET status='rejected' WHERE provider_id IN(SELECT provider FROM capacity_lab_actors WHERE slot%10 IN(1,2) ORDER BY slot LIMIT 30)`,
+		} {
+			tx, err := db.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			queryer = tx
+			if _, err = tx.Exec(ctx, mutation); err != nil {
+				tx.Rollback(ctx)
+				return err
+			}
+			left, err := read(near)
+			if err != nil {
+				tx.Rollback(ctx)
+				return err
+			}
+			right, err := read(fenced)
+			rollbackErr := tx.Rollback(ctx)
+			queryer = db
+			if err != nil {
+				return err
+			}
+			if rollbackErr != nil {
+				return rollbackErr
+			}
+			if !reflect.DeepEqual(left, right) {
+				return fmt.Errorf("revoked nearby differential failed for %s", original.name)
+			}
 		}
 		for index, query := range []string{near, fenced, fenced, near} {
 			variant := "original"
