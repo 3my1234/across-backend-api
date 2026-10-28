@@ -6,7 +6,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded]
+        options: [roles, receipts, expanded, inbox]
         default: roles
 permissions:
   contents: read
@@ -111,4 +111,36 @@ jobs:
         with:
           name: expanded-regressions-${{ github.run_id }}
           path: expanded-evidence/
+          retention-days: 14
+
+  inbox-regressions:
+    if: github.event.inputs.phase == 'inbox'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_PASSWORD: isolated-inbox-ci, POSTGRES_DB: inbox_tests}
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-inbox-ci@127.0.0.1:5432/inbox_tests?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Differential inbox contract, actual SQL plans and grouped history regressions
+        run: |
+          set -o pipefail
+          mkdir -p inbox-evidence
+          git rev-parse HEAD > inbox-evidence/source.txt
+          go test -race -p 1 -count=1 -v ./internal/controllers -run '^Test(InboxBoundedPageMatchesLegacyAndPlans|CommunityInboxPreviewIsPrivate|ProductChatGroupedHistoryMigrationAndReceipts)$' | tee inbox-evidence/tests.log
+      - name: Compile actual API
+        run: go build -o /tmp/atl-inbox-api ./cmd/api
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: inbox-regressions-${{ github.run_id }}
+          path: inbox-evidence/
           retention-days: 14
