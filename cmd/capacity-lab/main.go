@@ -92,8 +92,14 @@ func main() {
 	_, cpuError := databaseCPU(os.Getenv("LAB_DB_CPUS"))
 	must(cpuError)
 	limit := 12 * time.Minute
-	if os.Args[1] == "observe-sessions" || os.Args[1] == "notification-worker" || os.Args[1] == "notification-provider" {
+	if os.Args[1] == "observe-sessions" {
 		limit = 40 * time.Minute
+	}
+	// A 30-minute workload needs at least another 15 minutes for its final
+	// receipts to become eligible. Keep mocks/worker bounded but alive through
+	// that drain window; the workload observer retains its original lifetime.
+	if os.Args[1] == "notification-worker" || os.Args[1] == "notification-provider" {
+		limit = 65 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
