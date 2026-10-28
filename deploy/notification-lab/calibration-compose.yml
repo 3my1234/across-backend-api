@@ -1,0 +1,4 @@
+# Explicit generator-only resource change, never application/database/pool changes.
+services:
+  sessions:
+    cpus: 3
