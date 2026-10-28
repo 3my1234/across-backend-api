@@ -104,6 +104,24 @@ func TestFreshLabMigrationsAndFixtures(t *testing.T) {
 	if _, err = checkFixtures(ctx, db, plan); err != nil {
 		t.Fatal(err)
 	}
+	// Import optimization must restore both live effects before the API starts.
+	probe, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Rollback(ctx)
+	_, err = probe.Exec(ctx, `INSERT INTO provider_conversation_messages(conversation_id,sender_type,sender_user_id,body,created_at) SELECT conversation,'buyer',buyer,'Synthetic live-trigger probe',clock_timestamp()+interval '1 minute' FROM capacity_lab_actors ORDER BY slot LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var liveEffects bool
+	err = probe.QueryRow(ctx, `SELECT c.history_revision=$1+1 AND c.last_message_at=(SELECT max(created_at) FROM provider_conversation_messages WHERE conversation_id=c.id) FROM provider_conversations c JOIN capacity_lab_actors a ON a.conversation=c.id ORDER BY a.slot LIMIT 1`, plan.ConversationHistory).Scan(&liveEffects)
+	if err != nil || !liveEffects {
+		t.Fatalf("live revision/thread timestamp effects restored=%v error=%v", liveEffects, err)
+	}
+	if err = probe.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 	// Large fixtures need twenty combined posts and two simultaneous rooms.
 	// Use a real tier allowance; never disable the new quota triggers to seed.
 	var entitlementsReady bool

@@ -206,9 +206,15 @@ func seed(ctx context.Context, db *pgxpool.Pool) error {
  -- thousands of times in a single seed transaction. Restore the equivalent
  -- revision and re-enable the named trigger before any API starts.
  ALTER TABLE provider_conversation_messages DISABLE TRIGGER provider_chat_revision;
+ ALTER TABLE provider_conversation_messages DISABLE TRIGGER provider_conversation_thread_message;
  INSERT INTO provider_conversation_messages(conversation_id,sender_type,sender_user_id,body)
  SELECT conversation,'buyer',buyer,'Synthetic prior message' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d);
  UPDATE provider_conversations c SET history_revision=h.total FROM (SELECT conversation_id,count(*) AS total FROM provider_conversation_messages GROUP BY conversation_id) h WHERE c.id=h.conversation_id;
+ -- Historical import has the same final representative timestamp as the
+ -- live trigger, without half a million repeated updates in one transaction.
+ UPDATE provider_conversations c SET last_message_at=GREATEST(c.last_message_at,h.latest)
+ FROM (SELECT pc.thread_id,max(m.created_at) AS latest FROM provider_conversation_messages m JOIN provider_conversations pc ON pc.id=m.conversation_id GROUP BY pc.thread_id) h WHERE c.id=h.thread_id;
+ ALTER TABLE provider_conversation_messages ENABLE TRIGGER provider_conversation_thread_message;
  ALTER TABLE provider_conversation_messages ENABLE TRIGGER provider_chat_revision;
  INSERT INTO chat_rooms(id,kind,owner_user_id,title) SELECT room,'town_hall',buyer,'Synthetic request' FROM capacity_lab_actors;
  INSERT INTO chat_rooms(kind,owner_user_id,title,created_at) SELECT 'town_hall',buyer,'Synthetic older request',now()-i*interval '1 second' FROM capacity_lab_actors CROSS JOIN generate_series(1,%d) i;
@@ -257,6 +263,11 @@ func checkFixtures(ctx context.Context, db *pgxpool.Pool, plan fixturePlan) (map
 	}
 	if !revisionsReady {
 		return counts, fmt.Errorf("history revisions or live trigger not ready")
+	}
+	var threadReady bool
+	err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='provider_conversation_messages'::regclass AND tgname='provider_conversation_thread_message' AND tgenabled='O') AND NOT EXISTS(SELECT 1 FROM provider_conversations c JOIN provider_conversation_messages m ON m.conversation_id=c.id JOIN provider_conversations root ON root.id=c.thread_id WHERE root.last_message_at<m.created_at)`).Scan(&threadReady)
+	if err != nil || !threadReady {
+		return counts, fmt.Errorf("historical thread timestamps or live trigger not ready: %v", err)
 	}
 	counts = map[string]int{"products": products, "listings": listings, "rooms": rooms, "hall_messages": hallMessages, "marketplace_messages": marketMessages, "busy_rooms": busyRooms}
 	extraRooms, extraMessages, wantBusy := 0, 0, 0
