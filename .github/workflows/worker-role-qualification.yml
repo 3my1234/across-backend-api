@@ -3,10 +3,16 @@ on:
   pull_request:
     branches: [main, feat/milestone-1-foundation]
   workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [roles, receipts]
+        default: roles
 permissions:
   contents: read
 jobs:
   selected-consumers:
+    if: github.event.inputs.phase != 'receipts'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -20,3 +26,44 @@ jobs:
           go test -race -count=1 ./internal/config ./internal/workers ./cmd/worker
       - name: Build the actual worker image without publishing
         run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} -f Dockerfile.worker -t atl-worker-role-ci .
+
+  receipt-regressions:
+    if: github.event.inputs.phase == 'receipts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-receipt-ci
+          POSTGRES_DB: receipt_tests
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-receipt-ci@127.0.0.1:5432/receipt_tests?sslmode=disable
+      RECEIPT_TEST_LOCAL: 'true'
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Real PostgreSQL claim, pacing, crash, retry and send regressions
+        run: |
+          set -o pipefail
+          mkdir -p receipt-evidence
+          git rev-parse HEAD > receipt-evidence/source.txt
+          go test -race -p 1 -count=1 -v ./internal/services -run '^TestReceipt' | tee receipt-evidence/receipt-tests.log
+          go test -p 1 -count=1 -v ./internal/controllers -run '^TestRegisteredDevicesReceiveRealSupportPush$' | tee receipt-evidence/send-regression.log
+          go test -p 1 -count=1 ./internal/workers ./internal/config ./cmd/worker ./cmd/capacity-lab | tee receipt-evidence/worker-tests.log
+      - name: Verify additive migration and compile both entrypoints
+        run: |
+          go run ./cmd/migrate
+          go build -o /tmp/atl-api ./cmd/api
+          go build -o /tmp/atl-worker ./cmd/worker
+          sha256sum /tmp/atl-api /tmp/atl-worker > receipt-evidence/binaries.sha256
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receipt-qualification-${{ github.run_id }}
+          path: receipt-evidence/
+          retention-days: 14
