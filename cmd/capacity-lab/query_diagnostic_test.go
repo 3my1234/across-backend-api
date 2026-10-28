@@ -10,7 +10,7 @@ func TestDiagnosticUsesDatabaseQueryNotRequestParameter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(nearby, "SELECT c.id") || !strings.Contains(nearby, "FROM provider_driver_presence d") || !strings.Contains(nearby, "driver_documents_approved(l.provider_id)") || !strings.Contains(nearby, "LIMIT 25") {
+	if !strings.HasPrefix(nearby, "SELECT c.id") || !strings.Contains(nearby, "FROM provider_driver_presence d") || !strings.Contains(nearby, "driver_documents_approved(i.provider_id)") || !strings.Contains(nearby, "LIMIT 25") {
 		t.Fatalf("diagnostic did not extract actual nearby SQL: %q", nearby)
 	}
 	history, err := diagnosticSQLFromSource("../../internal/controllers", "businessHistoryPageSQL")
