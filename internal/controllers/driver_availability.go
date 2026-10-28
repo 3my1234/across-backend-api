@@ -113,16 +113,22 @@ func (m *ProviderMarketplaceController) NearbyDrivers(c *fiber.Ctx) error {
 	if math.Abs(lat)+deltaLat >= 90 {
 		deltaLon = 180
 	}
-	rows, err := m.db.Query(ctx, `WITH candidates AS (
- SELECT l.id::text,l.provider_id::text,l.title,l.description,l.category,l.media_urls,l.city,l.country_code,l.price,l.currency_code,l.pricing_unit,i.paid_active,d.updated_at,d.expires_at,`+transportKindSQL+` AS transport_kind,
+	// Order inexpensive live-position candidates before checking each provider's
+	// current entitlement. The lateral fence permits stopping after 25 eligible
+	// results; there is no candidate pre-limit that could hide an eligible driver
+	// behind revoked or unpaid providers. Recheck every eligibility on each read.
+	rows, err := m.db.Query(ctx, `SELECT c.id,c.provider_id,c.title,c.description,c.category,c.media_urls,c.city,c.country_code,c.price,c.currency_code,c.pricing_unit,i.paid_active,c.updated_at,c.expires_at,c.transport_kind,c.distance
+ FROM (SELECT * FROM (
+ SELECT l.id::text,l.provider_id::text,l.title,l.description,l.category,l.media_urls,l.city,l.country_code,l.price,l.currency_code,l.pricing_unit,l.plan_slot,d.updated_at,d.expires_at,CASE WHEN (l.category||' '||l.title) ~* '(^|[^a-z])(riders?|couriers?|dispatch|motorcycle[ -]+delivery)([^a-z]|$)' THEN 'courier' WHEN (l.category||' '||l.title) ~* '(^|[^a-z])(delivery|logistics|transport|trucking)([^a-z]|$)' THEN 'delivery' ELSE 'passenger' END AS transport_kind,
  6371*2*asin(sqrt(LEAST(1.0,power(sin(radians(d.latitude-$1)/2),2)+cos(radians($1))*cos(radians(d.latitude))*power(sin(radians(d.longitude-$2)/2),2)))) AS distance
  FROM provider_driver_presence d JOIN provider_listings l ON l.id=d.listing_id AND l.provider_id=d.provider_id
- JOIN provider_public_identity i ON i.provider_id=d.provider_id
- WHERE d.expires_at>clock_timestamp() AND l.plan_slot<=i.listing_limit AND i.verified AND i.paid_active AND driver_documents_approved(l.provider_id) AND l.status='approved' AND `+driverListingSQL+`
+
+ WHERE d.expires_at>clock_timestamp() AND l.status='approved' AND (l.category||' '||l.title) ~* '(^|[^a-z])(drivers?|chauffeurs?|taxi|riders?|couriers?|dispatch|delivery|logistics|transport|trucking)([^a-z]|$)'
  AND (point(d.longitude,d.latitude)<@box(point($2-$4,$1-$3),point($2+$4,$1+$3))
  OR point(d.longitude,d.latitude)<@box(point($2-$4-360,$1-$3),point($2+$4-360,$1+$3))
- OR point(d.longitude,d.latitude)<@box(point($2-$4+360,$1-$3),point($2+$4+360,$1+$3))))
- SELECT * FROM candidates WHERE distance<=$5 AND ($6='all' OR transport_kind=$6) ORDER BY distance,id LIMIT 25`, lat, lon, deltaLat, deltaLon, radius, kind)
+ OR point(d.longitude,d.latitude)<@box(point($2-$4+360,$1-$3),point($2+$4+360,$1+$3)))) spatial WHERE distance<=$5 AND ($6='all' OR transport_kind=$6) ORDER BY distance,id OFFSET 0) c
+ JOIN LATERAL (SELECT i.paid_active FROM provider_public_identity i WHERE i.provider_id=c.provider_id::uuid AND c.plan_slot<=i.listing_limit AND i.verified AND i.paid_active AND driver_documents_approved(i.provider_id) OFFSET 0) i ON true
+ ORDER BY c.distance,c.id LIMIT 25`, lat, lon, deltaLat, deltaLon, radius, kind)
 	if err != nil {
 		return fiber.NewError(503, "Nearby drivers are temporarily unavailable")
 	}

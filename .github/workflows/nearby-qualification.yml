@@ -1,0 +1,44 @@
+name: Nearby ordered eligibility qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nearby-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_PASSWORD: isolated-nearby-ci, POSTGRES_DB: nearby_tests}
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:isolated-nearby-ci@127.0.0.1:5432/nearby_tests?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Verify exact measured query and focused actual-handler regressions
+        run: |
+          set -o pipefail
+          mkdir -p nearby-evidence
+          git rev-parse HEAD >nearby-evidence/source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          s=Path('internal/controllers/driver_availability.go').read_text()
+          start=s.index('`SELECT c.id',s.index('func (m *ProviderMarketplaceController) NearbyDrivers'))+1
+          end=s.index('`, lat, lon, deltaLat',start)
+          assert hashlib.sha256(s[start:end].encode()).hexdigest()=='6a4c7080e39d90ba1f382ebef28ee463b58291a9a69a9c3ac0cf3c5cfc5d0729'
+          PY
+          go test -race -p 1 -count=1 -v ./cmd/capacity-lab -run '^TestDiagnosticUsesDatabaseQueryNotRequestParameter$' | tee nearby-evidence/extraction.log
+          go test -race -p 1 -count=1 -v ./internal/controllers -run '^TestDriver(AvailabilityPrivacyExpiryAndRevocation|DocumentsRequiredAndRevocation|DocumentStorageIsOwnedAndImmutable)$' | tee nearby-evidence/handler-regressions.log
+          go build -o /tmp/nearby-api ./cmd/api
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nearby-regressions-${{ github.run_id }}
+          path: nearby-evidence/
+          retention-days: 14
