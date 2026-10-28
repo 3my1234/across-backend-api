@@ -114,6 +114,25 @@ func TestFreshLabMigrationsAndFixtures(t *testing.T) {
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM capacity_lab_actors").Scan(&actors); err != nil || actors != plan.Pairs {
 		t.Fatalf("actors=%d error=%v", actors, err)
 	}
+	if os.Getenv("CAPACITY_LAB_TEST_EXPANDED") == "true" {
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if err = prepareExpandedJourneys(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+		var eligible int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM capacity_lab_actors a JOIN provider_listings l ON l.id=a.listing JOIN provider_public_identity i ON i.provider_id=a.provider
+   WHERE l.status='approved' AND i.verified AND i.paid_active AND driver_documents_approved(a.provider) AND l.listing_type='artisan'`).Scan(&eligible); err != nil || eligible != plan.Pairs {
+			t.Fatal("expanded transport fixtures ineligible", eligible, err)
+		}
+		var messageOnly int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM town_hall_requests WHERE room_id IN(SELECT room FROM capacity_lab_actors UNION SELECT hot_room FROM capacity_lab_actors) AND (message_only OR unit<>'job')`).Scan(&messageOnly); err != nil || messageOnly != 0 {
+			t.Fatal("bid room fixtures invalid", messageOnly, err)
+		}
+	}
 }
 
 func TestScenarioSelectionRejectsArbitrarySeedInput(t *testing.T) {

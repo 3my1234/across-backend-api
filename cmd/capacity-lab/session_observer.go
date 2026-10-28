@@ -27,7 +27,9 @@ func verifySessionAcknowledgements(ctx context.Context, db *pgxpool.Pool, run st
 		return sessionJournalResult{}, err
 	}
 	completed := strings.TrimSpace(string(exitRaw)) == "0"
-	rows, err := db.Query(ctx, `SELECT body FROM provider_conversation_messages WHERE body LIKE $1 UNION ALL SELECT body FROM chat_messages WHERE body LIKE $1`, "sessions-"+run+":%")
+	rows, err := db.Query(ctx, `SELECT body FROM provider_conversation_messages WHERE body LIKE $1
+ UNION ALL SELECT body FROM chat_messages WHERE body LIKE $1
+ UNION ALL SELECT substring(body FROM $2) FROM chat_messages WHERE body LIKE 'Offer: %' AND body LIKE '%'||$1`, "sessions-"+run+":%", `(sessions-`+run+`:[0-9]+:[a-f0-9-]{36}:[a-f0-9-]{36})$`)
 	if err != nil {
 		return sessionJournalResult{}, err
 	}

@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {transportPosition,isTransportActor,nearbyContentValid} from './transport.mjs';
+assert.equal(isTransportActor({role:'provider',slot:5}),true);
+assert.equal(isTransportActor({role:'buyer',slot:5}),false);
+assert.equal(isTransportActor({role:'provider',slot:6}),false);
+assert.notDeepEqual(transportPosition(5,0),transportPosition(5,1));
+assert.throws(()=>transportPosition(-1));
+const row=(id,distance)=>({id,distance_km:distance,nearby_driver:true,contact_available:true,transport_kind:'courier',fresh_for_seconds:100});
+const good={items:[row('a',0.5),row('b',1)],approximate_distances:true};
+assert.equal(nearbyContentValid(good,5,'courier'),true);
+assert.equal(nearbyContentValid({...good,items:[row('b',1),row('a',0.5)]},5),false);
+assert.equal(nearbyContentValid({...good,items:[{...row('a',1),latitude:9}]},5),false);
+assert.equal(nearbyContentValid(good,5,'passenger'),false);
+assert.equal(nearbyContentValid({...good,items:[row('a',1),row('a',1)]},5),false);
+assert.equal(nearbyContentValid({...good,items:[row('a',8)]},5),false);
+assert.equal(nearbyContentValid({items:[],approximate_distances:true},5),true);
+console.log('Synthetic driver/courier selection, movement and public nearby-content assertions passed.');

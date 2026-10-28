@@ -28,6 +28,8 @@ type sessionFixture struct {
 	Listing      string `json:"listing"`
 	Product      string `json:"product"`
 	Ticket       string `json:"ticket"`
+	Provider     string `json:"provider_id"`
+	Slot         int    `json:"slot"`
 }
 
 func requireSessionLab(ctx context.Context, db *pgxpool.Pool) error {
@@ -81,6 +83,11 @@ func prepareSessions(ctx context.Context, db *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
+	if os.Getenv("LAB_EXPANDED_JOURNEYS") == "1" {
+		if err = prepareExpandedJourneys(ctx, tx); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -93,15 +100,16 @@ func exportSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 	if err := db.QueryRow(ctx, `SELECT run_id::text,admin_id::text,created_at FROM capacity_lab_session_run`).Scan(&runID, &admin, &created); err != nil {
 		return err
 	}
-	rows, err := db.Query(ctx, `SELECT buyer::text,provider_user::text,listing::text,conversation::text,room::text,ticket::text,COALESCE(hot_room::text,''),(SELECT id::text FROM products p WHERE p.provider_id=a.provider ORDER BY p.created_at,p.id LIMIT 1) FROM capacity_lab_actors a ORDER BY slot`)
+	rows, err := db.Query(ctx, `SELECT buyer::text,provider_user::text,listing::text,conversation::text,room::text,ticket::text,COALESCE(hot_room::text,''),a.provider::text,a.slot,(SELECT id::text FROM products p WHERE p.provider_id=a.provider ORDER BY p.created_at,p.id LIMIT 1) FROM capacity_lab_actors a ORDER BY slot`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	sessions := []sessionFixture{}
 	for rows.Next() {
-		var buyer, provider, listing, conversation, room, ticket, hot, product string
-		if err = rows.Scan(&buyer, &provider, &listing, &conversation, &room, &ticket, &hot, &product); err != nil {
+		var buyer, provider, listing, conversation, room, ticket, hot, product, organization string
+		var slot int
+		if err = rows.Scan(&buyer, &provider, &listing, &conversation, &room, &ticket, &hot, &organization, &slot, &product); err != nil {
 			return err
 		}
 		for _, side := range []struct{ id, peer, role string }{{buyer, provider, "buyer"}, {provider, buyer, "provider"}} {
@@ -109,7 +117,7 @@ func exportSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 			if e != nil {
 				return e
 			}
-			sessions = append(sessions, sessionFixture{side.id, side.role, side.id + "@example.invalid", token, side.peer, conversation, room, hot, listing, product, ticket})
+			sessions = append(sessions, sessionFixture{ID: side.id, Role: side.role, Email: side.id + "@example.invalid", Token: token, Peer: side.peer, Conversation: conversation, Room: room, HotRoom: hot, Listing: listing, Product: product, Ticket: ticket, Provider: organization, Slot: slot})
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -126,7 +134,11 @@ func exportSessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(out).Encode(map[string]any{"schema": 1, "marker": "disposable-compose-only", "origin": origin, "run_id": runID, "created_at": created, "expires_at": time.Now().Add(5 * time.Hour), "password": sessionPassword, "expired_token": expired, "admin_token": adminToken, "sessions": sessions, "scope": "synthetic HTTP polling; no external delivery or media transfers"})
+	var expanded bool
+	if err = db.QueryRow(ctx, "SELECT to_regclass('capacity_lab_expanded_identity') IS NOT NULL").Scan(&expanded); err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"schema": 1, "expanded_journeys": expanded, "marker": "disposable-compose-only", "origin": origin, "run_id": runID, "created_at": created, "expires_at": time.Now().Add(5 * time.Hour), "password": sessionPassword, "expired_token": expired, "admin_token": adminToken, "sessions": sessions, "scope": "synthetic HTTP polling; no external delivery or media transfers"})
 }
 
 func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {
@@ -157,20 +169,30 @@ func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 		return fmt.Errorf("confirmed write counter missing")
 	}
 	confirmed := int64(writes.Values["count"])
-	var market, hall, offers, duplicate, receipts int64
+	var market, hall, offers, bids, duplicate, receipts int64
 	prefix := "sessions-" + runID + ":%"
 	err = db.QueryRow(ctx, `SELECT
  (SELECT count(*) FROM provider_conversation_messages WHERE body LIKE $1),
  (SELECT count(*) FROM chat_messages WHERE body LIKE $1),
  (SELECT count(*) FROM town_hall_offers WHERE terms LIKE $1),
+ (SELECT count(*) FROM chat_messages WHERE body LIKE 'Offer: %' AND body LIKE '%'||$1),
  (SELECT count(*) FROM (SELECT conversation_id,body,count(*) FROM provider_conversation_messages WHERE body LIKE $1 GROUP BY conversation_id,body HAVING count(*)>1) d),
- (SELECT count(*) FROM message_receipts r JOIN provider_conversation_messages m ON m.id=r.message_id AND r.channel='business' WHERE m.body LIKE $1)`, prefix).Scan(&market, &hall, &offers, &duplicate, &receipts)
+ (SELECT count(*) FROM message_receipts r JOIN provider_conversation_messages m ON m.id=r.message_id AND r.channel='business' WHERE m.body LIKE $1)`, prefix).Scan(&market, &hall, &offers, &bids, &duplicate, &receipts)
 	if err != nil {
 		return err
 	}
 	journal, exactErr := verifySessionAcknowledgements(ctx, db, runID, confirmed, out)
-	passed := journal.NormalInventoryMatched && confirmed == market+hall+offers && duplicate == 0 && exactErr == nil
-	if err = json.NewEncoder(out).Encode(map[string]any{"run_id": runID, "confirmed_writes": confirmed, "stored_marketplace_messages": market, "stored_town_hall_messages": hall, "stored_offers": offers, "duplicate_messages": duplicate, "delivery_receipt_rows": receipts, "write_reconciliation_passed": passed, "external_delivery_tested": false}); err != nil {
+	var expanded bool
+	if err = db.QueryRow(ctx, "SELECT to_regclass('capacity_lab_expanded_identity') IS NOT NULL").Scan(&expanded); err != nil {
+		return err
+	}
+	if expanded {
+		if err = verifyExpandedPresence(ctx, db, out); err != nil {
+			return err
+		}
+	}
+	passed := journal.NormalInventoryMatched && confirmed == market+hall+bids && duplicate == 0 && exactErr == nil
+	if err = json.NewEncoder(out).Encode(map[string]any{"run_id": runID, "confirmed_writes": confirmed, "stored_marketplace_messages": market, "stored_town_hall_messages": hall, "stored_offers": offers, "stored_bid_messages": bids, "duplicate_messages": duplicate, "delivery_receipt_rows": receipts, "write_reconciliation_passed": passed, "external_delivery_tested": false}); err != nil {
 		return err
 	}
 	if market > 0 {

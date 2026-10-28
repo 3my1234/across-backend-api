@@ -22,6 +22,7 @@ services:
       CAPACITY_LAB: disposable-compose-only
       LAB_SCENARIO: ${LAB_SCENARIO:-busy}
       LAB_ACTOR_PAIRS: ${LAB_ACTOR_PAIRS:-10}
+      LAB_EXPANDED_JOURNEYS: ${LAB_EXPANDED_JOURNEYS:-0}
     depends_on: {gateway: {condition: service_started}}
     networks: [lab]
     cpus: 0.5

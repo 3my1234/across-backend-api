@@ -6,13 +6,13 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts]
+        options: [roles, receipts, expanded]
         default: roles
 permissions:
   contents: read
 jobs:
   selected-consumers:
-    if: github.event.inputs.phase != 'receipts'
+    if: github.event.inputs.phase == 'roles' || github.event.inputs.phase == ''
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -72,4 +72,43 @@ jobs:
         with:
           name: receipt-qualification-${{ github.run_id }}
           path: receipt-evidence/
+          retention-days: 14
+
+  expanded-regressions:
+    if: github.event.inputs.phase == 'expanded'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_PASSWORD: isolated-expanded-ci, POSTGRES_DB: expanded_tests}
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CAPACITY_LAB_TEST_DB: postgres://postgres:isolated-expanded-ci@127.0.0.1:5432/expanded_tests?sslmode=disable
+      CAPACITY_LAB_TEST_EXPANDED: 'true'
+      LAB_SCENARIO: busy
+      LAB_ACTOR_PAIRS: '10'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Validate synthetic transport assertions and unchanged policies
+        run: |
+          node --check deploy/session-lab/sessions.js
+          node deploy/session-lab/test-transport.mjs
+          node deploy/session-lab/test-policy.mjs
+      - name: Verify real migrated fixture eligibility and reconciliation regressions
+        run: |
+          set -o pipefail
+          mkdir -p expanded-evidence
+          git rev-parse HEAD > expanded-evidence/source.txt
+          go test -race -p 1 -count=1 -v ./cmd/capacity-lab | tee expanded-evidence/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: expanded-regressions-${{ github.run_id }}
+          path: expanded-evidence/
           retention-days: 14
