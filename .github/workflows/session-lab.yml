@@ -6,6 +6,14 @@ on:
         type: choice
         options: [compare, faults, receipts, expanded]
         default: compare
+      expanded_profile:
+        type: choice
+        options: [stage, sustained]
+        default: stage
+      pilot_run:
+        description: Successful expanded 100-session stage required before expanded sustained
+        type: string
+        required: false
       fixture_run:
         description: Successful expanded fixture regression run required for expanded phase
         type: string
@@ -25,9 +33,10 @@ jobs:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '100'
       LAB_DB_CPUS: '2'
-      LAB_SESSION_PROFILE: ${{ (github.event.inputs.phase == 'receipts' || github.event.inputs.phase == 'faults') && 'sustained' || 'stage' }}
+      LAB_SESSION_PROFILE: ${{ github.event.inputs.phase == 'expanded' && github.event.inputs.expanded_profile || ((github.event.inputs.phase == 'receipts' || github.event.inputs.phase == 'faults') && 'sustained' || 'stage') }}
       LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase != 'compare' && '1' || '0' }}
       LAB_EXPANDED_JOURNEYS: ${{ github.event.inputs.phase == 'expanded' && '1' || '0' }}
+      PILOT_RUN: ${{ github.event.inputs.pilot_run }}
       FIXTURE_RUN: ${{ github.event.inputs.fixture_run }}
       LAB_INVESTIGATION_PHASE: ${{ github.event.inputs.phase || 'compare' }}
       COMPARISON_RUN: ${{ github.event.inputs.comparison_run }}
@@ -105,6 +114,25 @@ jobs:
           fixture=$(python3 -c 'import json;print(json.load(open("expanded-fixture-proof.json"))["headSha"])')
           git diff --exit-code "$prior" HEAD -- internal/ migrations/
           git diff --exit-code "$fixture" HEAD -- cmd/ deploy/session-lab/ .github/workflows/worker-role-qualification.yml
+      - name: Require expanded pilot before sustained expanded activity
+        if: github.event.inputs.phase == 'expanded' && github.event.inputs.expanded_profile == 'sustained'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$PILOT_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$PILOT_RUN" --json conclusion,headBranch,headSha > expanded-pilot-proof.json
+          gh run download "$PILOT_RUN" --name "external-ledger-workers-$PILOT_RUN" --dir approved-pilot
+          python3 - <<'PYPILOT'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('expanded-pilot-proof.json').read_text())
+          s=json.loads(Path('approved-pilot/session-evidence/summary.json').read_text())
+          assert p['conclusion']=='success' and p['headBranch']=='experiment/expanded-session-journeys'
+          assert s['expanded_journeys'] is True and s['configuration']['target']==100 and s['configuration']['profile']=='stage'
+          PYPILOT
+          node deploy/session-lab/advance.mjs approved-pilot/session-evidence/summary.json approved-pilot/session-evidence/reconciliation.jsonl
+          prior=$(python3 -c 'import json;print(json.load(open("expanded-pilot-proof.json"))["headSha"])')
+          git diff --exit-code "$prior" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
       - name: Prepare fixed isolated lab and synthetic sessions
         run: |
           mkdir -p session-exchange session-evidence
@@ -142,7 +170,12 @@ jobs:
       - name: Measure the 100 independent sessions
         run: |
           if test "$LAB_INVESTIGATION_PHASE" = expanded; then
-            bash deploy/notification-lab/expanded-pilot.sh
+            if test "$LAB_SESSION_PROFILE" = sustained; then
+              bash deploy/notification-lab/investigate.sh
+              bash deploy/notification-lab/receipt-tail.sh
+            else
+              bash deploy/notification-lab/expanded-pilot.sh
+            fi
           elif test "$LAB_INVESTIGATION_PHASE" = receipts; then
             bash deploy/notification-lab/investigate.sh
             bash deploy/notification-lab/receipt-tail.sh
