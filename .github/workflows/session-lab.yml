@@ -203,7 +203,7 @@ jobs:
           p=json.loads(Path('ramp-predecessor.json').read_text())
           s=json.loads(Path('ramp-predecessor/session-evidence/summary.json').read_text())
           target=int(os.environ['LAB_SESSION_TARGET']);expected=100 if target==500 else 500
-          assert p['conclusion']=='success' and p['headBranch'] in ('perf/inbox-page-work','experiment/expanded-capacity-ramp')
+          assert p['conclusion']=='success' and p['headBranch'] in ('perf/inbox-page-work','experiment/expanded-capacity-ramp','perf/thread-write-selection')
           assert s['expanded_journeys'] is True and s['configuration']['target']==expected
           assert s['configuration']['profile']=='sustained' and s['configuration']['seconds']==1800
           assert Path('ramp-predecessor/session-evidence/receipts-drained.txt').read_text().strip()=='true'

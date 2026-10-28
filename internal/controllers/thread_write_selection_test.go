@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"reflect"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestThreadWriteSelectionBoundedMatchesLegacy(t *testing.T) {
 	}
 	compare() // Empty histories and unrelated blocked thread.
 	_, err = db.Exec(ctx, `INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at) SELECT gen_random_uuid(),c.id,'buyer','2026-01-01'::timestamptz+i*interval '1 second' FROM provider_conversations c CROSS JOIN generate_series(1,3000)i WHERE c.id IN($1,$2);
- INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at) VALUES('00000000-0000-4000-8000-000000000001',$1,'buyer','2026-02-01'),('ffffffff-ffff-4fff-8fff-ffffffffffff',$2,'provider','2026-02-01'); ANALYZE;`, root, alias)
+ INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at) VALUES('00000000-0000-4000-8000-000000000001',$1,'buyer','2026-02-01'),('ffffffff-ffff-4fff-8fff-ffffffffffff',$2,'provider','2026-02-01'); ANALYZE;`, pgx.QueryExecModeSimpleProtocol, root, alias)
 	if err != nil {
 		t.Fatal(err)
 	}
