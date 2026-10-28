@@ -161,11 +161,12 @@ jobs:
           gh run view "$PILOT_RUN" --json conclusion,headBranch,headSha > expanded-pilot-proof.json
           gh run download "$PILOT_RUN" --name "external-ledger-workers-$PILOT_RUN" --dir approved-pilot
           python3 - <<'PYPILOT'
-          import json
+          import json,os
           from pathlib import Path
           p=json.loads(Path('expanded-pilot-proof.json').read_text())
           s=json.loads(Path('approved-pilot/session-evidence/summary.json').read_text())
-          assert p['conclusion']=='success' and p['headBranch']=='experiment/expanded-session-journeys'
+          expected='perf/inbox-page-work' if os.environ.get('INBOX_RUN') else 'experiment/expanded-session-journeys'
+          assert p['conclusion']=='success' and p['headBranch']==expected
           assert s['expanded_journeys'] is True and s['configuration']['target']==100 and s['configuration']['profile']=='stage'
           PYPILOT
           node deploy/session-lab/advance.mjs approved-pilot/session-evidence/summary.json approved-pilot/session-evidence/reconciliation.jsonl
