@@ -1,0 +1,226 @@
+# PREPARATION ONLY: reserved addresses and non-resolving image/host placeholders.
+# Not a qualified deployment. No production credentials or endpoints belong here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlxpres-staging
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: runtime, namespace: atlxpres-staging}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: runtime-settings, namespace: atlxpres-staging}
+data:
+  APP_ENV: production
+  RUN_MIGRATIONS: 'false'
+  RUN_INLINE_WORKERS: 'false'
+  DB_MAX_CONNS: '4'
+  DB_MIN_CONNS: '1'
+  DATABASE_READ_URL: ''
+  DB_READ_MAX_CONNS: '4'
+  REDIS_OPTIONAL: 'false'
+  HTTP_MAX_IN_FLIGHT: '64'
+  AWS_EC2_METADATA_DISABLED: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: atlxpres-staging}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector: {matchLabels: {app: api}}
+  template:
+    metadata: {labels: {app: api}}
+    spec:
+      serviceAccountName: runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: {matchLabels: {app: api}}
+      containers:
+        - name: api
+          image: registry.example.invalid/atlxpres/api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          command: [/app/across-api]
+          ports: [{name: http, containerPort: 8080}]
+          envFrom:
+            - secretRef: {name: atlxpres-staging-runtime}
+            - configMapRef: {name: runtime-settings}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: '1', memory: 512Mi, ephemeral-storage: 1Gi}
+          startupProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /api/v1/ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts: [{name: temporary, mountPath: /tmp}]
+      volumes: [{name: temporary, emptyDir: {sizeLimit: 512Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: api, namespace: atlxpres-staging}
+spec:
+  type: ClusterIP
+  selector: {app: api}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: api, namespace: atlxpres-staging}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: api}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: api, namespace: atlxpres-staging}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: api}
+  minReplicas: 2
+  maxReplicas: 3
+  behavior:
+    scaleUp:
+      policies: [{type: Pods, value: 1, periodSeconds: 60}]
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{type: Pods, value: 1, periodSeconds: 60}]
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: notification-worker, namespace: atlxpres-staging}
+spec:
+  # Actual worker images hard-code the public Expo endpoint. Leave stopped until
+  # isolated mock routing/egress and worker-role acceptance are qualified.
+  replicas: 0
+  revisionHistoryLimit: 3
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: notification-worker}}
+  template:
+    metadata: {labels: {app: notification-worker}}
+    spec:
+      serviceAccountName: runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: registry.example.invalid/atlxpres/worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          command: [/app/across-worker]
+          envFrom:
+            - secretRef: {name: atlxpres-staging-runtime}
+            - configMapRef: {name: runtime-settings}
+          env:
+            - {name: WORKER_ROLES, value: 'email,push,push_receipts'}
+            - {name: WORKER_HEALTH_ADDR, value: ':8080'}
+          ports: [{name: health, containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 250m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /api/v1/health, port: health}
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet: {path: /api/v1/health, port: health}
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /api/v1/ready, port: health}
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: atlxpres-staging}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: runtime-private-egress, namespace: atlxpres-staging}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{ipBlock: {cidr: 192.0.2.10/32}}]
+      ports: [{protocol: TCP, port: 5432}]
+    - to: [{ipBlock: {cidr: 192.0.2.11/32}}]
+      ports: [{protocol: TCP, port: 6380}]
+    - to: [{podSelector: {matchLabels: {app: notification-mock}}}]
+      ports: [{protocol: TCP, port: 2525}, {protocol: TCP, port: 8081}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: ingress-to-api, namespace: atlxpres-staging}
+spec:
+  podSelector: {matchLabels: {app: api}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: traefik}}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: api, namespace: atlxpres-staging}
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [api.atlxpres.invalid]
+      secretName: atlxpres-staging-tls
+  rules:
+    - host: api.atlxpres.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: api, port: {name: http}}}

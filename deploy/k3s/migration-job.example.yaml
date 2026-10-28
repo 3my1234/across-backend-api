@@ -1,0 +1,32 @@
+# Separate reviewed release action; never included in automatic pod startup.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: reviewed-migration-replace, namespace: atlxpres-staging}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: release-migrator}}
+    spec:
+      serviceAccountName: runtime
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migration
+          image: registry.example.invalid/atlxpres/api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          command: [/app/across-migrate]
+          envFrom: [{secretRef: {name: atlxpres-staging-migration}}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
