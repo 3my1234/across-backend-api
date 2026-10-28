@@ -6,6 +6,10 @@ on:
         type: choice
         options: [compare, faults, receipts, expanded]
         default: compare
+      inbox_run:
+        description: Successful inbox differential qualification when testing the inbox candidate
+        type: string
+        required: false
       expanded_profile:
         type: choice
         options: [stage, sustained]
@@ -36,6 +40,7 @@ jobs:
       LAB_SESSION_PROFILE: ${{ github.event.inputs.phase == 'expanded' && github.event.inputs.expanded_profile || ((github.event.inputs.phase == 'receipts' || github.event.inputs.phase == 'faults') && 'sustained' || 'stage') }}
       LAB_NOTIFICATION_WORKERS: ${{ github.event.inputs.phase != 'compare' && '1' || '0' }}
       LAB_EXPANDED_JOURNEYS: ${{ github.event.inputs.phase == 'expanded' && '1' || '0' }}
+      INBOX_RUN: ${{ github.event.inputs.inbox_run }}
       PILOT_RUN: ${{ github.event.inputs.pilot_run }}
       FIXTURE_RUN: ${{ github.event.inputs.fixture_run }}
       LAB_INVESTIGATION_PHASE: ${{ github.event.inputs.phase || 'compare' }}
@@ -112,8 +117,41 @@ jobs:
           node deploy/session-lab/advance.mjs predecessor/session-evidence/summary.json predecessor/session-evidence/reconciliation.jsonl
           prior=$(python3 -c 'import json;print(json.load(open("expanded-predecessor.json"))["headSha"])')
           fixture=$(python3 -c 'import json;print(json.load(open("expanded-fixture-proof.json"))["headSha"])')
-          git diff --exit-code "$prior" HEAD -- internal/ migrations/
-          git diff --exit-code "$fixture" HEAD -- cmd/ deploy/session-lab/ .github/workflows/worker-role-qualification.yml
+          if test -n "$INBOX_RUN"; then
+            git diff --name-only "$prior" HEAD -- internal/ migrations/ > inbox-runtime-files.txt
+            python3 - <<'PYFILES'
+          from pathlib import Path
+          allowed={'internal/controllers/community_controller.go','internal/controllers/inbox_baseline_test.go','internal/controllers/inbox_page_work_test.go'}
+          assert set(Path('inbox-runtime-files.txt').read_text().splitlines()) <= allowed
+          PYFILES
+          else
+            git diff --exit-code "$prior" HEAD -- internal/ migrations/
+          fi
+          git diff --exit-code "$fixture" HEAD -- cmd/ deploy/session-lab/
+          git show "$fixture:.github/workflows/worker-role-qualification.yml" > fixture-workflow-before.yml
+          python3 - <<'PYJOB'
+          from pathlib import Path
+          def job(text): return text.split('  expanded-regressions:',1)[1].split('\n  inbox-regressions:',1)[0].strip()
+          assert job(Path('fixture-workflow-before.yml').read_text())==job(Path('.github/workflows/worker-role-qualification.yml').read_text())
+          PYJOB
+      - name: Require actual inbox differential and query-plan qualification
+        if: github.event.inputs.phase == 'expanded' && github.event.inputs.inbox_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$INBOX_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$INBOX_RUN" --json conclusion,headBranch,headSha > inbox-proof.json
+          gh run download "$INBOX_RUN" --name "inbox-regressions-$INBOX_RUN" --dir approved-inbox
+          python3 - <<'PYINBOX'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('inbox-proof.json').read_text())
+          assert p['conclusion']=='success' and p['headBranch']=='perf/inbox-page-work'
+          log=Path('approved-inbox/tests.log').read_text()
+          assert '--- PASS: TestInboxBoundedPageMatchesLegacyAndPlans' in log and 'INBOX_SQL_RESULT' in log
+          PYINBOX
+          proof=$(python3 -c 'import json;print(json.load(open("inbox-proof.json"))["headSha"])')
+          git diff --exit-code "$proof" HEAD -- internal/ migrations/ cmd/ deploy/session-lab/
       - name: Require expanded pilot before sustained expanded activity
         if: github.event.inputs.phase == 'expanded' && github.event.inputs.expanded_profile == 'sustained'
         env:
