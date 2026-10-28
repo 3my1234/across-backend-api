@@ -160,15 +160,23 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		cases = append(cases, scenario{"nearby-" + kind, near, []any{9.081, 7.451, 20.0 / 111.32, 20.0 / (111.32 * math.Cos(9.081*math.Pi/180)), 20.0, kind}})
 	}
 	cases = append(cases, scenario{"history-newest", history, []any{conversation, nil, nil, 31}}, scenario{"history-old", history, []any{conversation, cursor, cursorID, 31}})
-	// Plan evidence shows the provider-slot scan is chosen before the exact
-	// presence-listing identity. Fence only that lookup; retain every live
-	// eligibility, document, payment, distance and ordering predicate.
-	fenced := strings.Replace(near,
-		"JOIN provider_listings l ON l.id=d.listing_id AND l.provider_id=d.provider_id",
-		"JOIN LATERAL (SELECT selected.* FROM provider_listings selected WHERE selected.id=d.listing_id AND selected.provider_id=d.provider_id OFFSET 0) l ON true", 1)
-	if fenced == near {
-		return fmt.Errorf("actual nearby lookup changed; refuse stale experiment")
+	// The first identity-fenced lookup comparison showed no gain. Test lazy
+	// eligibility after an ordered, cheap distance/classification pass instead.
+	// There is NO pre-limit: rejected candidates are skipped until 25 eligible
+	// rows are found or every in-radius candidate has been checked.
+	marker := "\n SELECT * FROM candidates WHERE"
+	end := strings.Index(near, marker)
+	if end < 0 {
+		return fmt.Errorf("actual nearby query shape changed")
 	}
+	base := strings.TrimSuffix(strings.TrimPrefix(near[:end], "WITH candidates AS ("), ")")
+	base = strings.Replace(base, ",i.paid_active,", ",l.plan_slot,", 1)
+	base = strings.Replace(base, " JOIN provider_public_identity i ON i.provider_id=d.provider_id", "", 1)
+	base = strings.Replace(base, " AND l.plan_slot<=i.listing_limit AND i.verified AND i.paid_active AND driver_documents_approved(l.provider_id)", "", 1)
+	fenced := `SELECT c.id,c.provider_id,c.title,c.description,c.category,c.media_urls,c.city,c.country_code,c.price,c.currency_code,c.pricing_unit,i.paid_active,c.updated_at,c.expires_at,c.transport_kind,c.distance
+ FROM (SELECT * FROM (` + base + `) spatial WHERE distance<=$5 AND ($6='all' OR transport_kind=$6) ORDER BY distance,id OFFSET 0) c
+ JOIN LATERAL (SELECT i.paid_active FROM provider_public_identity i WHERE i.provider_id=c.provider_id::uuid AND c.plan_slot<=i.listing_limit AND i.verified AND i.paid_active AND driver_documents_approved(i.provider_id) OFFSET 0) i ON true
+ ORDER BY c.distance,c.id LIMIT 25`
 	matched := []scenario{}
 	for _, original := range cases {
 		if !strings.HasPrefix(original.name, "nearby-") {
@@ -205,7 +213,7 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		for index, query := range []string{near, fenced, fenced, near} {
 			variant := "original"
 			if index == 1 || index == 2 {
-				variant = "fenced"
+				variant = "ordered-eligibility"
 			}
 			matched = append(matched, scenario{fmt.Sprintf("%s-arm%d-%s", original.name, index+1, variant), query, original.args})
 		}
