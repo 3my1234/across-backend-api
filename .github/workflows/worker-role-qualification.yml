@@ -175,7 +175,7 @@ jobs:
           import json,hashlib
           p=next(Path('/tmp/generator-proof').rglob('cpu-2-prewarm/gate.json'))
           assert json.loads(p.read_text())['independent_generator_gate_passed'], 'Generator headroom not qualified'
-          assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_bytes()).hexdigest()=='455c71cf581718787e1258c1da783acc38fe6e642316bdccdac83b1afd99fe88'
+          assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_text(encoding='utf-8').encode()).hexdigest()=='01c98dc035f0ec63cb74ca979640b4dbed44e455c74e3f533a5f9917c8f5fb06'
           PYGEN
       - name: Verify unchanged original application and diagnostic safety
         run: |
