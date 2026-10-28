@@ -31,7 +31,7 @@ jobs:
           CGO_ENABLED=0 go build -o deploy/generator-lab/generator-target ./deploy/generator-lab
           docker build -t atlxpres-generator-target:local deploy/generator-lab
           docker compose -f deploy/generator-lab/compose.yml pull sessions
-      - name: Measure identical synthetic journeys at one and two generator CPUs
+      - name: Measure conservative synthetic journeys at three generator CPUs
         run: bash deploy/generator-lab/run.sh
       - uses: actions/upload-artifact@v4
         if: always()

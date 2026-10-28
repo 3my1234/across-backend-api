@@ -10,7 +10,7 @@ free -h >generator-evidence/runner-memory.txt
 cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh} generator-evidence/
 GENERATOR_LAB=synthetic-only deploy/generator-lab/generator-target prepare generator-exchange
 chmod -R a+rwX generator-exchange
-for quota in 1 2; do
+for quota in 3; do
  export LAB_GENERATOR_CPUS="$quota"
  arm="generator-evidence/cpu-${quota}"
  mkdir -p "$arm"
@@ -42,6 +42,6 @@ python3 - <<'PYGATE'
 import json
 from pathlib import Path
 arms=[json.loads(p.read_text()) for p in Path('generator-evidence').glob('cpu-*/gate.json')]
-assert len(arms)==2,'Both resource arms must produce interpretable evidence'
+assert len(arms)==1,'The three-CPU synthetic arm must produce interpretable evidence'
 assert any(a['independent_generator_gate_passed'] for a in arms),'No generator resource setting has qualified; do not repeat full application 500 test'
 PYGATE

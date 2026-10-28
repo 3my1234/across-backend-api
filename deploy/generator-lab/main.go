@@ -46,7 +46,7 @@ func population() []actor {
 			role = "provider"
 		}
 		id := uuid(i + 1)
-		out[i] = actor{ID: id, PeerID: uuid((i ^ 1) + 1), Role: role, Email: fmt.Sprintf("generator-%d@example.invalid", i), Token: "synthetic:" + id, Conversation: uuid(10000 + pair), Room: uuid(20000 + pair), Product: uuid(30000 + pair), Listing: uuid(40000 + pair), Ticket: uuid(50000 + pair), ProviderID: uuid(60000 + pair), Slot: pair + 1}
+		out[i] = actor{ID: id, PeerID: uuid((i ^ 1) + 1), Role: role, Email: fmt.Sprintf("generator-%d@example.invalid", i), Token: "synthetic:" + id + strings.Repeat("x", 466), Conversation: uuid(10000 + pair), Room: uuid(20000 + pair), Product: uuid(30000 + pair), Listing: uuid(40000 + pair), Ticket: uuid(50000 + pair), ProviderID: uuid(60000 + pair), Slot: pair + 1}
 	}
 	return out
 }
@@ -106,7 +106,7 @@ func (s *target) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				last = v
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"requests": s.requests.Load(), "response_bytes": s.responseBytes.Load(), "active_identities": len(s.first), "first_activity_spread_seconds": last.Sub(s.begun).Seconds(), "synthetic_only": true, "baseline_messages_per_page": 40, "historical_body_bytes": len(strings.Repeat("synthetic historical content ", 12))})
+		json.NewEncoder(w).Encode(map[string]any{"requests": s.requests.Load(), "response_bytes": s.responseBytes.Load(), "active_identities": len(s.first), "first_activity_spread_seconds": last.Sub(s.begun).Seconds(), "synthetic_token_bytes": 512, "synthetic_only": true, "baseline_messages_per_page": 40, "historical_body_bytes": len(strings.Repeat("synthetic historical content ", 12))})
 		return
 	}
 	seq := s.requests.Add(1)
