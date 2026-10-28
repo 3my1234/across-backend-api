@@ -224,7 +224,7 @@ jobs:
           proof=json.loads(Path('selection-proof.json').read_text())
           assert proof['conclusion']=='success' and proof['headBranch']=='perf/thread-write-selection'
           log=Path('selection-proof/tests.log').read_text()
-          for test in ('ThreadWriteSelectionBoundedMatchesLegacy','ProductChatGroupedHistoryMigrationAndReceipts','ProductChatMigrationPermissionsAttachmentsAndRetries','CommunityLocationPinsPrivateAndIdempotent'):
+          for test in ('ThreadWriteSelectionBoundedMatchesLegacy','ProductChatGroupedHistoryMigrationAndReceipts','ProductChatMigrationPermissionsAttachmentsAndRetries','CommunityLocationPinsPrivateAndIdempotent','CommunityTownHallAdmissionExpiryAndHandoff'):
               assert '--- PASS: Test'+test in log
           assert 'THREAD_SELECTION_RESULT' in log
           PYSELECT
