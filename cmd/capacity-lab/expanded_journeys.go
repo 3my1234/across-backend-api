@@ -18,6 +18,9 @@ func prepareExpandedJourneys(ctx context.Context, tx pgx.Tx) error {
 	 category=CASE WHEN a.slot%2=0 THEN 'Motorcycle courier' ELSE 'Independent driver' END,
 	 title=CASE WHEN a.slot%2=0 THEN 'Synthetic motorcycle courier' ELSE 'Synthetic passenger driver' END
 	FROM capacity_lab_actors a WHERE l.id=a.listing;
+	-- Content changes correctly return an approved listing to review. Complete
+	-- that synthetic review separately; never disable the production trigger.
+	UPDATE provider_listings SET status='approved' WHERE id IN(SELECT listing FROM capacity_lab_actors);
 	UPDATE town_hall_requests SET message_only=false,unit='job'
 	WHERE room_id IN(SELECT room FROM capacity_lab_actors UNION SELECT hot_room FROM capacity_lab_actors WHERE hot_room IS NOT NULL);`)
 	return err
