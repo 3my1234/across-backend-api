@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"io"
 	"math"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -21,10 +22,14 @@ import (
 // Evaluate the actual developer-owned source, never a copied SQL approximation.
 // Only the two fixed read-query entrypoints below can be selected.
 func diagnosticSQL(name string) (string, error) {
+	return diagnosticSQLFromSource("/source/internal/controllers", name)
+}
+
+func diagnosticSQLFromSource(directory, name string) (string, error) {
 	constants := map[string]ast.Expr{}
 	functions := map[string]*ast.FuncDecl{}
 	for _, file := range []string{"driver_availability.go", "provider_threads.go"} {
-		f, e := parser.ParseFile(token.NewFileSet(), "/source/internal/controllers/"+file, nil, 0)
+		f, e := parser.ParseFile(token.NewFileSet(), filepath.Join(directory, file), nil, 0)
 		if e != nil {
 			return "", e
 		}
@@ -99,7 +104,11 @@ func diagnosticSQL(name string) (string, error) {
 		}
 		if c, ok := node.(*ast.CallExpr); ok && len(c.Args) > 1 {
 			if s, ok := c.Fun.(*ast.SelectorExpr); ok && s.Sel.Name == "Query" && expr == nil {
-				expr = c.Args[1]
+				// Fiber c.Query reads a request parameter; only m.db.Query
+				// supplies the application SQL under investigation.
+				if receiver, ok := s.X.(*ast.SelectorExpr); ok && receiver.Sel.Name == "db" {
+					expr = c.Args[1]
+				}
 			}
 		}
 		return true
