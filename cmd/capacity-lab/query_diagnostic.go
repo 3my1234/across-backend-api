@@ -11,8 +11,10 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,6 +160,48 @@ func queryDiagnostic(ctx context.Context, db *pgxpool.Pool, out io.Writer) error
 		cases = append(cases, scenario{"nearby-" + kind, near, []any{9.081, 7.451, 20.0 / 111.32, 20.0 / (111.32 * math.Cos(9.081*math.Pi/180)), 20.0, kind}})
 	}
 	cases = append(cases, scenario{"history-newest", history, []any{conversation, nil, nil, 31}}, scenario{"history-old", history, []any{conversation, cursor, cursorID, 31}})
+	// Plan evidence shows the provider-slot scan is chosen before the exact
+	// presence-listing identity. Fence only that lookup; retain every live
+	// eligibility, document, payment, distance and ordering predicate.
+	fenced := strings.Replace(near,
+		"JOIN provider_listings l ON l.id=d.listing_id AND l.provider_id=d.provider_id",
+		"JOIN LATERAL (SELECT selected.* FROM provider_listings selected WHERE selected.id=d.listing_id AND selected.provider_id=d.provider_id OFFSET 0) l ON true", 1)
+	if fenced == near {
+		return fmt.Errorf("actual nearby lookup changed; refuse stale experiment")
+	}
+	for _, original := range append([]scenario(nil), cases...) {
+		if !strings.HasPrefix(original.name, "nearby-") {
+			continue
+		}
+		read := func(query string) ([][]any, error) {
+			rows, err := db.Query(ctx, query, original.args...)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			result := [][]any{}
+			for rows.Next() {
+				v, err := rows.Values()
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, v)
+			}
+			return result, rows.Err()
+		}
+		before, err := read(near)
+		if err != nil {
+			return err
+		}
+		after, err := read(fenced)
+		if err != nil {
+			return err
+		}
+		if len(before) == 0 || !reflect.DeepEqual(before, after) {
+			return fmt.Errorf("nearby differential failed for %s", original.name)
+		}
+		cases = append(cases, scenario{original.name + "-fenced-candidate", fenced, original.args})
+	}
 	encoder := json.NewEncoder(out)
 	for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 		cfg := db.Config().Copy()
