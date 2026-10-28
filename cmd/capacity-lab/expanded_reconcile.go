@@ -66,7 +66,7 @@ func parsePresenceJournal(raw string) (map[string]presenceObservation, int, erro
 	return latest, len(ack), nil
 }
 
-func verifyExpandedPresence(ctx context.Context, db *pgxpool.Pool, out io.Writer) error {
+func verifyExpandedPresence(ctx context.Context, db *pgxpool.Pool, expected int64, out io.Writer) error {
 	raw, err := os.ReadFile("/exchange/k6.log")
 	if err != nil {
 		return err
@@ -74,6 +74,9 @@ func verifyExpandedPresence(ctx context.Context, db *pgxpool.Pool, out io.Writer
 	latest, ack, err := parsePresenceJournal(string(raw))
 	if err != nil {
 		return err
+	}
+	if int64(ack) != expected {
+		return fmt.Errorf("presence acknowledgement counter does not match retained journal")
 	}
 	for provider, want := range latest {
 		var exists bool

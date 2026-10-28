@@ -187,7 +187,7 @@ func verifySessions(ctx context.Context, db *pgxpool.Pool, out io.Writer) error 
 		return err
 	}
 	if expanded {
-		if err = verifyExpandedPresence(ctx, db, out); err != nil {
+		if err = verifyExpandedPresence(ctx, db, int64(summary.Metrics["driver_updates"].Values["count"]+summary.Metrics["driver_offline_transitions"].Values["count"]), out); err != nil {
 			return err
 		}
 	}
