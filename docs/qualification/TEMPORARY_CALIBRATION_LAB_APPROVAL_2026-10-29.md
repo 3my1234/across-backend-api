@@ -1,55 +1,61 @@
-# Temporary isolated calibration lab: approval proposal
+# Temporary calibration lab ? approval proposal
 
-Prepared29October2026,Africa/Lagos. Status:PENDING EXPLICIT PAID-RESOURCE APPROVAL. No server, billing configuration, runner registration, firewall or production setting has been changed.
+Prepared 29 October 2026, Africa/Lagos. **Pending explicit approval. Nothing has been provisioned.**
 
-## Existing-resource inventory
+## Available resources
 
-GitHub repository3my1234/across-backend-api has0registered self-hosted runners (read-only API). Owner3my1234 is a personal User account. GitHub larger runners require an eligibleTeam/Enterprise organization, so they are not an immediately available option on this owner account. Existing standardActions4-vCPUrunner cannot supply the full independent workload budget. LocalWindows computer has4logicalCPUs/7.9GiBRAM and no usableDocker environment. Existingtwo VPS areproduction and explicitlyexcluded. No suitableconnectedfree/alreadyauthorizedenvironment identified; an unconnected existingisolatedhost can still be considered if supplied.
+Read-only checks found zero registered self-hosted runners for the backend repository. Its owner is a personal GitHub account; larger runners require an eligible organization. The laptop has four logical CPUs and 7.9 GiB RAM. The current standard Actions runner has four CPUs. Both existing VPS instances remain excluded because they run production. No suitable connected, free or already-authorized environment was found.
 
-## Minimum allocation and chosen temporary SKU
+## Exact proposed resource
 
-Conservative minimum:12independently assigned logicalCPUslots and20GiBavailableRAM beforestartup, typically>=24GiBphysicalRAM. Concurrent existing CPUquotas sum10.5cores, but independent placement andhost/instrumentation reserve need additional slots. Memoryquotas for measuredservices totalabout14.1GiB, beforecontroller/build/cache/OSheadroom. These are labrequirements, not a productionserver purchase recommendation.
+One temporary **Hetzner CCX43**, EU/Nuremberg subject to availability: **16 dedicated x86 vCPUs, 64 GB RAM, 360 GB NVMe, Ubuntu 24.04 LTS**. One Primary IPv4, restricted operator SSH, no public application or database ports. No backups, snapshots, additional volumes, load balancer or K3s installation.
 
-ProposedsingleVM:HetznerCCX43,16dedicatedx86vCPUs,64GBRAM,360GBNVMe,Ubuntu24.04LTS,EU-Nuremberg(subjectcheckoutavailability). No backups/snapshots/additionalvolumes/loadbalancer/K3s. OnePrimaryIPv4 for restrictedoperatorSSH; no publicapplication/databaseports. ProviderdefinesoneCCXvCPUasonephysicalCPUthread, not a wholephysicalcore. This proposal relies on dedicated-vCPU terms plus verifiedCPUaffinity/quota evidence, not containerquotas alone.
+The provider defines a dedicated vCPU as one physical CPU thread, not necessarily a whole physical core. Provider terms, live resource inventory and CPU affinity must all be verified. Container quotas alone are insufficient.
 
-|Role|CPUset|Existing/selectedquota|RAMlimit|
+| Workload | CPU set | CPU quota | RAM ceiling |
 |---|---|---:|---:|
-|PostgreSQL|0-3|4CPU|8GiB|
-|Generator|4-5|2CPU|4GiB|
-|API1|6|0.75CPU|512MiB|
-|API2|7|0.75CPU|512MiB|
-|Gateway|8|1CPU|128MiB|
-|Notificationworker|9|1CPU|512MiB|
-|Redis+mocktransport|10(sharedauxiliaryslot)|0.25CPUeach|128MiBeach|
-|Observer/exporter;verifier/seedatdifferentphases|11|0.5CPUobserver|256MiBobserver|
-|Host/controller/build/artifacttasks|12-15|reservedhostbudget|remainingRAM|
+| PostgreSQL | 0?3 | 4 | 8 GiB |
+| Load generator | 4?5 | 2 | 4 GiB |
+| API 1 | 6 | 0.75 | 512 MiB |
+| API 2 | 7 | 0.75 | 512 MiB |
+| Gateway | 8 | 1 | 128 MiB |
+| Notification worker | 9 | 1 | 512 MiB |
+| Redis and mock transport | 10, explicitly shared | 0.25 each | 128 MiB each |
+| Observer/exporter; seed/verifier in separate phases | 11 | 0.5 for observer | 256 MiB for observer |
+| Host, controller, build and artifact work | 12?15 | Reserved | Remaining RAM |
 
-Criticalroles have disjointCPUsets. Onlyexplicitauxiliaryservices shareoneCPU; aggregatequota0.5CPU. Proposedcgroup-v2workloadparentatlxpres-lab.slice allows0-11; host/controllerprocesses confined12-15 usingseparateparent/affinity configuration on NEWVM only. Do not restrictDocker's parent slice so it cannot delegateworkloadCPUsets. Verify effectiveroot/parent/childCPUsets andquota ancestry. Kernelinterrupts/hypervisor effects still exist and must be measured; no absolutezero-contention or physical-core exclusivity claim.
+Critical workloads have non-overlapping CPU sets. Only the two auxiliary services intentionally share one slot; their combined quota is 0.5 CPU. The minimum placement budget is 12 logical CPU slots, plus host headroom. Measured services have about 14.1 GiB of RAM ceilings; require at least 20 GiB available before startup. A combined host with at least 24 GiB RAM is the minimum planning envelope; the selected provider SKU has more.
 
-Overlay:deploy/notification-lab/dedicated-compose.yml. Offline validator:dedicated-allocation.py. Testsacceptedthecorrectmapandrejectedoverlap,4CPUhostandinsufficientRAM; this is NOT liveCPUdedicationverification. Beforeusinganyoverlay,reviewrenderedmergedCompose forunchangedAPI/pool/admission/mocksettings, liveDockerHostConfig.CpusetCpus/NanoCpus/Memory/CgroupParent, cpuset.cpus.effective/cpu.max ancestry,cpustat/throttle/steal,hostmemory,diskandprocessplacement. RejectifproviderCPUsharingclassoractualallocationdiffers. Olderprocess-affinity-onlyrepresentativepreflight mustnotmisclassifycontroller'sintentional4CPUreserve as the whole16CPUhost; validatehost/workloadslice separately.
+The prepared `dedicated-compose.yml` is unused. Its offline validator accepted the allocation and rejected overlapping CPU sets, insufficient CPUs and insufficient RAM. **These tests do not verify live CPU dedication or qualify capacity.**
 
-## Estimated cost and time
+On the new VM only, configure a cgroup-v2 workload slice for CPUs 0?11 and place host/controller work on 12?15. Verify effective root, parent and container CPU sets; quota ancestry; Docker CPU/RAM settings; host memory/disk; CPU steal and throttling. Do not constrain Docker's parent so it cannot delegate workload CPUs. Kernel and hypervisor interference still require measurement. The earlier process-affinity-only preflight must distinguish the controller's intentional four-CPU reserve from the complete host allocation.
 
-OfficialHetznerEUprice-adjustmenttable listsCCX43 atUS$0.5216/hour (EUR0.4423/hour), excludingIPv4/tax. Sixroundedhours=US$3.1296compute; allowaboutUS$3.15beforetax/IProunding. PrimaryIPv4 separatelybilled atpublishedEUR0.50/month; sixhourusageisvery small. FINALcheckoutquote/stock/accounteligibilitymustbeverifiedbeforecreation. Stopifrequireddeposit,setupfee,minimumcharge,regionchangeor6hquoteexceedsapprovedscope; do not assumeaccountactivationorcapacityavailability.
+## Cost and duration
 
-Requestedauthorization:one temporaryVM+onePrimaryIPv4, atmost6hours runtime, totalusagebudgetUS$10includingapplicabletax/IPv4. Expectedwork2-3hours,6hoursallowsboundedsetup/evidence/recoverybuffer. Noautomaticextensions,secondVM,largerSKUorproductionchange. This is a usagebudget, not a guaranteedproviderhardcap:alertsarenotspendinglimits, andshuttingdownaVMdoesnotstopbilling. Confirmexternalexpiry/deletionmonitor beforecreation; deleteVM AND detachedPrimaryIPv4 afterevidenceor6hdeadline, verifybothabsent. Monitorcleanupfailures/retryandnotifyuser; neverleaveastoppedVMincurringcost. Anyaccountprepayment/paymentauthorizationmustbereviewedseparatelyifoutsideapprovedamount.
+The official EU rate table lists **US$0.5216/hour** for CCX43, excluding tax and IPv4. Six rounded hours cost **US$3.1296 in compute**, approximately **US$3.15 before tax and the small IPv4 charge**. Primary IPv4 is separately billed; the published EUR monthly rate is EUR0.50. Verify the current account checkout quote before creation.
 
-## Concrete setup and execution plan (afterapproval only)
+Requested approval: **one VM plus one IPv4, up to six hours, total usage budget US$10 including applicable tax/IP charges**. Expected work is two to three hours; six hours allows setup, collection and recovery. No automatic extension, second server or larger SKU. Stop for additional approval if a deposit, setup fee, minimum charge, account requirement or checkout quote falls outside this scope. Account eligibility and stock are not yet established.
 
-1.Verifycurrentcheckoutquote,dedicatedCPUclass,region,accounteligibilityandapprovalbudget; recordresourceIDs/creationtime/6hUTCexpiry. Setexternalprovider-APIexpirywatchdog andbillingalert; providercredentialsstayoffthetestrunner. Createonlyapprovedtemporaryresource, withSSH restrictedtooperator andnoinboundapplication/DBports.
-2.InstallDockerCompose andrequiredpinnedbuildtools onNEWVM only. Usea single-usecontrolledCIjob,pinnedreviewedbackendsource, noautomaticPRexecution,noproductionsecrets,andmock/syntheticdataonly. Validatehost16CPU/RAM/storageandconfigure/verifydisjointcgroups/CPUsets. NoactiveproductionSSH/DB/Redis/DNSconnections fromlab.
-3.Requalifytheoriginal500sessiongenerator for30minutes onallocated2CPU/4GiB, unchangedclienthashes andoriginalheadroom/accountinggates. Keepmocktargetonseparatereservedslot; recordtargetbudgetandactualoverlap. It mustnotborrowDB's4CPUset. Currentgeneratorcodeprovenby40866958782; newenvironmentneedsitsownresourceevidence.
-4.Runbounded180secondactual-stackcalibration withDB4CPU/8GiB,gateway1CPU,andunchangedAPI0.75CPU/pool8/admission64,actualworkers,mockedtransports,originalexpandedjourneys/thinktimes/latency/error/authorization/idempotency/reconciliation/recoverygates. Retainexactsource/limits/clienthashes,cgroups/hostCPU/memory/disk,peroperationp50/p95/p99,queuesandSQL. Generatorandsharedhostheadroommustalsoqualify.
-5.Onlyafterretainedcalibrationpassesandresource/correctnessreview,executeunchanged30minute500sessionstage,fullwriteinventoryandreal15minreceipt-tail/drain/recovery. Stoponfailure; no1000stage. Preservefailedresultsandunconfirmedcommits. Rejectedsendercandidateisnotapplied; application/migrationsremain29ee9fa candidate.
-6.Download/hashsource+rawproof,updatemasterhandover,unregistersingle-useCIrunner,deleteonlyrecordedtemporaryVM/IP,verifydeletionandreportcost. Nochanges tocurrentContabo,Coolify,unrelatedwebsite,PostgreSQL/Redis,K3s,mobileorproduction.
+A budget alert is not a provider-enforced spending cap. Turning the VM off does not stop billing. Confirm an external expiry/deletion monitor before creation. Delete the VM and its detached IPv4 after collection or at the six-hour deadline, verify both are absent, and report any cleanup failure immediately while retrying. Provider API credentials must remain off the test runner. No cost guarantee is claimed if external deletion fails.
 
-## Official sources (checked29October2026)
+## Setup and execution after approval
 
--https://www.hetzner.com/cloud/general-purpose/ ?CCX43specifications.
--https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/ ?publishedEUhourlyrates.
--https://docs.hetzner.com/cloud/servers/faq/ ?CCXdedicatedCPUdefinition.
--https://docs.hetzner.com/cloud/servers/overview/ ?PrimaryIPpricing.
--https://docs.hetzner.com/cloud/billing/faq/ ?hourlyrounding,shutdown/deletionbilling,alertsarenotlimits.
--https://docs.github.com/en/actions/how-tos/manage-runners/larger-runners/control-access ?larger-runnereligibility.
+1. Verify checkout, dedicated CPU class, region, account eligibility and budget. Record the exact new resource IDs, creation time and six-hour expiry. Establish external deletion monitoring and billing alerts. Restrict SSH to the operator.
+2. Install Docker Compose and the required pinned build tools on the new VM only. Use a single-use controlled CI job pinned to reviewed source, with no automatic PR execution, production secrets or production network access. Verify the allocation above before load. Synthetic fixtures and mock email/push/payment transports only.
+3. Requalify the original 500-session generator for 30 minutes at two CPUs/4 GiB on this host. Preserve client hashes and all original duration, accounting, memory, CPU and correctness gates. Place the synthetic target outside the generator and database CPU sets and record its budget.
+4. Run the bounded 180-second application calibration with four database CPUs/8 GiB and one gateway CPU. Keep API CPU quotas, pool sizes, admission limits, workloads, latency/error thresholds, authorization, idempotency, write reconciliation and recovery checks unchanged. Retain per-operation latency, SQL, queues, resource and generator headroom evidence.
+5. Only after independent review of passing calibration evidence, run the unchanged 30-minute 500-session application stage, full write reconciliation and real receipt-tail/drain checks. Stop on failure. No 1,000-session stage. The rejected sender candidate is not applied; application and migration source remains the previously tested batching candidate.
+6. Download and hash evidence, update the master handover, unregister the single-use runner, delete only the recorded temporary resources, verify deletion and report cost.
 
-Nextactionabledecision:approveuptoUS$10foronesixhourtemporarylabwithcreationANDverifieddeletion, orprovidesuitablealreadyownedisolatedresources forread-onlyreview. User'sexplicitinstructionprohibitspaidprovisioningwithoutthatapproval, so no paidactionhasbeentaken.
+This is a CPU/RAM calibration environment, not proof of identical production storage, networking or hardware performance. It does not change either Contabo host, Coolify, the unrelated website, PostgreSQL/Redis, DNS, K3s or mobile.
+
+## Official sources checked 29 October 2026
+
+- [CCX43 specifications](https://www.hetzner.com/cloud/general-purpose/)
+- [Published hourly rates](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/)
+- [Dedicated vCPU definition](https://docs.hetzner.com/cloud/servers/faq/)
+- [Primary IP pricing](https://docs.hetzner.com/cloud/servers/overview/)
+- [Billing, deletion and alert limitations](https://docs.hetzner.com/cloud/billing/faq/)
+- [GitHub larger-runner eligibility](https://docs.github.com/en/actions/how-tos/manage-runners/larger-runners/control-access)
+
+**Next decision:** approve this temporary lab and its creation/deletion budget, or supply an already-owned isolated host for read-only suitability review. The user's explicit restriction on paid provisioning requires that approval before creation.
