@@ -23,7 +23,7 @@ Workspace: `C:/Users/EMMA/Desktop/gouwu`. This root is **not a Git repository**.
 | Worktree | Branch | Exact references |
 |---|---|---|
 | `.worktrees/launch-qualification` | `experiment/launch-qualification` | Batch code `d5a854c2d00914b5db944f3f8bae8659599df134`; corrected no-skip CI source29ee9fa; calibration harness844af84; handover4790940; exact-client gate `d2b6bad367640f7a4565dbf4c79c2ced0a392c30`. Later documentation HEAD may differ. NOT merged/deployed. |
-| `.worktrees/generator-headroom` | `experiment/generator-headroom` | Measured source `ac854e5b597a564c96ed2bbddda7d14315261d74`. Its synthetic target intentionally excludes application batching. |
+| `.worktrees/generator-headroom` | `experiment/generator-headroom` | Current sustained measured source `5dc1fc983b5e157d82ea86a6c546c0b2cb4f592c` (run40866958782, explicit4GiB). Historical2GiB source `ac854e5b597a564c96ed2bbddda7d14315261d74` failed memory. Its synthetic target intentionally excludes application batching. |
 | `.worktrees/k3s-readiness` | `experiment/k3s-preparation` | `084717875d5a79356b3dd6e6e5471411814ec94d`; implementation8da2613. Deployment preparation only. Its historical application baseeb9ffd1 is not a production release candidate. |
 | `.worktrees/mobile-login-overload` | `experiment/media-google-promoted-banners` | APK63 application source9758da7; fixture-only40c6862; mobile main merge `ee7546c6997d70494dedd8edd21f22a46803c82f`. |
 | `.worktrees/notification-workers` | `perf/receipt-throughput` | Historical receipt source `d72df8b1f205886f9b03db889c79d5359d9628ec`; includes experimental migration108. |
@@ -86,7 +86,7 @@ Relevant reports: `ACTUAL_STACK_CALIBRATION_RESULTS_2026-10-28.md`, `NEARBY_ORDE
 
 ## Generator gate and next justified action
 
-Run40855200111 sourceac854e5 began its measurement step at10:09:32UTC/11:09:32Lagos, including serial authentication/preparation before1,800 measured seconds. Its final outcome is FAILED memory headroom; do not dispatch another long run until the focused diagnostic is analyzed.
+Run40855200111 sourceac854e5 began its measurement step at10:09:32UTC/11:09:32Lagos, including serial authentication/preparation before1,800 measured seconds. Its final outcome is FAILED memory headroom. The subsequent focused diagnostic was analyzed, compression was rejected, and the original-recorder4GiB sustained run40866958782 is now the active gate.
 
 Its gates require at least1,795 measured seconds,1,790seconds of CPU coverage and1,790snapshots at500VUs; original client thresholds, p95CPU<70%ofquota, initial6s p95<85%,<1%throttled periods, memory<70%of2GiB, noOOM/drops,500valid identities and complete offered/completed/mock accounting. The synthetic-target atomic message-ID correction is mock-only. This is generator qualification, not application/database/worker capacity.
 
@@ -170,3 +170,7 @@ Calibration branch4d658ef uses original recorder and requires requested generato
 ## Sustained500 preparation (not dispatched)
 
 Workflow/glue8a5796b, calibration analysis3e0b432 and provenance1f01ea1 prepare explicit phasequalified-500. It preserves original measurement, reconciliation,60srecovery, send drain and real receipt-tail bodies and requires successful generator/calibration artifacts plus a source-matched shared-host/database review record. The record file is intentionally absent, so premature dispatch fails before lab preparation. No target1,000 is exposed in this path. See QUALIFIED_500_EXECUTION_2026-10-29.md for exact prerequisites, limits, files and remaining validation scope. No app/runtime changes or activefull500run.
+
+## Tooling provenance checkpoint
+
+Qualification tooling HEAD6971894a148c45fb2f403defc637e680b294d0fb is committed and pushed. It retains exact /app/api and /app/lab binary hashes for any future gated sustained workload. Application/internal/migration/session-client source remains unchanged; no actual-stack calibration or sustained500 run has been dispatched. Verify observer coverage over authentication plus measurement and recovery from the retained timestamps; a configured observer lifetime is not proof of complete coverage.
