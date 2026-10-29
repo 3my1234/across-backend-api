@@ -711,23 +711,47 @@ func insertSharedMessage(ctx context.Context, tx pgx.Tx, room, actor string, inp
 	}
 	return id, at, fresh, err
 }
+
+// A normal direct/Town Hall room fits in one batch. The bound also protects
+// transaction round trips if the recipient model grows later. Cursor progress
+// follows selected recipients, not inserted rows, so retries cannot skip a page.
+const communityNotificationBatchSize = 64
+const communityNotificationBatchSQL = `WITH recipients AS MATERIALIZED (
+ SELECT p.user_id FROM chat_participants p
+ WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid
+ AND ($6::uuid IS NULL OR p.user_id>$6::uuid)
+ AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))
+ ORDER BY p.user_id LIMIT $7
+), inserted AS (
+ INSERT INTO notifications(user_id,order_id,batch_id,type,title,body,data,event_key)
+ SELECT user_id,NULL::uuid,NULL::uuid,'social_message',$4::text,'Open your chat to read the message.',$5::jsonb,
+ 'shared-chat:'||$3::text||':'||user_id::text FROM recipients
+ ON CONFLICT DO NOTHING RETURNING id
+)
+SELECT (SELECT user_id::text FROM recipients ORDER BY user_id DESC LIMIT 1),
+ (SELECT count(*) FROM recipients),(SELECT count(*) FROM inserted)`
+
 func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, actor, message, title, body string) error {
-	// Keep durable fan-out in the message transaction, but perform one SQL
-	// operation for the eligible recipient set instead of one round trip per
-	// participant. Row triggers still enqueue each recipient's delivery records.
+	// All batches remain in the caller's business transaction. Per-row database
+	// triggers still create each recipient's durable delivery records.
 	data, err := marshalNotificationData(map[string]any{"view": "messages", "chat_room_id": room, "sender_user_id": actor})
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO notifications(user_id,order_id,batch_id,type,title,body,data,event_key)
- SELECT p.user_id,NULL::uuid,NULL::uuid,'social_message',$4::text,'Open your chat to read the message.',$5::jsonb,
- 'shared-chat:'||$3::text||':'||p.user_id::text
- FROM chat_participants p
- WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid
- AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))
- ON CONFLICT DO NOTHING`, room, actor, message, title, data)
-	return err
+	var cursor *string
+	for {
+		var last *string
+		var selected, inserted int
+		if err = tx.QueryRow(ctx, communityNotificationBatchSQL, room, actor, message, title, data, cursor, communityNotificationBatchSize).Scan(&last, &selected, &inserted); err != nil {
+			return err
+		}
+		if selected < communityNotificationBatchSize {
+			return nil
+		}
+		cursor = last
+	}
 }
+
 func (s *CommunityController) MarkRead(c *fiber.Ctx) error {
 	shared, err := s.isShared(c)
 	if err != nil {
