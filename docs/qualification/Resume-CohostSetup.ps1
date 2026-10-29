@@ -1,7 +1,7 @@
 param([switch]$ContinueStaged)
 $ErrorActionPreference = 'Stop'
 $workspace = 'C:\Users\EMMA\Desktop\gouwu'
-$run = 'cohost-ad5c7dfa8bb37a25'
+$run = 'cohost-0cfe085cbad1ec57'
 $review = Join-Path $workspace "qualification\cohost-review\$run"
 $private = Join-Path $workspace "qualification\cohost-private\$run"
 $remote = "/root/atlxpres-cohost/$run"
@@ -64,7 +64,7 @@ Remote '79.143.176.173' "python3 '$remote/tools/stage_host.py' '$remote' --prefl
 $baselineCode = @'
 import json,sys,time,subprocess
 from pathlib import Path
-base=Path('/root/atlxpres-cohost/cohost-ad5c7dfa8bb37a25')
+base=Path('/root/atlxpres-cohost/cohost-0cfe085cbad1ec57')
 sys.path.insert(0,str(base/'tools'))
 from baseline import validate
 if (base/'manifest.json').exists():raise RuntimeError('Setup already started; do not restage')
@@ -108,7 +108,7 @@ try {
         try {
             Remote $address "python3 '$remote/tools/operator_setup.py' '$remote' cleanup"
             # Explicit public metadata only; NEVER copy the private tunnel key.
-            Remote $address "cd '$remote' && tar -cf evidence.tar --ignore-failed-read request.json manifest.json compose.runtime.json image-identities.json image-import.log baseline.json baseline-failure.json sample.json watchdog.jsonl verification.complete cleanup.complete"
+            Remote $address "cd '$remote' && tar -cf evidence.tar --ignore-failed-read request.json manifest.json compose.runtime.json image-identities.json image-import.log transport-diagnostics.json baseline.json baseline-failure.json sample.json watchdog.jsonl verification.complete cleanup.complete"
             Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',"root@${address}:$remote/evidence.tar",(Join-Path $evidence "$role-evidence.tar"))
         } catch { Write-Warning "${role}: $($_.Exception.Message). Independent cleanup task remains responsible for this run." }
     }

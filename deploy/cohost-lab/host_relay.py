@@ -41,7 +41,9 @@ def server(listen,destination):
                             data=key.fileobj.recv(65536)
                             if not data:return
                             key.data.sendall(data)
-            except OSError:return
+            except OSError as error:
+                print(json.dumps(dict(relay_connection_error=type(error).__name__,errno=error.errno)),flush=True)
+                return
     class Relay(socketserver.ThreadingMixIn,socketserver.TCPServer):
         daemon_threads=True
         request_queue_size=64
