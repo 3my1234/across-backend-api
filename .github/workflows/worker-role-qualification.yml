@@ -12,6 +12,11 @@ on:
         description: Passed 30-minute independent generator proof run (calibration only)
         type: string
         default: ''
+      calibration_generator_memory:
+        description: Must match the passed sustained generator allocation
+        type: choice
+        options: [4g, 2g]
+        default: 4g
       calibration_memory:
         description: Isolated PostgreSQL RAM ceiling; CPU and application limits unchanged
         type: choice
@@ -213,7 +218,7 @@ jobs:
       LAB_SESSION_PROFILE: stage
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
-      LAB_GENERATOR_MEMORY: 2g
+      LAB_GENERATOR_MEMORY: ${{ github.event.inputs.calibration_generator_memory }}
       LAB_CALIBRATION_SUITE_DIR: ${{ github.workspace }}/session-exchange/calibration-suite
       LAB_EXPANDED_JOURNEYS: '1'
       LAB_NOTIFICATION_WORKERS: '0'
@@ -247,6 +252,9 @@ jobs:
           gate=json.loads(p.read_text())
           assert gate['independent_generator_gate_passed'] and gate.get('requested_seconds')==1800 and gate['measured_seconds']>=1795, 'Long generator headroom not qualified'
           assert all(gate['assertions'].values()), 'Failed generator prerequisite'
+          import os
+          expected_memory={'2g':2*1024**3,'4g':4*1024**3}[os.environ['LAB_GENERATOR_MEMORY']]
+          assert gate.get('generator_memory_limit_bytes')==expected_memory, 'Actual generator budget must match sustained proof'
           normalized=lambda path: hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest()
           assert normalized(Path('deploy/session-lab/sessions.js'))=='db3013f473b41fc7d35e01d7385d620b247b977e3dd86e9e8683d14a4bb337a3', 'Client differs from generator proof'
           assert normalized(p.parent/'executed-sessions.js')=='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49', 'Measured generator client differs'
@@ -265,7 +273,7 @@ jobs:
           from pathlib import Path
           available=int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:')))*1024
           import os
-          required=(12 if os.environ['LAB_CALIBRATION_DB_MEMORY']=='8g' else 10)*1024**3
+          required=((12 if os.environ['LAB_CALIBRATION_DB_MEMORY']=='8g' else 10)+(2 if os.environ['LAB_GENERATOR_MEMORY']=='4g' else 0))*1024**3
           assert available>=required, 'Insufficient existing runner headroom: stop, not an application result'
           PYMEM
       - name: Prepare isolated synthetic baseline with recorded DB allocation
