@@ -46,6 +46,8 @@ jobs:
           finally:
               subprocess.run(['docker','rm','-f',owned,sentinel],check=True)
           PY
+      - name: Verify exact archive identities through disposable Docker save and load
+        run: python3 deploy/cohost-lab/integration_image_identity.py
       - name: Exercise watchdog stop paths with simulated sensors and real disposable containers
         run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/cohost-lab/integration_watchdog.py
       - name: Prove exact-owned cleanup and refusal of unrelated data

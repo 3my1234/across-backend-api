@@ -87,10 +87,15 @@ def main():
         time.sleep(.2)
     else:raise ValueError('setup watchdog not healthy; no resources created')
     # Import only the exact reviewed archive, under the independent safety guard.
+    from image_identity import identities,resolve
+    archive=base/'images.tar.gz'
+    aliases=identities(archive,request.get('image_archive_sha256'),set(s['image'] for s in compose['services'].values()))
+    resolved={}
     missing=[]
     for service in compose['services'].values():
-        check=subprocess.run(['docker','image','inspect',service['image']],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        if check.returncode:missing.append(service['image'])
+        image=service['image']
+        resolved[image]=resolve(aliases[image])
+        if resolved[image] is None:missing.append(image)
     if missing:
         if approval.get('authorized_image_import') is not True:raise ValueError('reviewed image import approval required')
         archive=base/'images.tar.gz'
@@ -100,7 +105,8 @@ def main():
         checksum=hasher.hexdigest()
         if checksum!=request.get('image_archive_sha256'):raise ValueError('image archive hash mismatch')
         import gzip
-        importer=subprocess.Popen(['docker','load'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL)
+        import_log=(base/'image-import.log').open('w')
+        importer=subprocess.Popen(['docker','load'],stdin=subprocess.PIPE,stdout=import_log,stderr=import_log)
         try:
             with gzip.open(archive,'rb') as source:
                 while chunk:=source.read(1024*1024):
@@ -111,7 +117,18 @@ def main():
             if importer.wait(timeout=60)!=0:raise ValueError('image import failed')
         finally:
             if importer.poll() is None:importer.terminate();importer.wait(timeout=10)
-        for service in compose['services'].values():capture(['docker','image','inspect',service['image']])
+            import_log.close()
+        for image in resolved:
+            resolved[image]=resolve(aliases[image])
+            if resolved[image] is None:raise ValueError('exact archived image unavailable after load; inspect image-import.log')
+    # Both IDs are cryptographically tied to the SAME verified archive content.
+    # Change images only in a separate runtime file; reviewed caps/env stay intact.
+    runtime=json.loads(raw)
+    for service in runtime['services'].values():service['image']=resolved[service['image']]
+    (base/'compose.runtime.json').write_text(json.dumps(runtime,indent=2))
+    (base/'image-identities.json').write_text(json.dumps(resolved,indent=2))
+    for command in commands:
+        if 'compose.json' in command:command[command.index('compose.json')]='compose.runtime.json'
     # Docker daemon image-load work is monitored, not constrained by the CLI's cgroup.
     # Record all newly created IDs even if Compose subsequently fails; no broad cleanup.
     try:
