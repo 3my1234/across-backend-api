@@ -25,6 +25,7 @@ jobs:
       DATABASE_URL: postgres://postgres:isolated-nearby-ci@127.0.0.1:5432/nearby_tests?sslmode=disable
       SETTLEMENT_TEST_LOCAL: 'true'
       FANOUT_BENCHMARK: 'true'
+      RECEIPT_TEST_LOCAL: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,6 +55,10 @@ jobs:
           go test -race -p 1 -count=1 -v ./cmd/capacity-lab -run '^TestDiagnosticUsesDatabaseQueryNotRequestParameter$' | tee fanout-evidence/extraction.log
           go test -race -p 1 -count=1 -v ./internal/controllers -run '^TestCommunity(FanoutAtomicPrivateAndDeduplicated|FanoutBoundariesConcurrentRetriesAndFailure|FanoutMatchedBenchmark|TownHallRepliesPermissionsAndOwnActivity|TownHallConcurrentSeatLimit|TownHallAdmissionExpiryAndHandoff)$' | tee fanout-evidence/handler-regressions.log
           go test -race -p 1 -count=1 -v ./internal/services -run '^TestReceipt(ConcurrentClaimCrashRecoveryAndFencing|EligibilityDrainAndBoundedRequests|MissingAndProviderBackoff|CancellationAndDeviceRejection|RetryAfterParsing)$' | tee fanout-evidence/worker-recovery.log
+          if grep -E -- '--- SKIP:|--- FAIL:' fanout-evidence/handler-regressions.log fanout-evidence/worker-recovery.log; then
+            echo 'Required fanout or worker recovery test did not execute successfully.'
+            exit 1
+          fi
           go build -o /tmp/nearby-api ./cmd/api
       - uses: actions/upload-artifact@v4
         if: always()
