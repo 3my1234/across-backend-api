@@ -15,6 +15,12 @@ def command(manifest,operation):
         raise ValueError("unrecorded service")
     ident=ids[service]
     if not re.fullmatch(r"[a-f0-9]{64}",ident):raise ValueError("immutable ID required")
+    if action=="identity":
+        if (manifest['role'],service) not in (("database","postgres"),("main","db-probe")):
+            raise ValueError("test database identity endpoint required")
+        connection=[] if manifest['role']=="database" else ['-h','/tunnel','-p','55432']
+        return ['docker','exec',ident,'psql',*connection,'-U','lab','-d','capacity_lab','-XAtc',
+            "SELECT current_database() || ':' || current_setting('cluster_name')"]
     if action=="start" and service in ("api1","api2","gateway","notification-worker") and manifest.get("load_authorized") is not True:
         raise ValueError("application startup/load not authorized")
     if action in ("start","stop","logs"):

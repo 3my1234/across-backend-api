@@ -51,6 +51,9 @@ function render(input) {
       }
     }
   }
+  services['db-probe']={image:input.images.postgres,command:['/bin/sleep','infinity'],user:'0:0',
+    environment:{PGPASSWORD:'lab-disposable-only'},volumes:[base+'/tunnel:/tunnel:ro'],networks:['lab'],
+    labels:label,cgroup_parent:parent,cpus:.25,mem_limit:'128m',memswap_limit:'128m',pids_limit:64,restart:'no'};
   services.postgres={image:input.images.socat,user:'0:0',command:['TCP-LISTEN:5432,fork,reuseaddr','UNIX-CONNECT:/tunnel/.s.PGSQL.55432'],
     volumes:[base+'/tunnel:/tunnel:ro'],networks:['lab'],labels:label,cgroup_parent:parent,
     cpus:.25,mem_limit:'64m',memswap_limit:'64m',pids_limit:128,restart:'no'};

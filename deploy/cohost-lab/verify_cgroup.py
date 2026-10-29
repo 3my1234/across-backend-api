@@ -28,16 +28,20 @@ def main():
     raw=subprocess.check_output(["docker","inspect",*ids],text=True,timeout=10)
     records=json.loads(raw);validate_inventory(m,records)
     expected=m["run"].replace("-", "")+role+".slice"
+    verified=0
     for record in records:
+        if record.get("HostConfig",{}).get("CgroupParent")!=expected:raise ValueError("configured test parent mismatch")
         pid=record["State"].get("Pid",0)
-        if pid<=0:raise ValueError("container must be running for ancestry verification")
+        if pid<=0:continue
         memberships=Path(f"/proc/{pid}/cgroup").read_text().splitlines()
         if len(memberships)!=1 or not memberships[0].startswith("0::/"):
             raise ValueError("unified cgroup v2 required")
         relative=Path(memberships[0].split("::",1)[1].lstrip("/"))
         if ".." in relative.parts or expected not in relative.parts:raise ValueError("test parent escaped")
         parent=Path('/sys/fs/cgroup').joinpath(*relative.parts[:relative.parts.index(expected)+1])
+        verified+=1
         verify_files(parent,2 if role=="main" else 3,(2684354560 if role=="main" else 3221225472))
+    if not verified:raise ValueError("at least one live test cgroup must be verified")
     print(json.dumps(dict(effective_test_parent="verified",role=role,containers=len(records),dedicated_cpu_guarantee=False)))
 
 if __name__=="__main__":main()

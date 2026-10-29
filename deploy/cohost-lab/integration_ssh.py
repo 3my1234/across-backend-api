@@ -28,9 +28,10 @@ def main():
         base=Path(directory);base.chmod(0o700)
         ssh_port=free_port();db_port=free_port()
         try:
+            run="cohost-"+"d"*16
             pg=call("docker","run","-d","--label","atlxpres.cohost.run=cohost-"+"d"*16,
                 "-p",f"127.0.0.1:{db_port}:5432","-e","POSTGRES_PASSWORD=lab-disposable-only",
-                "-e","POSTGRES_USER=lab","-e","POSTGRES_DB=capacity_lab","postgres:16-alpine")
+                "-e","POSTGRES_USER=lab","-e","POSTGRES_DB=capacity_lab","postgres:16-alpine","postgres","-c","cluster_name="+run)
             for _ in range(100):
                 result=subprocess.run(["docker","exec","-e","PGPASSWORD=lab-disposable-only",pg,"psql","-h","127.0.0.1","-U","lab","-d","capacity_lab","-XAtc","SELECT current_database()"],capture_output=True,text=True)
                 if result.returncode==0 and result.stdout.strip()=="capacity_lab":break
@@ -98,6 +99,8 @@ def main():
             encoded=base64.b64encode(json.dumps(operation).encode()).decode()
             controlled=call(*common,"root@127.0.0.1","control "+encoded,input="SELECT marker FROM capacity_lab_identity;\n")
             assert controlled=="disposable-compose-only",controlled
+            identity=base64.b64encode(json.dumps(dict(action='identity',service='postgres')).encode()).decode()
+            assert call(*common,'root@127.0.0.1','control '+identity)=='capacity_lab:'+run
             # Forced command denies arbitrary shell, even for the accepted key.
             assert subprocess.run(common+["root@127.0.0.1","echo should-not-run"],stdout=subprocess.PIPE,stderr=log).returncode!=0
             bad_sock=base/"denied.sock"
