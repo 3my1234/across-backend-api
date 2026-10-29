@@ -1,0 +1,12 @@
+# PREPARATION ONLY. Not included by any workflow or authorized for production.
+# Apply only after representative_preflight.py and independent source/workload review.
+# Existing API pools/admission/worker settings remain inherited unchanged.
+services:
+  postgres:
+    cpus: 4
+    mem_limit: 8g
+  gateway:
+    cpus: 1
+  sessions:
+    cpus: 2
+    mem_limit: 4g
