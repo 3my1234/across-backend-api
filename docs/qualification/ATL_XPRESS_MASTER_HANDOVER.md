@@ -234,3 +234,7 @@ Read EXISTING_VPS_ASSESSMENT_RESULTS_2026-10-29.md. Both latest saved reports ar
 ## Cohost implementation preparation checkpoint
 
 Added deploy/cohost-lab offline split-host Compose renderer, owned-ID stop policy and dry-run Linux watchdog. Ten local safety tests and renderer isolation/digest/pool/admission tests passed. No Docker available locally, so live behavior is NOT claimed. Added manual free-CI safety workflow with disposable owned/unrelated container stop test, no production access. README lists remaining cgroup, restricted peer-lease/tunnel and cross-host qualification adapters; old single-host destructive calibration scripts must NEVER target production Docker contexts. No live setup/load approval requested yet because integration is not complete. No new SQL investigation, paid resources, K3s or production changes.
+
+## Latest safety proof
+
+Free CI40922287424 PASSED at c50fc3d5de7d27c759018ece64ba3f25b7c2996e. Ten Linux policy tests, renderer tests and actual owned-container stop/unrelated-sentinel refusal passed. Full log and metadata hashed locally. Read COHOST_SAFETY_RESULTS_2026-10-29.md. This is not full watchdog/SSH/cgroup integration or500 qualification. No live setup/load or production change. Continue concrete cross-host adapters and independent watchdog/lease validation before asking for host setup approval; do not repeat read-only collection or SQL investigations.
