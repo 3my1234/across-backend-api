@@ -188,3 +188,9 @@ Read CALIBRATION_FAILURE_40872220566_2026-10-29.md. Full45fileartifact1289689872
 Five acknowledged chat/bid writes stored once,0duplicates/missing acknowledged keys,38unconfirmed commits. Presence31OFFER/13ACK failed strict complete-inventory verifier afteroverload/abort; expanded final-state correctness didnotpass. Do not claim the traceback alone was a setup defect or that full correctness passed. Recovery readiness passed.
 
 Only gate diagnostic messages improved and replayed against retained failure: still rejects99/1. No application or threshold changes, no calibration rerun. Next supported investigation is complete notification batch/row-trigger cost and quota/shared-host attribution before a targeted correction or rerun. Full500/1000 remain blocked, reviewrecord absent. Generator40866958782 remains passed. Production/K3s/mobile unchanged.
+
+## Targeted continuation checkpoint
+
+User read-only production host output confirms4visible AMD EPYC vCPUs/KVM,7.8GiB RAM,7.1GiB available,no swap. Does not prove effective PostgreSQL container quota or CPU guarantees. Gateway probe40876893888 PASS all3000requests; directp95~26?31ms,existingproxy0.25CPU~257?285ms,1CPU~69?70ms. SeeGATEWAY_QUOTA_RESULTS_2026-10-29.md. Application admission719counterrejections includinglatecompletions confirmsgatewayalone didnotaccountforactual503s.
+
+Focused full-schema trigger/DBCPU ABBA40877066781 at886599f is RUNNING. APIs/workers stopped duringSQL; no original500workload repeated. Compare2/4/4/2CPU at8GiB usingactualsourcequery andmigrations, alltriggerenabled, EXPLAIN plus8client20secondpgbench; clientsseparatecgroup/monitoring. Cancelledpreparation40876618230 is superseded, noresultsused. Noapplicationchanges/productionoperations, full500/1000blocked.
