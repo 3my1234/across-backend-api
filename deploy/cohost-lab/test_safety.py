@@ -1,12 +1,25 @@
 import unittest
 from safety import reasons, validate_inventory, LABEL
 from watchdog import delta
+from verify_cgroup import verify_files
+from pathlib import Path
+import tempfile
 
 class SafetyTests(unittest.TestCase):
     def sample(self):
         return dict(available_bytes=4*2**30,disk_free_bytes=40*2**30,oom=False,
             production_healthy=True,cpu_high_seconds=0,iowait_high_seconds=0,
             health_failures=0,latency_failures=0,peer_heartbeat_age_seconds=0)
+    def test_parent_cgroup_caps_and_rejection(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)
+            values={"cpu.max":"200000 100000","memory.max":"2684354560","memory.swap.max":"0","cpu.weight":"10","io.weight":"default 10","pids.max":"2048"}
+            for k,v in values.items():(p/k).write_text(v)
+            verify_files(p,2,2684354560)
+            for k,bad in {"cpu.max":"max 100000","memory.max":"max","memory.swap.max":"1","cpu.weight":"100","io.weight":"default 100","pids.max":"max"}.items():
+                (p/k).write_text(bad)
+                with self.assertRaises(ValueError):verify_files(p,2,2684354560)
+                (p/k).write_text(values[k])
     def test_cpu_counter_math(self):
         self.assertEqual(delta([0]*8,[10,0,10,70,10,0,0,0]),(20.0,10.0))
         with self.assertRaises(ValueError): delta([1]*8,[0]*8)

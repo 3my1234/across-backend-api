@@ -32,8 +32,8 @@ def main():
                 "-p",f"127.0.0.1:{db_port}:5432","-e","POSTGRES_PASSWORD=lab-disposable-only",
                 "-e","POSTGRES_USER=lab","-e","POSTGRES_DB=capacity_lab","postgres:16-alpine")
             for _ in range(100):
-                result=subprocess.run(["docker","exec",pg,"pg_isready","-U","lab","-d","capacity_lab"],capture_output=True)
-                if result.returncode==0:break
+                result=subprocess.run(["docker","exec","-e","PGPASSWORD=lab-disposable-only",pg,"psql","-h","127.0.0.1","-U","lab","-d","capacity_lab","-XAtc","SELECT current_database()"],capture_output=True,text=True)
+                if result.returncode==0 and result.stdout.strip()=="capacity_lab":break
                 time.sleep(.2)
             else:raise AssertionError("test PG not ready")
             call("docker","exec",pg,"psql","-U","lab","-d","capacity_lab","-c",
