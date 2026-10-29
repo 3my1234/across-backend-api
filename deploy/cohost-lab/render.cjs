@@ -16,7 +16,7 @@ function render(input) {
   if (input.role === 'database') return {
     name:input.run+'-database',
     services:{postgres:{image:input.images.postgres,
-      command:['postgres','-c','shared_preload_libraries=pg_stat_statements','-c','log_parameter_max_length=0','-c','log_parameter_max_length_on_error=0'],
+      command:['postgres','-c','cluster_name='+input.run,'-c','shared_preload_libraries=pg_stat_statements','-c','log_parameter_max_length=0','-c','log_parameter_max_length_on_error=0'],
       environment:{POSTGRES_USER:'lab',POSTGRES_PASSWORD:'lab-disposable-only',POSTGRES_DB:'capacity_lab'},
       cpus:1,mem_limit:'3g',memswap_limit:'3g',pids_limit:256,cgroup_parent:parent,labels:label,
       restart:'no',ports:['127.0.0.1:55432:5432'],volumes:['synthetic-pg:/var/lib/postgresql/data'],
@@ -51,7 +51,7 @@ function render(input) {
       }
     }
   }
-  services.postgres={image:input.images.socat,command:['TCP-LISTEN:5432,fork,reuseaddr','UNIX-CONNECT:/tunnel/.s.PGSQL.55432'],
+  services.postgres={image:input.images.socat,user:'0:0',command:['TCP-LISTEN:5432,fork,reuseaddr','UNIX-CONNECT:/tunnel/.s.PGSQL.55432'],
     volumes:[base+'/tunnel:/tunnel:ro'],networks:['lab'],labels:label,cgroup_parent:parent,
     cpus:.25,mem_limit:'64m',memswap_limit:'64m',pids_limit:128,restart:'no'};
   return {name:input.run+'-main',services,networks:{lab:{internal:true,labels:label,ipam:{config:[{subnet:'172.29.248.0/24'}]}}}};

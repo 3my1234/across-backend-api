@@ -23,7 +23,7 @@ def wait_port(port):
 
 def main():
     assert os.environ.get("GITHUB_ACTIONS")=="true" and os.geteuid()==0,"CI root only"
-    procs=[];pg=None
+    procs=[];pg=None;bridge=None;network=None
     with tempfile.TemporaryDirectory(dir="/root",prefix="cohost-ci-") as directory:
         base=Path(directory);base.chmod(0o700)
         ssh_port=free_port();db_port=free_port()
@@ -61,16 +61,25 @@ def main():
                 "-o","ExitOnForwardFailure=yes","-o","ConnectTimeout=3","-o","ServerAliveInterval=1","-o","ServerAliveCountMax=2"]
             known=f"[127.0.0.1]:{ssh_port} "+(base/"host.pub").read_text().strip()+"\n"
             (base/"known_hosts").write_text(known)
-            sock=base/".s.PGSQL.55432"
+            socket_dir=base/"tunnel";socket_dir.mkdir(mode=0o700)
+            sock=socket_dir/".s.PGSQL.55432"
             forward=subprocess.Popen(common+["-N","-L",f"{sock}:127.0.0.1:{db_port}","root@127.0.0.1"],stdout=subprocess.DEVNULL,stderr=log);procs.append(forward)
             for _ in range(50):
                 if sock.exists():break
                 if forward.poll() is not None:raise AssertionError("SSH failed: "+(base/"sshd.log").read_text())
                 time.sleep(.1)
             env={**os.environ,"PGPASSWORD":"lab-disposable-only"}
-            destination=call("psql","-h",str(base),"-p","55432","-U","lab","-d","capacity_lab","-XAtc",
+            destination=call("psql","-h",str(socket_dir),"-p","55432","-U","lab","-d","capacity_lab","-XAtc",
                 "SELECT current_database() || ':' || marker FROM capacity_lab_identity",env=env)
             assert destination=="capacity_lab:disposable-compose-only",destination
+            network=call('docker','network','create','--internal','--label','atlxpres.cohost.run='+run,run+'-bridge')
+            bridge=call('docker','run','-d','--user','0:0','--network',network,'--network-alias','postgres',
+                '--label','atlxpres.cohost.run='+run,'-v',str(socket_dir)+':/tunnel:ro',
+                'alpine/socat','TCP-LISTEN:5432,fork,reuseaddr','UNIX-CONNECT:/tunnel/.s.PGSQL.55432')
+            bridged=call('docker','run','--rm','--network',network,'-e','PGPASSWORD=lab-disposable-only',
+                'postgres:16-alpine','psql','-h','postgres','-U','lab','-d','capacity_lab','-XAtc',
+                "SELECT current_database() || ':' || marker FROM capacity_lab_identity")
+            assert bridged==destination,bridged
             import base64
             operation=dict(action="exec",service="postgres",args=["psql","-U","lab","-d","capacity_lab","-XAt","-v","ON_ERROR_STOP=1"])
             encoded=base64.b64encode(json.dumps(operation).encode()).decode()
@@ -89,12 +98,14 @@ def main():
                 except ConnectionResetError:response=b""
                 assert response==b"","forbidden destination accepted"
             print(json.dumps(dict(ssh_unix_pg_protocol="passed",saved_marker=destination,
-                arbitrary_command="denied",non_test_port="denied",public_database_port=False)))
+                docker_internal_postgres_alias="passed",arbitrary_command="denied",non_test_port="denied",public_database_port=False)))
         finally:
             for process in reversed(procs):
                 process.terminate()
                 try:process.wait(timeout=5)
                 except subprocess.TimeoutExpired:process.kill();process.wait()
+            if bridge:subprocess.run(['docker','rm','-f',bridge],check=True,stdout=subprocess.DEVNULL)
+            if network:subprocess.run(['docker','network','rm',network],check=True,stdout=subprocess.DEVNULL)
             if pg:subprocess.run(["docker","rm","-fv",pg],check=True,stdout=subprocess.DEVNULL)
 
 if __name__=="__main__":main()
