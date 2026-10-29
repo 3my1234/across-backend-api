@@ -27,7 +27,7 @@ Every assertion except `generator_memory_under_70pct` passed, including duration
 
 The artifact includes a1,663,594,076-byte time-series JSON file written from the generator container to the mounted exchange. The mock processed3,772,554,011response bytes. Total cgroup memory includes anonymous process allocations and charged filesystem cache. The original sampler did not retain memory.stat, so this run cannot distinguish process growth from output-file cache. Output-cache pressure is a specific hypothesis, not a proven root cause. No password/security/app settings changed.
 
-Full artifact retained under `qualification/generator-headroom-20261029/40855200111/artifacts/`. A small range-verified gate/source extraction is also under `quick-proof/`; the full download completed. Independent gate reconstruction and SHA manifest are being saved beside the artifact without overwriting it.
+Full artifact retained under `qualification/generator-headroom-20261029/40855200111/artifacts/`. A small range-verified gate/source extraction is also under `quick-proof/`; the full download completed. Independent reconstruction from the full raw series matches every recorded gate field exactly. A SHA256 manifest covering30 artifact files is saved beside it; original evidence was not overwritten.
 
 ## Smallest next investigation
 

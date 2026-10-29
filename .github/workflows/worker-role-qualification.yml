@@ -35,6 +35,7 @@ jobs:
           CGO_ENABLED=0 go build -o deploy/generator-lab/generator-target ./deploy/generator-lab
           docker build -t atlxpres-generator-target:local deploy/generator-lab
           docker compose -f deploy/generator-lab/compose.yml pull sessions
+          timeout 30 docker run --rm --network none --entrypoint /bin/sh --memory 64m --cpus 1 --tmpfs /exchange:rw,size=16m -v "$PWD/deploy/generator-lab/record-output.sh:/recorder.sh:ro" -v "$PWD/deploy/generator-lab/test-recorder.sh:/test-recorder.sh:ro" grafana/k6:2.3.0 /test-recorder.sh
       - name: Qualify original actions with explicit local preparation at two CPUs
         run: bash deploy/generator-lab/run.sh
       - uses: actions/upload-artifact@v4

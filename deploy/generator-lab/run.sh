@@ -8,7 +8,7 @@ git rev-parse HEAD >generator-evidence/source.txt
 sha256sum deploy/session-lab/{sessions.js,policy.mjs,transport.mjs,established.mjs} >generator-evidence/unchanged-harness.sha256
 lscpu >generator-evidence/runner-cpu.txt
 free -h >generator-evidence/runner-memory.txt
-cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh,prewarm.py,test_prewarm.py,verify_source.py} generator-evidence/
+cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh,prewarm.py,test_prewarm.py,verify_source.py,record-output.sh} generator-evidence/
 GENERATOR_LAB=synthetic-only deploy/generator-lab/generator-target prepare generator-exchange
 chmod -R a+rwX generator-exchange
 profile="${GENERATOR_SESSION_PROFILE:-stage}"
@@ -47,6 +47,10 @@ for mode in "${modes[@]}"; do
  wait "$hostwatch" || true
  trap - EXIT
  docker logs atlxpres-generator-sessions-measured >"$arm/k6.log" 2>&1
+ # Only after the measured container exits: validate and reconstruct every byte.
+ gzip -t generator-exchange/timeseries.json.gz
+ sha256sum generator-exchange/timeseries.json.gz >"$arm/compressed-trace.sha256"
+ gzip -dc generator-exchange/timeseries.json.gz >generator-exchange/timeseries.json
  dc exec -T gateway wget -qO- http://localhost:8080/generator-stats >"$arm/target-stats.json"
  docker inspect atlxpres-generator-sessions-measured >"$arm/generator-inspect.json"
  for file in summary.json timeseries.json; do cp "generator-exchange/$file" "$arm/"; done
