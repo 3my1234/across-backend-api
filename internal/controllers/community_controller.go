@@ -712,33 +712,21 @@ func insertSharedMessage(ctx context.Context, tx pgx.Tx, room, actor string, inp
 	return id, at, fresh, err
 }
 func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, actor, message, title, body string) error {
-	rows, err := tx.Query(ctx, `SELECT p.user_id::text FROM chat_participants p WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))`, room, actor)
+	// Keep durable fan-out in the message transaction, but perform one SQL
+	// operation for the eligible recipient set instead of one round trip per
+	// participant. Row triggers still enqueue each recipient's delivery records.
+	data, err := marshalNotificationData(map[string]any{"view": "messages", "chat_room_id": room, "sender_user_id": actor})
 	if err != nil {
 		return err
 	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	if len([]rune(body)) > 180 {
-		body = string([]rune(body)[:180]) + "..."
-	}
-	for _, id := range ids {
-		if err = insertNotification(ctx, tx, id, "", nil, "social_message", title, "Open your chat to read the message.", map[string]any{"view": "messages", "chat_room_id": room, "sender_user_id": actor}, "shared-chat:"+message+":"+id); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = tx.Exec(ctx, `INSERT INTO notifications(user_id,order_id,batch_id,type,title,body,data,event_key)
+ SELECT p.user_id,NULL::uuid,NULL::uuid,'social_message',$4::text,'Open your chat to read the message.',$5::jsonb,
+ 'shared-chat:'||$3::text||':'||p.user_id::text
+ FROM chat_participants p
+ WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid
+ AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))
+ ON CONFLICT DO NOTHING`, room, actor, message, title, data)
+	return err
 }
 func (s *CommunityController) MarkRead(c *fiber.Ctx) error {
 	shared, err := s.isShared(c)
