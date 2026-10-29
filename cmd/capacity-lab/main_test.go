@@ -167,7 +167,7 @@ func TestScenarioSelectionRejectsArbitrarySeedInput(t *testing.T) {
 }
 
 func TestDatabaseCeilingRemainsBounded(t *testing.T) {
-	for _, value := range []string{"", "1", "2"} {
+	for _, value := range []string{"", "1", "2", "3"} {
 		if _, err := databaseCPU(value); err != nil {
 			t.Fatal(err)
 		}

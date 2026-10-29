@@ -79,8 +79,8 @@ func databaseCPU(value string) (string, error) {
 	if value == "" {
 		return "1", nil
 	}
-	if value != "1" && value != "2" {
-		return "", fmt.Errorf("LAB_DB_CPUS must be 1 or 2")
+	if value != "1" && value != "2" && value != "3" {
+		return "", fmt.Errorf("LAB_DB_CPUS must be 1, 2 or 3")
 	}
 	return value, nil
 }
