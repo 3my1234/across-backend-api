@@ -1,3 +1,5 @@
+> WITHDRAWN: the user has prohibited additional paid testing resources. Historical proposal only; do not act on its approval request. Use EXISTING_VPS_QUALIFICATION_PLAN_2026-10-29.md.
+
 # Temporary calibration lab ? approval proposal
 
 Prepared 29 October 2026, Africa/Lagos. **Pending explicit approval. Nothing has been provisioned.**
