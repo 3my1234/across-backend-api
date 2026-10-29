@@ -81,3 +81,10 @@ Only recorded matching-labelled containers/unused volumes/empty networks may be 
 Original gates remain: zero controlled-overload responses; error rate<0.005; content correctness1; p95<500ms/p99<1500ms globally and per operation; polling p95<17s/p99<20s; target sessions actually achieved; no dropped iterations; all acknowledged writes stored once, zero duplicate keys, exact expanded driver/TownHall checks and queue/receipt proof. Resource/generator headroom is mandatory. Approximate measurement/recovery/drain portion60?75minutes excluding fixture preparation/transfers; no capacity or launch success promised.
 
 **Decision requested now: allow ONLY capped isolated setup and read-only endpoint/cgroup verification. Keep fixture preparation and the500sessionload blocked.**
+
+
+## Execution amendment: retired Samnad site (user confirmed29October2026)
+
+User confirmed samnadoilandgas.sportbanter.online was deliberately removed. It is excluded from current public health checks. Protect APIready, unlimitedenergysystems.com, atlxpres.com and every currently running production container with unchanged thresholds. This is an inventory correction, not authorization to restart or modify any production website.
+
+Both imagearchives were uploaded successfully before baseline stopped; retain them. Use qualification/Resume-CohostSetup.ps1, which verifies both existing remote archiveSHA256 values and uploads ONLY small updated packages. Same reviewednonce/immutableCompose/resourcecaps; fresh protected-site baselines and actualruntimeverification still mandatory. Refresh only uninstalled temporary restricted key expiry to invocation+3hours within existing setup-only authorization. Original Invoke-CohostSetup.ps1 is not a resume path. No fixture/load authorization.
