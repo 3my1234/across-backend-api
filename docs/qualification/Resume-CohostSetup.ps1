@@ -56,6 +56,20 @@ foreach ($role in @('main','database')) {
         if ($deadline -lt [DateTime]::UtcNow.AddMinutes(30)) { throw 'Staged key expiry is too close; stop for a small-package refresh.' }
     }
     Write-Host 'Continuing staged packages. No uploads. Fresh completed baselines will be reused.'
+    foreach ($role in @('main','database')) {
+        $address = if ($role -eq 'main') {'173.212.219.169'} else {'79.143.176.173'}
+        $rolePath = Join-Path $review $role
+        $expected = @{}
+        foreach ($name in @('compose.json','request.json','approval.json')) {
+            $expected[$name] = (Get-FileHash -Algorithm SHA256 (Join-Path $rolePath $name)).Hash.ToLowerInvariant()
+        }
+        foreach ($file in Get-ChildItem -LiteralPath (Join-Path $rolePath 'tools') -Filter '*.py') {
+            $expected['tools/'+$file.Name] = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+        }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($expected | ConvertTo-Json -Compress)))
+        Get-Content -Raw -LiteralPath (Join-Path $workspace 'qualification\complete_staged_package.py') | & ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=6 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes "root@$address" "python3 - --run $run --role $role --expected $encoded"
+        if ($LASTEXITCODE -ne 0) { throw "$role staged package verification failed; no setup started." }
+    }
 }
 # Reuse a valid completed baseline. Wait for a disconnected collector if present;
 # never start a second collector while the existing one is still running.
