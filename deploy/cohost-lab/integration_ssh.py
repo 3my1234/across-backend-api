@@ -59,7 +59,7 @@ def main():
             wait_port(ssh_port)
             common=["ssh","-i",str(base/"client"),"-p",str(ssh_port),"-o","BatchMode=yes",
                 "-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(base/"known_hosts"),
-                "-o","ExitOnForwardFailure=yes","-o","ConnectTimeout=3","-o","ServerAliveInterval=1","-o","ServerAliveCountMax=2"]
+                "-o","ExitOnForwardFailure=yes","-o","ConnectTimeout=3","-o","ServerAliveInterval=5","-o","ServerAliveCountMax=2"]
             known=f"[127.0.0.1]:{ssh_port} "+(base/"host.pub").read_text().strip()+"\n"
             (base/"known_hosts").write_text(known)
             socket_dir=base/"tunnel";socket_dir.mkdir(mode=0o700)
