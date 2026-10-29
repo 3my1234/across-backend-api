@@ -5,6 +5,15 @@ from pathlib import Path
 def call(args, **kwargs):
     return subprocess.run(args,check=True,timeout=180,**kwargs)
 
+def retain_diagnostics(base,request):
+    report={};prefix=request['run'].replace('-','');role=request['role']
+    for suffix in (role+'guard.service',role+'relay.service','dbtunnel.service'):
+        try:
+            result=subprocess.run(['journalctl','--no-pager','--output=cat','-n','60','-u',prefix+suffix],capture_output=True,text=True,timeout=10)
+            report[suffix]=dict(exit_code=result.returncode,lines=result.stdout.splitlines()[-60:])
+        except Exception as error:report[suffix]=dict(error_class=type(error).__name__)
+    (base/'transport-diagnostics.json').write_text(json.dumps(report,indent=2))
+
 def clean(base):
     import fcntl
     with (base/'cleanup.lock').open('w') as lock:
@@ -12,8 +21,9 @@ def clean(base):
         if (base/'cleanup.complete').exists():return
         request=json.loads((base/'request.json').read_text())
         prefix=request['run'].replace('-',''); role=request['role']
+        retain_diagnostics(base,request)
         # Stop only exact nonce-named units created by this package.
-        for suffix in (role+'guard.service','dbtunnel.service'):
+        for suffix in (role+'guard.service','dbtunnel.service',role+'relay.service'):
             subprocess.run(['systemctl','stop',prefix+suffix],check=False,timeout=30)
         manifest=base/'manifest.json'
         if manifest.exists() and json.loads(manifest.read_text()).get('container_ids'):
@@ -59,6 +69,22 @@ def main():
                 call(['python3',str(base/'tools/stage_host.py'),str(base),'--execute'])
                 call(['python3',str(base/'tools/install_keys.py'),str(base),'--execute'])
                 call(['python3',str(base/'tools/verify_cgroup.py'),str(base/'manifest.json')])
+                if role=='database':
+                    call(['systemd-run','--unit',prefix+'databaserelay.service','--slice',prefix+'database.slice',
+                          '--property','CPUQuota=25%','--property','MemoryMax=64M','--property','TasksMax=128',
+                          '/usr/bin/python3',str(base/'tools/host_relay.py'),str(base/'manifest.json')])
+                    import socket,struct
+                    deadline=time.monotonic()+30
+                    while True:
+                        try:
+                            with socket.create_connection(('127.0.0.1',55432),timeout=2) as connection:
+                                connection.sendall(struct.pack('!II',8,80877103))
+                                if connection.recv(1) not in (b'N',b'S'):raise ValueError('not a PostgreSQL relay')
+                            break
+                        except (OSError,ValueError):
+                            if time.monotonic()>deadline:raise
+                            time.sleep(.2)
+                    print('Test PostgreSQL wire protocol verified through loopback-only relay.',flush=True)
             elif a.action=='verify':
                 if role!='main':raise ValueError('main verification only')
                 key=base/'main-database.key';key.chmod(0o600)

@@ -23,14 +23,15 @@ def wait_port(port):
 
 def main():
     assert os.environ.get("GITHUB_ACTIONS")=="true" and os.geteuid()==0,"CI root only"
-    procs=[];pg=None;bridge=None;network=None
+    procs=[];pg=None;bridge=None;network=None;db_network=None
     with tempfile.TemporaryDirectory(dir="/root",prefix="cohost-ci-") as directory:
         base=Path(directory);base.chmod(0o700)
         ssh_port=free_port();db_port=free_port()
         try:
             run="cohost-"+"d"*16
+            db_network=call('docker','network','create','--internal','--label','atlxpres.cohost.run='+run,run+'-database')
             pg=call("docker","run","-d","--label","atlxpres.cohost.run=cohost-"+"d"*16,
-                "-p",f"127.0.0.1:{db_port}:5432","-e","POSTGRES_PASSWORD=lab-disposable-only",
+                '--network',db_network,"-e","POSTGRES_PASSWORD=lab-disposable-only",
                 "-e","POSTGRES_USER=lab","-e","POSTGRES_DB=capacity_lab","postgres:16-alpine","postgres","-c","cluster_name="+run)
             for _ in range(100):
                 result=subprocess.run(["docker","exec","-e","PGPASSWORD=lab-disposable-only",pg,"psql","-h","127.0.0.1","-U","lab","-d","capacity_lab","-XAtc","SELECT current_database()"],capture_output=True,text=True)
@@ -44,7 +45,17 @@ def main():
             public=(base/"client.pub").read_text().strip()
             run="cohost-"+"d"*16
             access_base=base/run;access_base.mkdir(mode=0o700)
-            (access_base/"manifest.json").write_text(json.dumps(dict(run=run,role="database",container_ids=[pg],services={"postgres":pg})))
+            test_manifest=dict(run=run,role="database",load_authorized=False,container_ids=[pg],services={"postgres":pg},networks=[db_network])
+            (access_base/"manifest.json").write_text(json.dumps(test_manifest))
+            # Exact production-intended path: PG remains internal-only; host
+            # loopback relay supplies the SSH target without Docker publishing.
+            from host_relay import target,server
+            listen,destination=target(test_manifest)
+            assert listen==('127.0.0.1',55432)
+            import threading
+            host_relay=server(('127.0.0.1',db_port),destination)
+            threading.Thread(target=host_relay.serve_forever,daemon=True).start()
+            assert not (json.loads(call('docker','inspect',pg))[0]['NetworkSettings'].get('Ports') or {}).get('5432/tcp')
             helper=str(Path(__file__).with_name("access.py").resolve())
             auth=base/"authorized_keys"
             from datetime import datetime,timezone,timedelta
@@ -122,6 +133,7 @@ def main():
                 subprocess.run(['docker','inspect','--format','{{json .State}}',pg],check=False)
             raise
         finally:
+            if 'host_relay' in locals():host_relay.shutdown();host_relay.server_close()
             for process in reversed(procs):
                 process.terminate()
                 try:process.wait(timeout=5)
@@ -129,5 +141,6 @@ def main():
             if bridge:subprocess.run(['docker','rm','-f',bridge],check=True,stdout=subprocess.DEVNULL)
             if network:subprocess.run(['docker','network','rm',network],check=True,stdout=subprocess.DEVNULL)
             if pg:subprocess.run(["docker","rm","-fv",pg],check=True,stdout=subprocess.DEVNULL)
+            if db_network:subprocess.run(['docker','network','rm',db_network],check=True,stdout=subprocess.DEVNULL)
 
 if __name__=="__main__":main()

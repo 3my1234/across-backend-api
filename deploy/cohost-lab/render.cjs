@@ -19,7 +19,7 @@ function render(input) {
       command:['postgres','-c','cluster_name='+input.run,'-c','shared_preload_libraries=pg_stat_statements','-c','log_parameter_max_length=0','-c','log_parameter_max_length_on_error=0'],
       environment:{POSTGRES_USER:'lab',POSTGRES_PASSWORD:'lab-disposable-only',POSTGRES_DB:'capacity_lab'},
       cpus:1,mem_limit:'3g',memswap_limit:'3g',pids_limit:256,cgroup_parent:parent,labels:label,
-      restart:'no',ports:['127.0.0.1:55432:5432'],volumes:['synthetic-pg:/var/lib/postgresql/data'],
+      restart:'no',volumes:['synthetic-pg:/var/lib/postgresql/data'],
       healthcheck:{test:['CMD-SHELL','pg_isready -U lab -d capacity_lab'],interval:'2s',timeout:'2s',retries:30}}},
     volumes:{'synthetic-pg':{labels:label}},networks:{default:{internal:true,labels:label}}};
   const paths=['capacity-lab','session-lab','notification-lab'];
@@ -45,7 +45,7 @@ function render(input) {
     s.labels=label;s.cgroup_parent=parent;s.restart='no';s.memswap_limit=s.mem_limit;s.pids_limit=256;
     if(s.volumes) s.volumes=s.volumes.map(v=>v.includes(':/exchange') ? base+'/exchange:/exchange'+(v.endsWith(':ro')?':ro':'') : v);
     if(name==='gateway') {
-      s.cpus=1;s.ports=['127.0.0.1:58080:8080'];
+      s.cpus=1;delete s.ports;
       s.volumes=[base+'/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro'];
     }
     if(s.environment) {
