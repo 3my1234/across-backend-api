@@ -36,7 +36,12 @@ function render(input) {
     delete s.build; delete s.depends_on;
     s.image = name === 'redis' ? input.images.redis : name === 'gateway' ? input.images.gateway : input.images.app;
     if(['seed','exporter','verifier','queue-check','lifecycle'].includes(name)) s.command=['/bin/sleep','infinity'];
-    if(['api1','api2'].includes(name)) s.environment.DATABASE_URL += '&application_name=system-'+name;
+    if(['api1','api2'].includes(name)) {
+      s.environment.DATABASE_URL += '&application_name=system-'+name;
+      // The sole loopback-published SSH edge replaces the original in-network generator.
+      // Preserve distinct synthetic XFF identities; do NOT change any rate/admission limit.
+      s.environment.TRUSTED_PROXY_CIDRS += ',172.29.248.1/32';
+    }
     s.labels=label;s.cgroup_parent=parent;s.restart='no';s.memswap_limit=s.mem_limit;s.pids_limit=256;
     if(s.volumes) s.volumes=s.volumes.map(v=>v.includes(':/exchange') ? base+'/exchange:/exchange'+(v.endsWith(':ro')?':ro':'') : v);
     if(name==='gateway') {

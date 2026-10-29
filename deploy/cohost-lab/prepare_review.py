@@ -13,10 +13,11 @@ def digest(file):
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('bundle',type=Path);ap.add_argument('output',type=Path);ap.add_argument('private',type=Path);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('bundle',type=Path);ap.add_argument('output',type=Path);ap.add_argument('private',type=Path);ap.add_argument('--metadata-only',action='store_true');a=ap.parse_args()
     metadata=json.loads((a.bundle/'images.json').read_text())
     expected={Path(name).name:sha for sha,name in (x.split(maxsplit=1) for x in (a.bundle/'SHA256SUMS').read_text().splitlines())}
     for name,sha in expected.items():
+        if name=='images.tar.gz' and a.metadata_only and not (a.bundle/name).exists():continue
         if digest(a.bundle/name)!=sha:raise ValueError('artifact checksum mismatch')
     run='cohost-'+secrets.token_hex(8);root=a.output/run;root.mkdir(parents=True,exist_ok=False)
     private=a.private/run;private.mkdir(parents=True,exist_ok=False)
@@ -27,7 +28,7 @@ def main():
     for role in ('main','database'):
         base=root/role;base.mkdir()
         request=dict(run=run,role=role,images=metadata['images'],image_source=metadata['source'],
-            image_archive_sha256=expected['images.tar.gz'],key_expiry_utc=expiry)
+            image_archive_sha256=expected['images.tar.gz'],key_expiry_utc=expiry,image_archive_locally_verified=(a.bundle/'images.tar.gz').exists())
         source=base/'request.json';source.write_text(json.dumps(request))
         compose=subprocess.check_output(['node',str(tools/'render.cjs'),str(source)])
         (base/'compose.json').write_bytes(compose);request['compose_sha256']=hashlib.sha256(compose).hexdigest()
