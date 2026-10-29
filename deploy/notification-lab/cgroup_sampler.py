@@ -47,7 +47,7 @@ while running:
                 'memory_events': counters(path / 'memory.events'),
                 'cpu_max': (path / 'cpu.max').read_text().strip(),
                 'memory_max': (path / 'memory.max').read_text().strip(),
-                'io_stat': (path / 'io.stat').read_text().strip(),
+                'io_stat': (path / 'io.stat').read_text().strip() if (path / 'io.stat').exists() else None,
             }
         except FileNotFoundError:
             continue
