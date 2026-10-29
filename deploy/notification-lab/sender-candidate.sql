@@ -1,3 +1,4 @@
+-- REJECTED by matched run40881068109: no convincing performance gain.
 -- Isolated benchmark candidate only; NOT a production migration.
 -- Provider identity still requires active membership; ordinary user snapshots
 -- avoid provider joins and UUID parsing that cannot affect their result.
