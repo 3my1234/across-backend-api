@@ -45,7 +45,7 @@ def main():
             auth.write_text(f'restrict,port-forwarding,permitopen="127.0.0.1:{db_port}",command="/bin/false" '+public+"\n")
             auth.chmod(0o600)
             config=base/"sshd_config"
-            config.write_text(f"Port {ssh_port}\nListenAddress 127.0.0.1\nHostKey {base/'host'}\nPidFile {base/'sshd.pid'}\nAuthorizedKeysFile {auth}\nStrictModes yes\nUsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowTcpForwarding local\nAllowStreamLocalForwarding local\nGatewayPorts no\nLogLevel ERROR\n")
+            config.write_text(f"Port {ssh_port}\nListenAddress 127.0.0.1\nHostKey {base/'host'}\nPidFile {base/'sshd.pid'}\nAuthorizedKeysFile {auth}\nStrictModes yes\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowTcpForwarding local\nAllowStreamLocalForwarding local\nGatewayPorts no\nLogLevel VERBOSE\n")
             Path("/run/sshd").mkdir(exist_ok=True)
             log=(base/"sshd.log").open("w")
             daemon=subprocess.Popen(["/usr/sbin/sshd","-D","-e","-f",str(config)],stdout=log,stderr=log);procs.append(daemon)
