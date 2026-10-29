@@ -6,8 +6,12 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, fanout]
+        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, fanout, qualified-500]
         default: roles
+      calibration_run:
+        description: Successful bounded calibration independently reviewed for sustained500
+        type: string
+        default: ''
       generator_run:
         description: Passed 30-minute independent generator proof run (calibration only)
         type: string
@@ -24,6 +28,7 @@ on:
         default: 8g
 permissions:
   contents: read
+  actions: read
 jobs:
   fanout-regressions:
     if: github.event.inputs.phase == 'fanout'
@@ -317,6 +322,164 @@ jobs:
         with:
           name: actual-stack-calibration-${{ github.run_id }}
           path: calibration-evidence/
+          retention-days: 14
+      - name: Remove only isolated disposable lab
+        if: always()
+        run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml down --volumes --remove-orphans
+  qualified-500:
+    if: github.event.inputs.phase == 'qualified-500'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      LAB_INVESTIGATION_PHASE: ramp
+      LAB_SCENARIO: large-busy
+      LAB_ACTOR_PAIRS: '500'
+      LAB_DB_CPUS: '2'
+      LAB_CALIBRATION_DB_MEMORY: ${{ github.event.inputs.calibration_memory }}
+      LAB_REVIEWED_CALIBRATION_RUN: ${{ github.event.inputs.calibration_run }}
+      LAB_LONG_GENERATOR_RUN: ${{ github.event.inputs.generator_run }}
+      LAB_SESSION_TARGET: '500'
+      LAB_SESSION_PROFILE: sustained
+      LAB_SESSION_AUTH_MODE: established
+      LAB_SESSION_APPROVAL: /exchange/approval.json
+      LAB_GENERATOR_MEMORY: ${{ github.event.inputs.calibration_generator_memory }}
+      LAB_CALIBRATION_SUITE_DIR: ${{ github.workspace }}/session-exchange/calibration-suite
+      LAB_EXPANDED_JOURNEYS: '1'
+      LAB_NOTIFICATION_WORKERS: '1'
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/session-exchange
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Require independently qualified generator and endpoint regressions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYPROOF'
+          import json,subprocess
+          import os
+          proof=os.environ['LAB_LONG_GENERATOR_RUN']
+          assert proof.isdigit(), 'Explicit passed long-generator run required'
+          assert os.environ['LAB_CALIBRATION_DB_MEMORY'] in ('1g','8g')
+          for run in (proof,'40854663425','40746907768'):
+              result=json.loads(subprocess.check_output(['gh','run','view',run,'--repo','3my1234/across-backend-api','--json','status,conclusion']))
+              assert result['status']=='completed' and result['conclusion']=='success', 'Prerequisite did not pass; do not run calibration'
+          PYPROOF
+          gh run download "$LAB_LONG_GENERATOR_RUN" --repo 3my1234/across-backend-api --name "generator-headroom-$LAB_LONG_GENERATOR_RUN" --dir /tmp/generator-proof
+          python3 - <<'PYGEN'
+          from pathlib import Path
+          import json,hashlib
+          p=next(Path('/tmp/generator-proof').rglob('cpu-2-prewarm/gate.json'))
+          gate=json.loads(p.read_text())
+          assert gate['independent_generator_gate_passed'] and gate.get('requested_seconds')==1800 and gate['measured_seconds']>=1795, 'Long generator headroom not qualified'
+          assert all(gate['assertions'].values()), 'Failed generator prerequisite'
+          import os
+          expected_memory={'2g':2*1024**3,'4g':4*1024**3}[os.environ['LAB_GENERATOR_MEMORY']]
+          assert gate.get('generator_memory_limit_bytes')==expected_memory, 'Actual generator budget must match sustained proof'
+          normalized=lambda path: hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest()
+          assert normalized(Path('deploy/session-lab/sessions.js'))=='db3013f473b41fc7d35e01d7385d620b247b977e3dd86e9e8683d14a4bb337a3', 'Client differs from generator proof'
+          assert normalized(p.parent/'executed-sessions.js')=='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49', 'Measured generator client differs'
+          assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_text(encoding='utf-8').encode()).hexdigest()=='01c98dc035f0ec63cb74ca979640b4dbed44e455c74e3f533a5f9917c8f5fb06'
+          PYGEN
+      - name: Require successful calibration and recorded shared-host review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$LAB_REVIEWED_CALIBRATION_RUN" =~ ^[0-9]+$ ]]
+          gh run view "$LAB_REVIEWED_CALIBRATION_RUN" --repo 3my1234/across-backend-api --json conclusion,headSha > /tmp/qualified-calibration-run.json
+          gh run download "$LAB_REVIEWED_CALIBRATION_RUN" --repo 3my1234/across-backend-api --name "actual-stack-calibration-$LAB_REVIEWED_CALIBRATION_RUN" --dir /tmp/qualified-calibration
+          python3 - <<'PYREVIEW'
+          import json,os
+          from pathlib import Path
+          run=json.loads(Path('/tmp/qualified-calibration-run.json').read_text())
+          assert run['conclusion']=='success', 'Calibration did not pass'
+          root=Path('/tmp/qualified-calibration')
+          result=json.loads((root/'1-on/result.json').read_text())
+          assert all(result.get(k)==0 for k in ('measured_exit','reconcile_exit','recovery_exit'))
+          summary=json.loads((root/'1-on/summary.json').read_text())
+          assert summary['configuration']['target']==500 and summary['configuration']['seconds']==180
+          assert (root/'requested-db-memory.txt').read_text().strip()==os.environ['LAB_CALIBRATION_DB_MEMORY']
+          assert (root/'generator-proof-run.txt').read_text().strip()==os.environ['LAB_LONG_GENERATOR_RUN']
+          # This explicit evidence record must be created only after actual resource review.
+          review=json.loads(Path('deploy/notification-lab/qualified-500-approval.json').read_text())
+          assert review['calibration_run']==os.environ['LAB_REVIEWED_CALIBRATION_RUN']
+          assert review['generator_run']==os.environ['LAB_LONG_GENERATOR_RUN']
+          assert review['calibration_source']==run['headSha']
+          assert review['database_memory']==os.environ['LAB_CALIBRATION_DB_MEMORY']
+          assert review['generator_memory']==os.environ['LAB_GENERATOR_MEMORY']
+          assert review['shared_host_headroom_reviewed'] is True and review['database_environment_reviewed'] is True
+          assert review['authorized_profile']=='500-sustained-1800s'
+          PYREVIEW
+          source=$(python3 -c 'import json;print(json.load(open("/tmp/qualified-calibration-run.json"))["headSha"])')
+          git diff --exit-code "$source" -- internal/ migrations/ cmd/ deploy/session-lab/
+      - name: Verify exact qualified candidate and unchanged workload
+        run: |
+          git diff --exit-code 29ee9fa -- internal/ migrations/ cmd/api/ deploy/session-lab/
+          bash -n deploy/notification-lab/calibration.sh
+          python3 -m py_compile deploy/notification-lab/cgroup_sampler.py
+          node --check deploy/session-lab/sessions.js
+          node deploy/session-lab/test-policy.mjs
+          node deploy/session-lab/test-transport.mjs
+          go test -race -p 1 ./cmd/capacity-lab -run '^TestDiagnosticUsesDatabaseQueryNotRequestParameter$'
+          python3 - <<'PYMEM'
+          from pathlib import Path
+          available=int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:')))*1024
+          import os
+          required=((12 if os.environ['LAB_CALIBRATION_DB_MEMORY']=='8g' else 10)+(2 if os.environ['LAB_GENERATOR_MEMORY']=='4g' else 0))*1024**3
+          assert available>=required, 'Insufficient existing runner headroom: stop, not an application result'
+          PYMEM
+      - name: Prepare isolated synthetic baseline with recorded DB allocation
+        run: |
+          mkdir -p session-exchange session-evidence
+          mkdir -p "$LAB_CALIBRATION_SUITE_DIR"
+          cp deploy/session-lab/* "$LAB_CALIBRATION_SUITE_DIR/"
+          python3 deploy/notification-lab/generator_prewarm.py deploy/session-lab/sessions.js "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
+          node --check "$LAB_CALIBRATION_SUITE_DIR/sessions.js"
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml pull sessions
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml up -d --build --wait --wait-timeout 480 gateway
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml run --rm --no-deps exporter >session-exchange/fixtures.json
+          python3 - <<'PYAPPROVAL'
+          import json
+          from pathlib import Path
+          from datetime import datetime,timezone
+          data=json.loads(Path('session-exchange/fixtures.json').read_text())
+          data.pop('sessions')
+          Path('session-exchange/run.json').write_text(json.dumps(data))
+          approval={'authorized':True,'environment':'isolated-staging','profile':'sustained','max_sessions':500,'max_duration_seconds':1800,'spending_cap_usd':0,'approved_at':datetime.now(timezone.utc).isoformat(),'source':'User-approved conditional500 sustained qualification after generator and actual-stack review; existing isolated runner, no production or purchases'}
+          Path('session-exchange/approval.json').write_text(json.dumps(approval))
+          PYAPPROVAL
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter /app/lab notification-prepare
+          docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pg_stat_statements; ANALYZE;'
+      - name: Measure unchanged500 sustained stage with workers and mock receipt tail
+        run: bash deploy/notification-lab/qualified-500.sh
+      - name: Reconcile all offered and acknowledged writes even after abort
+        if: always()
+        run: |
+          test ! -d session-evidence || docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml run --rm --no-deps verifier >session-evidence/abort-or-final-reconciliation.jsonl
+
+      - name: Preserve collection provenance and failure evidence
+        if: always()
+        run: |
+          mkdir -p session-evidence
+          git rev-parse HEAD >session-evidence/source.txt
+          cp .github/workflows/worker-role-qualification.yml session-evidence/workflow.yml
+          cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py,generator_prewarm.py,qualified-500.sh,ramp.sh,receipt-tail.sh} session-evidence/
+          printf '%s\n' "$LAB_CALIBRATION_DB_MEMORY" >session-evidence/requested-db-memory.txt
+          printf '%s\n' "$LAB_LONG_GENERATOR_RUN" >session-evidence/generator-proof-run.txt
+          cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} session-evidence/
+          docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color >session-evidence/final-services.log
+          for file in summary.json timeseries.json k6.log k6-exit-code.txt; do test ! -f "session-exchange/$file" || cp "session-exchange/$file" session-evidence/; done
+          test ! -f session-exchange/provider-journal.jsonl || cp session-exchange/provider-journal.jsonl session-evidence/
+          docker inspect $(docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml ps -q) >session-evidence/container-limits.json
+          sudo chown -R "$(id -u):$(id -g)" session-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qualified-500-${{ github.run_id }}
+          path: session-evidence/
           retention-days: 14
       - name: Remove only isolated disposable lab
         if: always()
