@@ -187,9 +187,6 @@ jobs:
         run: |
           mkdir -p query-evidence
           cp cmd/capacity-lab/query_diagnostic.go deploy/notification-lab/query.sh deploy/notification-lab/query-compose.yml query-evidence/
-      - name: Compare sender identity candidate against retained function
-        if: github.event.inputs.phase == 'sender-profile'
-        run: LAB_PROFILE_SENDER=1 bash deploy/notification-lab/trigger-profile.sh
       - name: Preserve collection provenance and failure evidence
         if: always()
         run: |
@@ -312,6 +309,26 @@ jobs:
       - name: Profile actual notification triggers and isolated database CPU scaling
         if: github.event.inputs.phase == 'trigger-profile'
         run: bash deploy/notification-lab/trigger-profile.sh
+      - name: Compare sender identity candidate against retained function
+        if: github.event.inputs.phase == 'sender-profile'
+        run: LAB_PROFILE_SENDER=1 bash deploy/notification-lab/trigger-profile.sh
+      - name: Reject preparation-only or incomplete diagnostic runs
+        if: github.event.inputs.phase != 'calibration'
+        env:
+          REQUESTED_PHASE: ${{ github.event.inputs.phase }}
+        run: |
+          python3 - <<'PYMEASURED'
+          import json,os
+          from pathlib import Path
+          p=Path('calibration-evidence/trigger-profile')
+          assert len(list(p.glob('*-pgbench.txt')))==4, 'Requested four measured arms did not execute'
+          assert len(list(p.glob('*-plan.json')))==4, 'Actual trigger plans missing'
+          if os.environ['REQUESTED_PHASE']=='sender-profile':
+              rows=[json.loads(x.read_text()) for x in p.glob('*-equality.json')]
+              assert len(rows)==4 and all(r['cases']>=4000 and r['mismatches']==0 for r in rows), 'Sender result equality did not pass in every arm'
+              definitions=[x.read_text() for x in sorted(p.glob('*-function.txt'))]
+              assert len(definitions)==4 and ['candidate-function.sql' in x for x in definitions]==[False,True,True,False], 'Required original/candidate/candidate/original order absent'
+          PYMEASURED
       - name: Preserve collection provenance and failure evidence
         if: always()
         run: |

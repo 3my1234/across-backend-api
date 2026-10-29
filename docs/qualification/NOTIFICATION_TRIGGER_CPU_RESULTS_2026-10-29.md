@@ -18,3 +18,5 @@ Concrete candidate: ordinary user sender snapshot in migration100 unnecessarily 
 Next decision depends on that comparison: adopt only if sender snapshots match and full-trigger measured cost improves. Gateway1CPU vs0.25CPU has separately measuredlatencybenefit, but no allocation change has been applied to an actualapplicationcalibration. Full500/1000 remain blocked. MainVPS/Coolify/unrelatedsite,externalPostgreSQL,Redis,DNS,K3s/mobile untouched.
 
 Evidence:qualification/trigger-profile-20261029/40877066781/artifacts(50files),analysis.json,SHA256SUMS.json. PostgreSQL reference:https://www.postgresql.org/docs/16/using-explain.html (trigger timings and EXPLAINmeasurement caveats).
+
+Coverage clarification:session fixture creates native push tokens but no browser web-push subscriptions. Web trigger invocation is real, but its timing here covers no-subscriber lookup, not browser enqueue/delivery. Candidate identity equality is helper-output proof, not end-to-end browser notification delivery.
