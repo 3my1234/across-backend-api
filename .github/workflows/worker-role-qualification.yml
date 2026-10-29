@@ -8,6 +8,11 @@ on:
         type: choice
         options: [roles, receipts, expanded, inbox, system, queries, generator, generator-sustained, generator-memory]
         default: roles
+      generator_memory:
+        description: Explicit isolated generator allocation;70pct headroom gate unchanged
+        type: choice
+        options: [2g, 4g]
+        default: 2g
 permissions:
   contents: read
 jobs:
@@ -16,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event.inputs.phase == 'generator-sustained' && 50 || 20 }}
     env:
+      LAB_GENERATOR_MEMORY: ${{ github.event.inputs.generator_memory || '2g' }}
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/generator-exchange
       LAB_GENERATOR_SUITE_DIR: ${{ github.workspace }}/deploy/session-lab
       LAB_INVESTIGATION_PHASE: system

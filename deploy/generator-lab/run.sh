@@ -2,7 +2,13 @@
 set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${LAB_INVESTIGATION_PHASE:-} == system ]]
 dc() { docker compose -f deploy/generator-lab/compose.yml "$@"; }
+case "${LAB_GENERATOR_MEMORY:-2g}" in
+ 2g) memory_bytes=2147483648;;
+ 4g) memory_bytes=4294967296;;
+ *) echo 'Only reviewed2GiB/4GiB generator allocations are permitted' >&2; exit 1;;
+esac
 mkdir -p generator-exchange generator-evidence
+printf '%s\n' "$memory_bytes" >generator-evidence/requested-generator-memory-bytes.txt
 python3 deploy/generator-lab/verify_source.py >generator-evidence/qualified-harness-proof.json
 git rev-parse HEAD >generator-evidence/source.txt
 sha256sum deploy/session-lab/{sessions.js,policy.mjs,transport.mjs,established.mjs} >generator-evidence/unchanged-harness.sha256
@@ -47,15 +53,11 @@ for mode in "${modes[@]}"; do
  wait "$hostwatch" || true
  trap - EXIT
  docker logs atlxpres-generator-sessions-measured >"$arm/k6.log" 2>&1
- # Only after the measured container exits: validate and reconstruct every byte.
- gzip -t generator-exchange/timeseries.json.gz
- sha256sum generator-exchange/timeseries.json.gz >"$arm/compressed-trace.sha256"
- gzip -dc generator-exchange/timeseries.json.gz >generator-exchange/timeseries.json
  dc exec -T gateway wget -qO- http://localhost:8080/generator-stats >"$arm/target-stats.json"
  docker inspect atlxpres-generator-sessions-measured >"$arm/generator-inspect.json"
  for file in summary.json timeseries.json; do cp "generator-exchange/$file" "$arm/"; done
  set +e
- python3 deploy/generator-lab/gate.py "$arm" "$quota" >"$arm/gate-output.txt" 2>"$arm/gate-errors.txt"
+ python3 deploy/generator-lab/gate.py "$arm" "$quota" "$memory_bytes" >"$arm/gate-output.txt" 2>"$arm/gate-errors.txt"
  gate_exit=$?
  set -e
  echo "$gate_exit" >"$arm/gate-exit.txt"

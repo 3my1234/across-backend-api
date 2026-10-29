@@ -8,8 +8,7 @@ services:
   sessions:
     image: grafana/k6:2.3.0
     user: '0:0'
-    entrypoint: [/bin/sh]
-    command: [/recorder.sh]
+    command: [run, --out, 'json=/exchange/timeseries.json', /suite/sessions.js]
     environment:
       K6_NO_USAGE_REPORT: 'true'
       K6_NO_COLOR: 'true'
@@ -18,10 +17,10 @@ services:
       LAB_SESSION_MIX: mixed
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
-    volumes: ['./record-output.sh:/recorder.sh:ro', '${LAB_GENERATOR_SUITE_DIR:?explicit unchanged or locally prepared suite required}:/suite:ro', '${LAB_EXCHANGE_DIR:?explicit synthetic exchange required}:/exchange']
+    volumes: ['${LAB_GENERATOR_SUITE_DIR:?explicit unchanged or locally prepared suite required}:/suite:ro', '${LAB_EXCHANGE_DIR:?explicit synthetic exchange required}:/exchange']
     networks: [lab]
     cpus: ${LAB_GENERATOR_CPUS:-1}
-    mem_limit: 2g
+    mem_limit: ${LAB_GENERATOR_MEMORY:-2g}
 networks:
   lab:
     internal: true

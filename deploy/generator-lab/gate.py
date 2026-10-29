@@ -13,7 +13,13 @@ def reviewed_profile(configuration):
     if seconds is None or configuration.get('seconds')!=seconds or configuration.get('target')!=500:raise ValueError('Unexpected reviewed500-session profile or duration')
     return profile,seconds
 
-def analyze(directory, quota):
+def memory_headroom(peak, declared, actual):
+    if declared not in (2*1024**3,4*1024**3) or actual!=declared:
+        raise ValueError('Generator memory allocation does not match the explicit reviewed budget')
+    return peak < .7*declared
+
+
+def analyze(directory, quota, memory_bytes=2*1024**3):
     root=Path(directory)
     summary=json.loads((root/'summary.json').read_text())
     metrics=summary['metrics']
@@ -60,6 +66,8 @@ def analyze(directory, quota):
     targets=[r for name,r in result.items() if 'gateway' in name]
     if len(generators)!=1 or len(targets)!=1:raise ValueError('Missing unambiguous generator/target telemetry')
     generator=generators[0];target=targets[0]
+    inspected=json.loads((root/'generator-inspect.json').read_text())[0]
+    actual_memory=inspected['HostConfig']['Memory']
     stats=json.loads((root/'target-stats.json').read_text())
     assertions={
       'k6_exit_zero':int((root/'exit-code.txt').read_text())==0,
@@ -77,13 +85,13 @@ def analyze(directory, quota):
       'generator_cpu_p95_under_70pct':generator['p95_cpu_quota_fraction']<.70,
       'generator_burst_cpu_p95_under_85pct':generator['burst_p95_cpu_quota_fraction'] is not None and generator['burst_p95_cpu_quota_fraction']<.85,
       'generator_throttle_periods_under_1pct':generator['throttled_period_fraction']<.01,
-      'generator_memory_under_70pct':generator['peak_memory_bytes']<.7*2*1024**3,
+      'generator_memory_under_70pct':memory_headroom(generator['peak_memory_bytes'],memory_bytes,actual_memory),
       'generator_no_oom':generator['oom_events']==0,
       'mock_cpu_p95_under_70pct':target['p95_cpu_quota_fraction']<.70,
       'mock_no_oom':target['oom_events']==0,
     }
-    return {'independent_generator_gate_passed':all(assertions.values()),'assertions':assertions,'failed_original_thresholds':failures,'offered':sum(observed),'completed':len(ended),'measured_seconds':end-begin,'requested_seconds':requested_seconds,'vus500_samples':sum(begin<=stamp(t)<=end for t in vus500),'http_per_second':len(ended)/(end-begin),'target':stats,'containers':result,'sample_interval_p99_seconds':percentile(intervals,.99),'scope':'Unchanged 500-VU session actions against synthetic stateful HTTP; no application/database/worker capacity claim. Does not prove shared-host headroom during actual qualification.'}
+    return {'generator_memory_limit_bytes':memory_bytes,'independent_generator_gate_passed':all(assertions.values()),'assertions':assertions,'failed_original_thresholds':failures,'offered':sum(observed),'completed':len(ended),'measured_seconds':end-begin,'requested_seconds':requested_seconds,'vus500_samples':sum(begin<=stamp(t)<=end for t in vus500),'http_per_second':len(ended)/(end-begin),'target':stats,'containers':result,'sample_interval_p99_seconds':percentile(intervals,.99),'scope':'Unchanged 500-VU session actions against synthetic stateful HTTP; no application/database/worker capacity claim. Does not prove shared-host headroom during actual qualification.'}
 
 if __name__=='__main__':
-    output=analyze(sys.argv[1],float(sys.argv[2]));Path(sys.argv[1],'gate.json').write_text(json.dumps(output,indent=2));print(json.dumps(output,indent=2))
+    output=analyze(sys.argv[1],float(sys.argv[2]),int(sys.argv[3]) if len(sys.argv)>3 else 2*1024**3);Path(sys.argv[1],'gate.json').write_text(json.dumps(output,indent=2));print(json.dumps(output,indent=2))
     sys.exit(0 if output['independent_generator_gate_passed'] else 1)
