@@ -3,6 +3,7 @@ from safety import reasons, validate_inventory, LABEL
 from watchdog import delta
 from relay import validate as validate_peers
 from access import handle as access_handle
+from control import command as container_command
 import json
 from verify_cgroup import verify_files
 from pathlib import Path
@@ -13,6 +14,11 @@ class SafetyTests(unittest.TestCase):
         return dict(available_bytes=4*2**30,disk_free_bytes=40*2**30,oom=False,
             production_healthy=True,cpu_high_seconds=0,iowait_high_seconds=0,
             health_failures=0,latency_failures=0,peer_heartbeat_age_seconds=0)
+    def test_control_rejects_shell_production_and_db_override(self):
+        m=dict(role="database",services={"postgres":"a"*64},container_ids=["a"*64])
+        for op in (dict(action="exec",service="postgres",args=["sh"]),dict(action="exec",service="production",args=["psql"]),dict(action="exec",service="postgres",args=["psql","-d","across_db"]),dict(action="rm",service="postgres")):
+            with self.assertRaises(ValueError):container_command(m,op)
+        self.assertEqual(container_command(m,dict(action="stop",service="postgres"))[-1],"a"*64)
     def test_relay_requires_both_fresh_advancing_peers(self):
         run="cohost-"+"a"*16
         good=[dict(run=run,role=r,age_seconds=1,sequence=10) for r in ("main","database")]

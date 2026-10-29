@@ -27,7 +27,7 @@ def main():
     ids=m.get("container_ids",[])
     raw=subprocess.check_output(["docker","inspect",*ids],text=True,timeout=10)
     records=json.loads(raw);validate_inventory(m,records)
-    expected=m["run"]+"-"+role+".slice"
+    expected=m["run"].replace("-", "")+role+".slice"
     for record in records:
         pid=record["State"].get("Pid",0)
         if pid<=0:raise ValueError("container must be running for ancestry verification")

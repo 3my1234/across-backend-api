@@ -12,7 +12,7 @@ function render(input) {
   }
   const base = '/root/atlxpres-cohost/'+input.run;
   const label = {'atlxpres.cohost.run':input.run};
-  const parent = input.run+'-'+input.role+'.slice';
+  const parent = input.run.replaceAll('-','')+input.role+'.slice';
   if (input.role === 'database') return {
     name:input.run+'-database',
     services:{postgres:{image:input.images.postgres,
@@ -35,6 +35,7 @@ function render(input) {
   for(const [name,s] of Object.entries(services)) {
     delete s.build; delete s.depends_on;
     s.image = name === 'redis' ? input.images.redis : name === 'gateway' ? input.images.gateway : input.images.app;
+    if(['seed','exporter','verifier','queue-check','lifecycle'].includes(name)) s.command=['/bin/sleep','infinity'];
     s.labels=label;s.cgroup_parent=parent;s.restart='no';s.memswap_limit=s.mem_limit;s.pids_limit=256;
     if(s.volumes) s.volumes=s.volumes.map(v=>v.includes(':/exchange') ? base+'/exchange:/exchange'+(v.endsWith(':ro')?':ro':'') : v);
     if(name==='gateway') {

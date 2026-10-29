@@ -2,6 +2,7 @@
 No shell invocation. Installed only after separate host setup approval.
 """
 import json
+import base64
 import os
 from pathlib import Path
 import re
@@ -36,6 +37,13 @@ def main():
     for p in (base,base/"manifest.json"):
         s=p.stat()
         if s.st_uid!=0 or s.st_mode&0o022:raise ValueError("unsafe ownership or permissions")
-    print(handle(base,os.environ.get("SSH_ORIGINAL_COMMAND","")),flush=True)
+    command=os.environ.get("SSH_ORIGINAL_COMMAND","")
+    if command.startswith("control "):
+        encoded=command[8:]
+        if len(encoded)>100000:raise ValueError("oversized control request")
+        operation=json.loads(base64.b64decode(encoded,validate=True))
+        from control import run
+        raise SystemExit(run(base,operation))
+    print(handle(base,command),flush=True)
 
 if __name__=="__main__":main()

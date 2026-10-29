@@ -41,8 +41,12 @@ def main():
             for key in ("host","client"):
                 call("ssh-keygen","-q","-t","ed25519","-N","","-f",str(base/key))
             public=(base/"client.pub").read_text().strip()
+            run="cohost-"+"d"*16
+            access_base=base/run;access_base.mkdir(mode=0o700)
+            (access_base/"manifest.json").write_text(json.dumps(dict(run=run,role="database",container_ids=[pg],services={"postgres":pg})))
+            helper=str(Path(__file__).with_name("access.py").resolve())
             auth=base/"authorized_keys"
-            auth.write_text(f'restrict,port-forwarding,permitopen="127.0.0.1:{db_port}",command="/bin/false" '+public+"\n")
+            auth.write_text(f'restrict,port-forwarding,permitopen="127.0.0.1:{db_port}",command="/usr/bin/python3 {helper} {access_base}" '+public+"\n")
             auth.chmod(0o600)
             config=base/"sshd_config"
             config.write_text(f"Port {ssh_port}\nListenAddress 127.0.0.1\nHostKey {base/'host'}\nPidFile {base/'sshd.pid'}\nAuthorizedKeysFile {auth}\nStrictModes yes\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowTcpForwarding local\nAllowStreamLocalForwarding local\nGatewayPorts no\nLogLevel VERBOSE\n")
@@ -65,6 +69,11 @@ def main():
             destination=call("psql","-h",str(base),"-p","55432","-U","lab","-d","capacity_lab","-XAtc",
                 "SELECT current_database() || ':' || marker FROM capacity_lab_identity",env=env)
             assert destination=="capacity_lab:disposable-compose-only",destination
+            import base64
+            operation=dict(action="exec",service="postgres",args=["psql","-U","lab","-d","capacity_lab","-XAt","-v","ON_ERROR_STOP=1"])
+            encoded=base64.b64encode(json.dumps(operation).encode()).decode()
+            controlled=call(*common,"root@127.0.0.1","control "+encoded,input="SELECT marker FROM capacity_lab_identity;\n")
+            assert controlled=="disposable-compose-only",controlled
             # Forced command denies arbitrary shell, even for the accepted key.
             assert subprocess.run(common+["root@127.0.0.1","echo should-not-run"],stdout=subprocess.PIPE,stderr=log).returncode!=0
             bad_sock=base/"denied.sock"
