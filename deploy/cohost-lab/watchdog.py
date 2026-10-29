@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 from safety import reasons
 
 URLS = ("https://api.atlxpres.com/api/v1/ready",
@@ -31,11 +30,18 @@ def delta(before, after):
 def probe(url):
     start=time.monotonic()
     try:
-        request=urllib.request.Request(url,headers={"User-Agent":"ATL-Xpress-cohost-safety/1.0"})
-        with urllib.request.urlopen(request,timeout=2) as response:
-            body=response.read(8192)
-            ok=response.status==200
-            if url.endswith("/ready"): ok=ok and json.loads(body).get("ok") is True
+        ready=url.endswith('/ready')
+        # curl races dual-stack connections and bounds the COMPLETE transfer.
+        # No retries, forced address, relaxed TLS or site-specific exceptions.
+        args=['curl','-q','--silent','--show-error','--location','--max-redirs','5',
+              '--proto','=https','--proto-redir','=https','--max-time','2',
+              '--connect-timeout','2','--user-agent','ATL-Xpress-cohost-safety/1.0',
+              '--output','-' if ready else os.devnull,'--write-out','\n%{http_code}']
+        if ready:args.extend(['--max-filesize','8192'])
+        result=subprocess.run(args+[url],capture_output=True,text=True,timeout=2.5)
+        body,separator,status=result.stdout.rpartition('\n')
+        ok=result.returncode==0 and bool(separator) and status.strip()=='200'
+        if ready:ok=ok and len(body.encode())<=8192 and json.loads(body).get('ok') is True
         return url,ok,time.monotonic()-start
     except Exception:
         return url,False,time.monotonic()-start
