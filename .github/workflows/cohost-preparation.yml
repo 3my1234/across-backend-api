@@ -18,7 +18,7 @@ jobs:
         run: |
           npm install --prefix /tmp/cohost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
           NODE_PATH=/tmp/cohost-tools/node_modules node deploy/cohost-lab/test-render.cjs
-          python3 -m unittest discover -s deploy/cohost-lab -p test_safety.py -v
+          python3 -m unittest discover -s deploy/cohost-lab -p 'test_*.py' -v
           python3 -m py_compile deploy/cohost-lab/safety.py deploy/cohost-lab/watchdog.py
       - name: Validate stop ownership in disposable CI only
         run: |
