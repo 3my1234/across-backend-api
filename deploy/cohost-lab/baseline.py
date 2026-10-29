@@ -20,7 +20,12 @@ def main():
     while time.monotonic()-start<300 or min(map(len,values.values()))<60:
         with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(probe,URLS))
         for url,ok,seconds in results:
-            if not ok or seconds>2:raise ValueError('baseline health failure; do not arm test')
+            if not ok or seconds>2:
+                failure=dict(baseline='failed',url=url,healthy=ok,seconds=seconds,
+                    completed_samples={u:len(v) for u,v in values.items()},load_started=False)
+                a.output.with_name('baseline-failure.json').write_text(json.dumps(failure,indent=2))
+                print(json.dumps(failure),flush=True)
+                raise ValueError('baseline health failure; do not arm test')
             values[url].append(seconds)
         time.sleep(5)
     doc=dict(observed_seconds=time.monotonic()-start,finished_unix=time.time(),urls={
