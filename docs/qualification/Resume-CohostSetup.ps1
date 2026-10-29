@@ -1,7 +1,7 @@
 param([switch]$ContinueStaged)
 $ErrorActionPreference = 'Stop'
 $workspace = 'C:\Users\EMMA\Desktop\gouwu'
-$run = 'cohost-6d6c5f9220874022'
+$run = 'cohost-2f12dc3ecbf8acb1'
 $review = Join-Path $workspace "qualification\cohost-review\$run"
 $private = Join-Path $workspace "qualification\cohost-private\$run"
 $remote = "/root/atlxpres-cohost/$run"
@@ -44,7 +44,7 @@ foreach ($role in @('main','database')) {
     try { Native -exe 'tar' -arguments @('-cf',$archive,'-C',$rolePath,'.') }
     finally { Remove-Item -LiteralPath (Join-Path $rolePath 'main-database.key') -ErrorAction SilentlyContinue }
     # Binary-safe SCP; never pipe an image archive through Windows PowerShell.
-    Remote $address "cd '$remote' && test ! -e manifest.json && test -f request.json && echo '020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366  images.tar.gz' | sha256sum -c -"
+    Remote $address "if [ ! -d '$remote' ]; then test -f '/root/atlxpres-cohost/cohost-6d6c5f9220874022/cleanup.complete' && test ! -L '/root/atlxpres-cohost/cohost-6d6c5f9220874022/images.tar.gz' && mkdir -m 700 '$remote' && ln '/root/atlxpres-cohost/cohost-6d6c5f9220874022/images.tar.gz' '$remote/images.tar.gz' || exit 1; fi; cd '$remote' && test ! -e manifest.json && test -f request.json && echo '020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366  images.tar.gz' | sha256sum -c -"
     Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$archive,"root@${address}:$remote/setup.tar")
     Remove-Item -LiteralPath $archive
     Remote $address "umask 077; cd '$remote' && tar -xf setup.tar && chmod -R go-rwx '$remote' && rm setup.tar"
@@ -62,7 +62,7 @@ foreach ($role in @('main','database')) {
 $baselineCode = @'
 import json,sys,time,subprocess
 from pathlib import Path
-base=Path('/root/atlxpres-cohost/cohost-6d6c5f9220874022')
+base=Path('/root/atlxpres-cohost/cohost-2f12dc3ecbf8acb1')
 sys.path.insert(0,str(base/'tools'))
 from baseline import validate
 if (base/'manifest.json').exists():raise RuntimeError('Setup already started; do not restage')
@@ -106,7 +106,7 @@ try {
         try {
             Remote $address "python3 '$remote/tools/operator_setup.py' '$remote' cleanup"
             # Explicit public metadata only; NEVER copy the private tunnel key.
-            Remote $address "cd '$remote' && tar -cf evidence.tar --ignore-failed-read request.json manifest.json baseline.json baseline-failure.json sample.json watchdog.jsonl verification.complete cleanup.complete"
+            Remote $address "cd '$remote' && tar -cf evidence.tar --ignore-failed-read request.json manifest.json compose.runtime.json image-identities.json image-import.log baseline.json baseline-failure.json sample.json watchdog.jsonl verification.complete cleanup.complete"
             Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',"root@${address}:$remote/evidence.tar",(Join-Path $evidence "$role-evidence.tar"))
         } catch { Write-Warning "${role}: $($_.Exception.Message). Independent cleanup task remains responsible for this run." }
     }

@@ -88,3 +88,8 @@ Original gates remain: zero controlled-overload responses; error rate<0.005; con
 User confirmed samnadoilandgas.sportbanter.online was deliberately removed. It is excluded from current public health checks. Protect APIready, unlimitedenergysystems.com, atlxpres.com and every currently running production container with unchanged thresholds. This is an inventory correction, not authorization to restart or modify any production website.
 
 Both imagearchives were uploaded successfully before baseline stopped; retain them. Use qualification/Resume-CohostSetup.ps1, which verifies both existing remote archiveSHA256 values and uploads ONLY small updated packages. Same reviewednonce/immutableCompose/resourcecaps; fresh protected-site baselines and actualruntimeverification still mandatory. Refresh only uninstalled temporary restricted key expiry to invocation+3hours within existing setup-only authorization. Original Invoke-CohostSetup.ps1 is not a resume path. No fixture/load authorization.
+
+
+## Successor attempt after clean pre-container failure
+
+Oldcohost-6d6c5f9220874022 cleanupcomplete confirmed on bothhosts; no testcontainerswerecreated. Newcohost-2f12dc3ecbf8acb1 continues SAMEsetup-onlyapproval/caps, unchangedComposeexceptnonce/rootpaths. Reuseolduploadedarchivesviahardlinkafteroldcleanupcheck+SHAverification, no largeuploads. ImageIDs may use verifiedarchiveconfigORitsmanifestdigest acrossDockerstores, retaining exactsamecontentandplatform; reviewedComposeunchanged, runtimeimage-onlyfile andidentitymap retained. CI40955483705 at71a318a PASSED25tests+actualDockerarchiveidentityroundtrip+allprevioussafetyproofs. NoLoad/fixtureapproval.
