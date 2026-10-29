@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${LAB_SESSION_TARGET:-} == 500 && ${LAB_SESSION_PROFILE:-} == sustained && ${LAB_INVESTIGATION_PHASE:-} == ramp ]]
 mkdir -p session-exchange session-evidence
+docker run --rm --network none atlxpres-capacity-lab:local sha256sum /app/api /app/lab >session-evidence/binaries.sha256
 python3 - <<'PYGLUE'
 from pathlib import Path
 extra=' -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml'
