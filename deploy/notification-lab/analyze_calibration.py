@@ -56,7 +56,7 @@ def analyze(arm):
         raise ValueError('Missing measured request boundaries; do not fabricate zero-load capacity')
     begin, end = min(started), max(ended)
     resources = defaultdict(lambda: {'cores': [], 'quota_fraction': [], 'seconds': 0.0,
-                                    'cpu_seconds': 0.0, 'throttled': 0, 'periods': 0,
+                                    'cpu_seconds': 0.0, 'throttled': 0, 'periods': 0, 'burst_fraction': [],
                                     'peak_memory_bytes': 0, 'events': Counter()})
     previous = {}
     sampler = []
@@ -84,6 +84,8 @@ def analyze(arm):
                 r['cores'].append(cores)
                 if maximum != 'max':
                     r['quota_fraction'].append(cores / (int(maximum) / int(period)))
+                    if now <= begin + 6:
+                        r['burst_fraction'].append(cores / (int(maximum) / int(period)))
                 r['seconds'] += elapsed
                 r['cpu_seconds'] += delta / 1e6
                 r['throttled'] += max(0, item['cpu'].get('nr_throttled', 0) - before['cpu'].get('nr_throttled', 0))
@@ -98,6 +100,7 @@ def analyze(arm):
             'sampled_seconds': r['seconds'], 'mean_cpu_cores': r['cpu_seconds'] / r['seconds'],
             'p95_cpu_cores': percentile(r['cores'], .95),
             'p95_cpu_quota_fraction': percentile(r['quota_fraction'], .95),
+            'initial_six_seconds_p95_cpu_quota_fraction': percentile(r['burst_fraction'], .95),
             'throttled_period_fraction': r['throttled'] / max(1, r['periods']),
             'peak_memory_bytes': r['peak_memory_bytes'], 'memory_max': r['memory_max'],
             'memory_event_deltas': dict(r['events'])}
