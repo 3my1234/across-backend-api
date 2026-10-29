@@ -8,13 +8,13 @@ Updated 29 October 2026, Africa/Lagos. Read this current checkpoint first. The p
 |---|---|---|
 | Notification batching | Implemented on the isolated backend branch. Correctness, concurrent retries, batch boundaries, final-page rollback, privacy and actual PostgreSQL receipt-worker recovery passed in **40854663425**, with no skipped required tests. | Full application capacity is not established by the microbenchmark. |
 | Matched batching benchmark | SQL calls **1,100 -> 100** per100 transactions; cumulative SQL execution time **29?39% lower** across two ABBA runs. Controller-only throughput **2.37?2.58x**. | Preserve query-only scope; do not claim equivalent platform throughput or database CPU reduction. |
-| Independent generator | **RUNNING:** 40855200111, source `ac854e5b597a564c96ed2bbddda7d14315261d74`, 500 synthetic sessions for1,800 seconds at2 CPUs/2GiB. Safety/race/source gates passed. | Inspect the completed artifact and every duration, accounting and headroom gate. Do not start another copy. |
+| Independent generator | **FAILED memory headroom:** 40855200111, source `ac854e5b597a564c96ed2bbddda7d14315261d74`, 500 synthetic sessions for1,800 seconds at2 CPUs/2GiB. Full1,804.6s,449,839offers/completions; original thresholds/CPU passed; peak~2GiB failed70%memory gate. | Calibration stays blocked. Focused memory diagnostic40864170840 is running; do not repeat the long run blindly. |
 | Actual-stack calibration | Prepared, **NOT dispatched**. Explicit8GiB PostgreSQL memory ceiling; DB CPU2, generator CPU2/2GiB, application limits and workload unchanged. | Requires the completed successful long-generator proof and exact measured client. This is bounded180-second calibration, not sustained500 qualification. |
 | Full500/1,000 | **Not qualified.** No new actual application500 or1,000 run started in this continuation. | Shared-host/environment and application gates must pass before full500. No1,000 without a passing500 and review. |
 | K3s | Separate preparation branch, strict schema **13/13** resources and **10** policy/source tests passed. Placeholders intentionally block release. | Three future VPS, isolated live staging, transports/network/recovery validation and separate approval. No installation or apply. |
 | Mobile | APK63 accepted by the user; PR60 merged independently; all PR and postmerge checks passed. | Do not entangle mobile with backend qualification. Broader physical-device coverage remains distinct from visual acceptance. |
 
-The run's final result may arrive after this checkpoint. First inspect `GENERATOR_SUSTAINED_RESULTS_2026-10-29.md` and GitHub run40855200111. An in-progress run is not a pass.
+Generator40855200111 has completed and FAILED only memory headroom. Read `GENERATOR_SUSTAINED_RESULTS_2026-10-29.md`. Focused memory diagnostic40864170840 is now running; it cannot substitute for the sustained gate.
 
 ## Workspace and exact source references
 
@@ -86,7 +86,7 @@ Relevant reports: `ACTUAL_STACK_CALIBRATION_RESULTS_2026-10-28.md`, `NEARBY_ORDE
 
 ## Generator gate and next justified action
 
-Run40855200111 sourceac854e5 began its measurement step at10:09:32UTC/11:09:32Lagos, including serial authentication/preparation before1,800 measured seconds. Wait for its actual outcome. No duplicate dispatch.
+Run40855200111 sourceac854e5 began its measurement step at10:09:32UTC/11:09:32Lagos, including serial authentication/preparation before1,800 measured seconds. Its final outcome is FAILED memory headroom; do not dispatch another long run until the focused diagnostic is analyzed.
 
 Its gates require at least1,795 measured seconds,1,790seconds of CPU coverage and1,790snapshots at500VUs; original client thresholds, p95CPU<70%ofquota, initial6s p95<85%,<1%throttled periods, memory<70%of2GiB, noOOM/drops,500valid identities and complete offered/completed/mock accounting. The synthetic-target atomic message-ID correction is mock-only. This is generator qualification, not application/database/worker capacity.
 
@@ -146,3 +146,11 @@ No purchases, K3s installation on existing hosts, backend main merge, production
 4. Keep1,000 gated. If calibration fails, identify its specific blocker and propose only an evidence-supported correction or honest test-environment requirement.
 5. Keep K3s preparation intact. Await three new VPS and separate provisioning/installation/cutover approval. Do not disturb current production roles.
 6. Update this master, its tracked mirror, reports and exact commit/run references after each result. Use `BRANCH_STARTER_MESSAGE_2026-10-29.txt` only with this current checkpoint.
+
+## Current blocker update: generator memory
+
+Long run40855200111 completed1,804.592seconds with449,839offers=completions,500identities,1,800snapshots at500VUs, no dropped work/OOM and all original workload thresholds passed. Generator CPU p95 was17.43%of2CPU quota, burst31.45%, throttled periods0.0166%. Peak total cgroup memory reached~2GiB, failing the unchanged70%of2GiB headroom requirement. NOT qualified.
+
+A1.66GB generated metrics file may contribute through filesystem cache, but memory.stat was not recorded; process versus file-cache attribution is UNKNOWN. Focused180-second same-client/same-cap diagnostic40864170840 at5dce8fe now records that breakdown. No actual-stack calibration, full500,1,000 or production work was started. Do not bypass the failed gate or point calibration at the short diagnostic; it requires a passed1,800-second artifact.
+
+Backend qualification branch advanced only in tooling/docs: exact-client proofd2b6bad, consolidated master/archive/offline analyzer4672407, optionalI/O telemetry fix015fb92. Application source remains the previously tested batch candidate; no internal/migration/session-client changes. K3s branch0847178 and mobile merge remain separate.
