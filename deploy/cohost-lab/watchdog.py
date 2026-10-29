@@ -52,16 +52,18 @@ def state(ids):
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("manifest",type=Path)
-    ap.add_argument("--stop-test",action="store_true");a=ap.parse_args()
+    ap.add_argument("--stop-test",action="store_true")
+    ap.add_argument("--setup-only",action="store_true");a=ap.parse_args()
     m=json.loads(a.manifest.read_text());base=a.manifest.parent
     import re
     if m.get("role") not in ("main","database") or not re.fullmatch(r"cohost-[a-f0-9]{16}",m.get("run","")):
         raise ValueError("invalid manifest")
     ids=m.get("production_container_ids",[])
     if not ids or any(not re.fullmatch(r"[a-f0-9]{64}",x) for x in ids): raise ValueError("invalid production inventory")
-    baseline=json.loads((base/"baseline.json").read_text())
-    if set(baseline)!=set(URLS) or any(not 0<v<=2 for v in baseline.values()):
-        raise ValueError("five-minute successful baseline required")
+    from baseline import validate as validate_baseline
+    baseline=validate_baseline(json.loads((base/"baseline.json").read_text()),time.time())
+    if a.setup_only and m.get("load_authorized") is not False:raise ValueError("setup-only guard requires load disabled")
+    started=time.monotonic()
     before=cpu();last=time.monotonic();high_cpu=high_io=0
     failures={u:0 for u in URLS};slow={u:0 for u in URLS}
     initial_oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
@@ -76,6 +78,11 @@ def main():
             for url,ok,latency in results:
                 failures[url]=0 if ok else failures[url]+1
                 slow[url]=slow[url]+1 if latency>max(2,3*baseline[url]) else 0
+            current=json.loads(a.manifest.read_text())
+            if current.get("run")!=m["run"] or current.get("role")!=m["role"] or current.get("production_container_ids")!=ids:
+                raise ValueError("protected inventory changed")
+            if a.setup_only and current.get("load_authorized") is not False:raise ValueError("setup guard cannot authorize load")
+            m=current
             states=state(ids+m.get("container_ids",[]))
             prod=states[:len(ids)]
             oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
@@ -85,7 +92,7 @@ def main():
                 production_healthy=all(x.get("Running") and x.get("Health",{}).get("Status","healthy")=="healthy" for x in prod),
                 cpu_high_seconds=high_cpu,iowait_high_seconds=high_io,
                 health_failures=max(failures.values()),latency_failures=max(slow.values()),
-                peer_heartbeat_age_seconds=max(0,time.time()-peer.stat().st_mtime) if peer.exists() else 999)
+                peer_heartbeat_age_seconds=(0 if time.monotonic()-started<900 else 999) if a.setup_only else (max(0,time.time()-peer.stat().st_mtime) if peer.exists() else 999))
             (base/"sample.json").write_text(json.dumps(sample))
             with (base/"watchdog.jsonl").open("a") as log: log.write(json.dumps(dict(utc=time.time(),sample=sample))+"\n")
             why=reasons(sample,m["role"])

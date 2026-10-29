@@ -18,7 +18,7 @@ def scenario(case,sentinel):
         with tempfile.TemporaryDirectory() as directory:
             base=Path(directory);manifest=base/"manifest.json"
             manifest.write_text(json.dumps(dict(run=nonce,role="main",container_ids=[owned],production_container_ids=[sentinel])))
-            (base/"baseline.json").write_text(json.dumps({u:.01 for u in w.URLS}))
+            (base/"baseline.json").write_text(json.dumps(dict(observed_seconds=300,finished_unix=w.time.time(),urls={u:dict(successful_samples=60,p95_seconds=.01) for u in w.URLS})))
             if case!="peer-loss": (base/"peer.lease").touch()
             class FakeProc:
                 def __init__(self,text): self.text=text

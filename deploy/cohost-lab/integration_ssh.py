@@ -46,7 +46,9 @@ def main():
             (access_base/"manifest.json").write_text(json.dumps(dict(run=run,role="database",container_ids=[pg],services={"postgres":pg})))
             helper=str(Path(__file__).with_name("access.py").resolve())
             auth=base/"authorized_keys"
-            auth.write_text(f'restrict,port-forwarding,permitopen="127.0.0.1:{db_port}",command="/usr/bin/python3 {helper} {access_base}" '+public+"\n")
+            from datetime import datetime,timezone,timedelta
+            expiry=(datetime.now(timezone.utc)+timedelta(hours=1)).strftime("%Y%m%d%H%M%SZ")
+            auth.write_text(f'restrict,expiry-time="{expiry}",port-forwarding,permitopen="127.0.0.1:{db_port}",command="/usr/bin/python3 {helper} {access_base}" '+public+"\n")
             auth.chmod(0o600)
             config=base/"sshd_config"
             config.write_text(f"Port {ssh_port}\nListenAddress 127.0.0.1\nHostKey {base/'host'}\nPidFile {base/'sshd.pid'}\nAuthorizedKeysFile {auth}\nStrictModes yes\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowTcpForwarding local\nAllowStreamLocalForwarding local\nGatewayPorts no\nLogLevel VERBOSE\n")

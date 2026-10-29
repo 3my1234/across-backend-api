@@ -4,6 +4,10 @@ from watchdog import delta
 from relay import validate as validate_peers
 from access import handle as access_handle
 from control import command as container_command
+from stage_host import plan as setup_plan
+from baseline import validate as validate_baseline
+from install_keys import lines as key_lines
+from watchdog import URLS
 import json
 from verify_cgroup import verify_files
 from pathlib import Path
@@ -14,6 +18,26 @@ class SafetyTests(unittest.TestCase):
         return dict(available_bytes=4*2**30,disk_free_bytes=40*2**30,oom=False,
             production_healthy=True,cpu_high_seconds=0,iowait_high_seconds=0,
             health_failures=0,latency_failures=0,peer_heartbeat_age_seconds=0)
+    def test_key_scopes_have_expiry_and_only_test_port(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d)
+            (base/"request.json").write_text(json.dumps(dict(run="cohost-"+"a"*16,role="database",key_expiry_utc="20261030235959Z")))
+            for k in ("ci-database","main-database"):(base/(k+".pub")).write_text("ssh-ed25519 AAAA")
+            result=key_lines(base)
+            self.assertNotIn("port-forwarding",result[0]);self.assertIn("127.0.0.1:55432",result[1])
+            self.assertIn("expiry-time=",result[1]);self.assertNotIn("127.0.0.1:5432",result[1])
+    def test_baseline_must_be_fresh_complete_and_five_minutes(self):
+        d=dict(observed_seconds=300,finished_unix=1000,urls={u:dict(successful_samples=60,p95_seconds=.2) for u in URLS})
+        self.assertTrue(validate_baseline(d,1001))
+        with self.assertRaises(ValueError):validate_baseline(d,2000)
+        d["observed_seconds"]=30
+        with self.assertRaises(ValueError):validate_baseline(d,1001)
+    def test_setup_plan_contains_no_seed_api_worker_or_load(self):
+        run="cohost-"+"a"*16
+        service=dict(image="sha256:"+"b"*64,cgroup_parent=run.replace("-","")+"main.slice",labels={"atlxpres.cohost.run":run})
+        commands=setup_plan(dict(run=run,role="main"),dict(name=run+"-main",services={"redis":service}))
+        self.assertEqual(commands[-1][-2:],["start","redis"])
+        self.assertIn("--pull",commands[-2]);self.assertIn("never",commands[-2])
     def test_control_rejects_shell_production_and_db_override(self):
         m=dict(role="database",services={"postgres":"a"*64},container_ids=["a"*64])
         for op in (dict(action="exec",service="postgres",args=["sh"]),dict(action="exec",service="production",args=["psql"]),dict(action="exec",service="postgres",args=["psql","-d","across_db"]),dict(action="rm",service="postgres")):

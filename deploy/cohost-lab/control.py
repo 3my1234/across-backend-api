@@ -15,6 +15,8 @@ def command(manifest,operation):
         raise ValueError("unrecorded service")
     ident=ids[service]
     if not re.fullmatch(r"[a-f0-9]{64}",ident):raise ValueError("immutable ID required")
+    if action=="start" and service in ("api1","api2","gateway","notification-worker") and manifest.get("load_authorized") is not True:
+        raise ValueError("application startup/load not authorized")
     if action in ("start","stop","logs"):
         return ["docker",action,*( ["--time","2"] if action=="stop" else ["--tail","2000"] if action=="logs" else []),ident]
     if action!="exec":raise ValueError("operation denied")
@@ -23,6 +25,7 @@ def command(manifest,operation):
     if args[0]=="/app/lab":
         if service not in ("seed","exporter","verifier","queue-check","lifecycle"):raise ValueError("wrong lab service")
         if len(args)!=2 or args[1] not in LAB_COMMANDS:raise ValueError("unreviewed lab command")
+        if args[1]=="seed" and manifest.get("fixture_preparation_authorized") is not True:raise ValueError("fixture preparation not authorized")
     elif args[0]=="psql":
         if service!="postgres" or manifest["role"]!="database":raise ValueError("database host required")
         # Fixed host/database/user; SQL only through stdin. No metacommand or -h override.
