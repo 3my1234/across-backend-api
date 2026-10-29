@@ -22,9 +22,28 @@ python3 deploy/notification-lab/cgroup_sampler.py >"$out/cgroups.jsonl" 2>"$out/
 sampler=$!
 trap 'kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true' EXIT
 # Matched ABBA CPU allocation; no application capacity or production-equivalence claim.
+sql "SELECT pg_get_functiondef('notification_sender_identity(jsonb)'::regprocedure)" >"$out/original-function.sql"
+if [[ ${LAB_PROFILE_SENDER:-0} == 1 ]]; then
+ sql 'CREATE SCHEMA profile_baseline;' >/dev/null
+ sed 's/public.notification_sender_identity(/profile_baseline.notification_sender_identity(/' "$out/original-function.sql" | dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U lab -d capacity_lab
+ cp deploy/notification-lab/sender-candidate.sql "$out/candidate-function.sql"
+fi
 arm=0
-for cpus in 2 4 4 2; do
+budgets=(2 4 4 2)
+if [[ ${LAB_PROFILE_SENDER:-0} == 1 ]]; then budgets=(2 2 2 2); fi
+for cpus in "${budgets[@]}"; do
  arm=$((arm+1)); prefix="$out/arm-$arm-cpu-$cpus"
+ if [[ ${LAB_PROFILE_SENDER:-0} == 1 ]]; then
+  definition="$out/original-function.sql"
+  if [[ $arm == 2 || $arm == 3 ]]; then definition="$out/candidate-function.sql"; fi
+  dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U lab -d capacity_lab <"$definition"
+  echo "$definition" >"$prefix-function.txt"
+  sql "WITH cases AS (SELECT jsonb_build_object('sender_user_id',a.buyer,'provider_id',a.provider,'sender_is_provider',v) AS data FROM capacity_lab_actors a CROSS JOIN unnest(ARRAY['true','false','',NULL]) v UNION ALL SELECT jsonb_build_object('sender_user_id',a.provider_user,'provider_id',a.provider,'sender_is_provider',v) FROM capacity_lab_actors a CROSS JOIN unnest(ARRAY['true','false','',NULL]) v UNION ALL SELECT jsonb_build_object('sender_user_id',a.provider_user,'provider_id','invalid','sender_is_provider','true') FROM capacity_lab_actors a UNION ALL SELECT x FROM unnest(ARRAY['{}'::jsonb,NULL::jsonb,'{\"sender_user_id\":\"invalid\"}'::jsonb,'{\"sender_user_id\":null,\"sender_is_provider\":true}'::jsonb]) x) SELECT json_build_object('cases',count(*),'mismatches',count(*) FILTER(WHERE notification_sender_identity(data) IS DISTINCT FROM profile_baseline.notification_sender_identity(data))) FROM cases" >"$prefix-equality.json"
+  python3 - "$prefix-equality.json" <<'PYEQUALITY'
+import json,sys
+r=json.load(open(sys.argv[1]));assert r['cases']>=4000 and r['mismatches']==0, 'Sender identity result changed'
+PYEQUALITY
+ fi
  docker update --cpus "$cpus" "$container" >/dev/null
  docker inspect "$container" >"$prefix-limits.json"
  date -u +%FT%TZ >"$prefix-start.txt"
@@ -33,6 +52,9 @@ for cpus in 2 4 4 2; do
  date -u +%FT%TZ >"$prefix-end.txt"
 done
 docker update --cpus 2 "$container" >/dev/null
+if [[ ${LAB_PROFILE_SENDER:-0} == 1 ]]; then
+ dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U lab -d capacity_lab <"$out/original-function.sql"
+fi
 sql "SELECT json_build_array((SELECT count(*) FROM notifications),(SELECT count(*) FROM notification_push_deliveries),(SELECT count(*) FROM web_push_deliveries))" >"$out/after-counts.json"
 cmp "$out/before-counts.json" "$out/after-counts.json"
 kill "$sampler" 2>/dev/null || true; wait "$sampler" || true; trap - EXIT
