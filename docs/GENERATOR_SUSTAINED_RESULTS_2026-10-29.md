@@ -52,3 +52,7 @@ The next controlled variable is generator memory allocation, not workload or thr
 New1,800s run https://github.com/3my1234/across-backend-api/actions/runs/40866958782 at `5dc1fc983b5e157d82ea86a6c546c0b2cb4f592c` is RUNNING with direct recording,2CPU/4GiB. This is a changed isolated allocation and must be reported explicitly; it is not a2GiB headroom pass. Application/database traffic remains unstarted.
 
 The actual-stack calibration reverted compression at3498722 and now binds generator_memory_limit_bytes to its explicit requested generator allocation at4d658ef; default4g matches this candidate. For DB8g/gen4g it requires14GiB available host memory before startup. If the existing runner cannot meet that, stop as an environment prerequisite failure, not an app failure. Full500 and1,000 remain gated.
+
+## Final4GiB sustained result
+
+40866958782 PASSED:449,804offers/completions,1804.656s,500sessions,CPU p95 19.95%of2CPU,startup61.02%,peak2,687,139,840bytes/4GiB,noOOM/drops. Retained33files SHA256 manifest and independent summary/allocation/client review. Generator-only proof. The earlier2GiB memory failure and gzip startupCPU failure remain valid. Actual8GiB database calibration40872220566 has now been dispatched; no application capacity claim yet.
