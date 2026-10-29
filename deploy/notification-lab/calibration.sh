@@ -57,9 +57,9 @@ import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
 cpu=[json.loads(s) for s in (p/'cgroups.jsonl').read_text().splitlines() if s.strip()]
-assert cpu and all(any(name.endswith('-'+role+'-1') for name in cpu[-1]['containers']) for role in ('postgres','api1','api2'))
+assert cpu and all(any(name.endswith('-'+role+'-1') for name in cpu[-1]['containers']) for role in ('postgres','api1','api2')), 'Telemetry not ready: postgres/api cgroup samples pending'
 obs=[json.loads(s) for s in (p/'occupancy.jsonl').read_text().splitlines() if s.strip()]
-assert obs and any('database_activity' in s for s in obs)
+assert obs and any('database_activity' in s for s in obs), 'Telemetry not ready: database activity sample pending'
 PYSAMPLER
   then telemetry=true; break; fi
   sleep 0.5
@@ -114,6 +114,7 @@ python3 - <<'PYGATE'
 import json
 from pathlib import Path
 rows=[json.loads(p.read_text()) for p in sorted(Path('calibration-evidence').glob('*/result.json'))]
-assert len(rows)==1
-assert all(r['measured_exit']==0 and r['reconcile_exit']==0 and r['recovery_exit']==0 for r in rows), 'Diagnostic collection retained; at least one original software gate failed. No capacity qualification.'
+assert len(rows)==1, f'Expected exactly one calibration result, found {len(rows)}'
+failures=[{'arm':r['arm'], 'gate':gate, 'exit':r[gate]} for r in rows for gate in ('measured_exit','reconcile_exit','recovery_exit') if r[gate]!=0]
+assert not failures, f'Diagnostic collection retained; original gates failed: {json.dumps(failures)}. No capacity qualification.'
 PYGATE
