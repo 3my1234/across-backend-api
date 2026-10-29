@@ -470,6 +470,9 @@ jobs:
           printf '%s\n' "$LAB_CALIBRATION_DB_MEMORY" >session-evidence/requested-db-memory.txt
           printf '%s\n' "$LAB_LONG_GENERATOR_RUN" >session-evidence/generator-proof-run.txt
           cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} session-evidence/
+          test ! -f "$LAB_CALIBRATION_SUITE_DIR/sessions.js" || cp "$LAB_CALIBRATION_SUITE_DIR/sessions.js" session-evidence/executed-sessions.js
+          test ! -d "$LAB_CALIBRATION_SUITE_DIR" || sha256sum "$LAB_CALIBRATION_SUITE_DIR/"* >session-evidence/executed-suite.sha256
+          test ! -f session-exchange/fixtures.json || sha256sum session-exchange/fixtures.json >session-evidence/fixture.sha256
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color >session-evidence/final-services.log
           for file in summary.json timeseries.json k6.log k6-exit-code.txt; do test ! -f "session-exchange/$file" || cp "session-exchange/$file" session-evidence/; done
           test ! -f session-exchange/provider-journal.jsonl || cp session-exchange/provider-journal.jsonl session-evidence/
