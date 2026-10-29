@@ -247,6 +247,9 @@ jobs:
           gate=json.loads(p.read_text())
           assert gate['independent_generator_gate_passed'] and gate.get('requested_seconds')==1800 and gate['measured_seconds']>=1795, 'Long generator headroom not qualified'
           assert all(gate['assertions'].values()), 'Failed generator prerequisite'
+          normalized=lambda path: hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest()
+          assert normalized(Path('deploy/session-lab/sessions.js'))=='db3013f473b41fc7d35e01d7385d620b247b977e3dd86e9e8683d14a4bb337a3', 'Client differs from generator proof'
+          assert normalized(p.parent/'executed-sessions.js')=='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49', 'Measured generator client differs'
           assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_text(encoding='utf-8').encode()).hexdigest()=='01c98dc035f0ec63cb74ca979640b4dbed44e455c74e3f533a5f9917c8f5fb06'
           PYGEN
       - name: Verify exact qualified candidate and unchanged workload
