@@ -1,3 +1,4 @@
+param([switch]$ContinueStaged)
 $ErrorActionPreference = 'Stop'
 $workspace = 'C:\Users\EMMA\Desktop\gouwu'
 $run = 'cohost-6d6c5f9220874022'
@@ -12,13 +13,14 @@ function Native([string]$exe, [Parameter(ValueFromRemainingArguments=$true)][str
     if ($LASTEXITCODE -ne 0) { throw "$exe failed ($LASTEXITCODE); setup stopped." }
 }
 function Remote([string]$address, [string]$command) {
-    Native -exe 'ssh' -arguments @('-o','StrictHostKeyChecking=yes',"root@$address",$command)
+    Native -exe 'ssh' -arguments @('-o','ServerAliveInterval=15','-o','ServerAliveCountMax=6','-o','ConnectTimeout=20','-o','StrictHostKeyChecking=yes',"root@$address",$command)
 }
 if ((Get-FileHash -Algorithm SHA256 $bundle).Hash.ToLowerInvariant() -ne '020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366') { throw 'Image archive checksum mismatch' }
 Write-Host 'Approved SETUP ONLY resume. Reusing both uploaded image archives; no image uploads. Enter passwords locally.'
 # Retain the DB host key already obtained through the trusted authenticated SSH session.
 if (-not (Test-Path -LiteralPath (Join-Path $review 'main\database_known_hosts'))) { throw 'Trusted DB host-key pin is missing; stop.' }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+if (-not $ContinueStaged) {
 $expiry = [DateTime]::UtcNow.AddHours(3).ToString('yyyyMMddHHmmss') + 'Z'
 # Refresh only uninstalled temporary key expiry within the existing setup-only approval.
 foreach ($role in @('main','database')) {
@@ -47,9 +49,43 @@ foreach ($role in @('main','database')) {
     Remove-Item -LiteralPath $archive
     Remote $address "umask 077; cd '$remote' && tar -xf setup.tar && chmod -R go-rwx '$remote' && rm setup.tar"
 }
-# Both uploads finish BEFORE either short-lived setup guardian starts.
-Remote '173.212.219.169' "python3 '$remote/tools/operator_setup.py' '$remote' baseline"
-Remote '79.143.176.173' "python3 '$remote/tools/operator_setup.py' '$remote' baseline"
+} else {
+    foreach ($role in @('main','database')) {
+        $request = Get-Content -Raw -LiteralPath (Join-Path $review "$role\request.json") | ConvertFrom-Json
+        $deadline = [DateTime]::ParseExact($request.key_expiry_utc,'yyyyMMddHHmmss\Z',$null)
+        if ($deadline -lt [DateTime]::UtcNow.AddMinutes(30)) { throw 'Staged key expiry is too close; stop for a small-package refresh.' }
+    }
+    Write-Host 'Continuing staged packages. No uploads. Fresh completed baselines will be reused.'
+}
+# Reuse a valid completed baseline. Wait for a disconnected collector if present;
+# never start a second collector while the existing one is still running.
+$baselineCode = @'
+import json,sys,time,subprocess
+from pathlib import Path
+base=Path('/root/atlxpres-cohost/cohost-6d6c5f9220874022')
+sys.path.insert(0,str(base/'tools'))
+from baseline import validate
+if (base/'manifest.json').exists():raise RuntimeError('Setup already started; do not restage')
+def fresh():
+    try:validate(json.loads((base/'baseline.json').read_text()),time.time());return True
+    except (ValueError,OSError):return False
+if not fresh():
+    deadline=time.monotonic()+420
+    while True:
+        active=False
+        for path in Path('/proc').glob('[0-9]*/cmdline'):
+            try:active=active or str(base/'tools/baseline.py').encode() in path.read_bytes().split(b'\0')
+            except OSError:pass
+        if not active:break
+        if time.monotonic()>deadline:raise RuntimeError('Previous collector still running; no duplicate started')
+        time.sleep(2)
+    if not fresh():subprocess.run(['python3',str(base/'tools/operator_setup.py'),str(base),'baseline'],check=True,timeout=420)
+print('Fresh baseline validated; no load authorized.')
+'@
+$encodedBaseline = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($baselineCode))
+$baselineCommand = "python3 -c `"import base64;exec(base64.b64decode('$encodedBaseline'))`""
+Remote '173.212.219.169' $baselineCommand
+Remote '79.143.176.173' $baselineCommand
 try {
     Remote '79.143.176.173' "python3 '$remote/tools/operator_setup.py' '$remote' stage"
     Remote '173.212.219.169' "python3 '$remote/tools/operator_setup.py' '$remote' stage"
