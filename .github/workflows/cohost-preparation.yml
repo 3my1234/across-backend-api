@@ -1,5 +1,8 @@
 name: Cohost preparation safety checks
 on:
+  push:
+    branches: [experiment/launch-qualification]
+    paths: [deploy/cohost-lab/**, .github/workflows/cohost-preparation.yml]
   workflow_dispatch:
 permissions:
   contents: read
