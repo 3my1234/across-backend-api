@@ -15,7 +15,6 @@ import urllib.request
 from safety import reasons
 
 URLS = ("https://api.atlxpres.com/api/v1/ready",
-        "https://samnadoilandgas.sportbanter.online/",
         "https://unlimitedenergysystems.com/", "https://atlxpres.com/")
 
 
