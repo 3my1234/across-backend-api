@@ -8,6 +8,15 @@ on:
         type: choice
         options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, fanout]
         default: roles
+      generator_run:
+        description: Passed 30-minute independent generator proof run (calibration only)
+        type: string
+        default: ''
+      calibration_memory:
+        description: Isolated PostgreSQL RAM ceiling; CPU and application limits unchanged
+        type: choice
+        options: [8g, 1g]
+        default: 8g
 permissions:
   contents: read
 jobs:
@@ -198,6 +207,8 @@ jobs:
       LAB_SCENARIO: large-busy
       LAB_ACTOR_PAIRS: '500'
       LAB_DB_CPUS: '2'
+      LAB_CALIBRATION_DB_MEMORY: ${{ github.event.inputs.calibration_memory }}
+      LAB_LONG_GENERATOR_RUN: ${{ github.event.inputs.generator_run }}
       LAB_SESSION_TARGET: '500'
       LAB_SESSION_PROFILE: stage
       LAB_SESSION_AUTH_MODE: established
@@ -220,22 +231,27 @@ jobs:
         run: |
           python3 - <<'PYPROOF'
           import json,subprocess
-          for run in ('40747865966','40746907768'):
+          import os
+          proof=os.environ['LAB_LONG_GENERATOR_RUN']
+          assert proof.isdigit(), 'Explicit passed long-generator run required'
+          assert os.environ['LAB_CALIBRATION_DB_MEMORY'] in ('1g','8g')
+          for run in (proof,'40854663425','40746907768'):
               result=json.loads(subprocess.check_output(['gh','run','view',run,'--repo','3my1234/across-backend-api','--json','status,conclusion']))
               assert result['status']=='completed' and result['conclusion']=='success', 'Prerequisite did not pass; do not run calibration'
           PYPROOF
-          gh run download 40747865966 --repo 3my1234/across-backend-api --name generator-headroom-40747865966 --dir /tmp/generator-proof
+          gh run download "$LAB_LONG_GENERATOR_RUN" --repo 3my1234/across-backend-api --name "generator-headroom-$LAB_LONG_GENERATOR_RUN" --dir /tmp/generator-proof
           python3 - <<'PYGEN'
           from pathlib import Path
           import json,hashlib
           p=next(Path('/tmp/generator-proof').rglob('cpu-2-prewarm/gate.json'))
-          assert json.loads(p.read_text())['independent_generator_gate_passed'], 'Generator headroom not qualified'
+          gate=json.loads(p.read_text())
+          assert gate['independent_generator_gate_passed'] and gate.get('requested_seconds')==1800 and gate['measured_seconds']>=1795, 'Long generator headroom not qualified'
+          assert all(gate['assertions'].values()), 'Failed generator prerequisite'
           assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_text(encoding='utf-8').encode()).hexdigest()=='01c98dc035f0ec63cb74ca979640b4dbed44e455c74e3f533a5f9917c8f5fb06'
           PYGEN
-      - name: Verify unchanged original application and diagnostic safety
+      - name: Verify exact qualified candidate and unchanged workload
         run: |
-          git diff --exit-code 5ff5908 -- migrations/ cmd/api/ deploy/session-lab/policy.mjs
-          test "$(git diff --name-only 5ff5908 -- internal/)" = internal/controllers/driver_availability.go
+          git diff --exit-code 29ee9fa -- internal/ migrations/ cmd/api/ deploy/session-lab/
           bash -n deploy/notification-lab/calibration.sh
           python3 -m py_compile deploy/notification-lab/cgroup_sampler.py
           node --check deploy/session-lab/sessions.js
@@ -245,9 +261,11 @@ jobs:
           python3 - <<'PYMEM'
           from pathlib import Path
           available=int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:')))*1024
-          assert available>=10*1024**3, 'Insufficient existing runner headroom: stop, not an application result'
+          import os
+          required=(12 if os.environ['LAB_CALIBRATION_DB_MEMORY']=='8g' else 10)*1024**3
+          assert available>=required, 'Insufficient existing runner headroom: stop, not an application result'
           PYMEM
-      - name: Prepare identical synthetic baseline for all ABBA arms
+      - name: Prepare isolated synthetic baseline with recorded DB allocation
         run: |
           mkdir -p session-exchange calibration-evidence
           mkdir -p "$LAB_CALIBRATION_SUITE_DIR"
@@ -278,6 +296,8 @@ jobs:
           git rev-parse HEAD >calibration-evidence/source.txt
           cp .github/workflows/worker-role-qualification.yml calibration-evidence/workflow.yml
           cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py,generator_prewarm.py} calibration-evidence/
+          printf '%s\n' "$LAB_CALIBRATION_DB_MEMORY" >calibration-evidence/requested-db-memory.txt
+          printf '%s\n' "$LAB_LONG_GENERATOR_RUN" >calibration-evidence/generator-proof-run.txt
           cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} calibration-evidence/
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml logs --no-color >calibration-evidence/final-services.log
           sudo chown -R "$(id -u):$(id -g)" calibration-evidence

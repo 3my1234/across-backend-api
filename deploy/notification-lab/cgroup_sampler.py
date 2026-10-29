@@ -46,9 +46,12 @@ while running:
                 'memory_current': int((path / 'memory.current').read_text()),
                 'memory_events': counters(path / 'memory.events'),
                 'cpu_max': (path / 'cpu.max').read_text().strip(),
+                'memory_max': (path / 'memory.max').read_text().strip(),
+                'io_stat': (path / 'io.stat').read_text().strip(),
             }
         except FileNotFoundError:
             continue
+    sample['host_cpu_jiffies'] = Path('/proc/stat').read_text().splitlines()[0]
     sample['host_memory_kib'] = {key.rstrip(':'): int(value.split()[0]) for key, value in (line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines()) if key in ('MemAvailable', 'SwapFree')}
     sample['sampler_ms'] = (time.monotonic() - began) * 1000
     print(json.dumps(sample), flush=True)

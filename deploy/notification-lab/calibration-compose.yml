@@ -1,5 +1,8 @@
-# Explicit generator-only resource change, never application/database/pool changes.
+# Isolated calibration only: explicit generator resources and selected DB RAM ceiling.
+# Database CPU, settings, pools, admission and workload stay unchanged.
 services:
+  postgres:
+    mem_limit: ${LAB_CALIBRATION_DB_MEMORY:?explicit reviewed 1g or 8g ceiling required}
   sessions:
     cpus: 2
     volumes: ['${LAB_CALIBRATION_SUITE_DIR:?explicit isolated suite required}:/suite:ro']

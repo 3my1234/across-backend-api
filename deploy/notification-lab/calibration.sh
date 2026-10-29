@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${LAB_INVESTIGATION_PHASE:-} == system && ${LAB_SESSION_TARGET:-} == 500 && ${LAB_SESSION_PROFILE:-} == stage ]]
+case "${LAB_CALIBRATION_DB_MEMORY:-}" in 1g|8g) ;; *) echo 'Only reviewed isolated DB ceilings 1g/8g allowed' >&2; exit 1;; esac
+[[ ${LAB_LONG_GENERATOR_RUN:-} =~ ^[0-9]+$ ]]
 dc() { docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml "$@"; }
 sql() { dc exec -T postgres psql -U lab -d capacity_lab -X -At -v ON_ERROR_STOP=1 -c "$1"; }
 mkdir -p calibration-evidence
@@ -20,6 +22,8 @@ git rev-parse HEAD >calibration-evidence/source.txt
 docker run --rm --network none atlxpres-capacity-lab:local sha256sum /app/api /app/lab >calibration-evidence/binaries.sha256
 lscpu >calibration-evidence/runner-cpu.txt
 free -h >calibration-evidence/runner-memory.txt
+printf '%s\n' "$LAB_CALIBRATION_DB_MEMORY" >calibration-evidence/requested-db-memory.txt
+dc config --format json >calibration-evidence/rendered-compose.json
 index=0
 for mode in on; do
  index=$((index+1));arm="calibration-evidence/${index}-${mode}"
