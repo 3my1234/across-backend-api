@@ -63,3 +63,11 @@ Official references verified:
 https://docs.k3s.io/datastore/ha-embedded
 https://docs.k3s.io/installation/requirements
 https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+
+Actual schema result: pinned `kubeconform@v0.7.0` installed into workspace tooling
+and executed with `-strict -summary -kubernetes-version 1.35.0` against workload
+and separate migration example. **13 resources/2 files:13valid,0invalid,0errors,
+0skipped**. This includes12workloadresources+1migrationJob, not a job execution.
+No Kubernetes cluster was contacted. YAMLworkflow/serverconfig/migration parsing
+passed. `git diff --check` passed. The schema baseline is not a K3s version choice
+or CNI/ingress/secret/network/runtime admission qualification.

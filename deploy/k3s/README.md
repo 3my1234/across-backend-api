@@ -39,7 +39,7 @@ approval string alone is NOT human enforcement. The workflow has contents-read
 permission, no kubeconfig/SSH/cloud secret and no apply/install/traffic step.
 Kubernetes1.35 schema selection is a validation baseline, not a selected K3s
 release. Actual K3s version, CNI/ingress versions and cluster admission validation
-remain open. No new workflow has been dispatched by this preparation task.
+remain open. Local pinned kubeconform strict validation against Kubernetes1.35.0 passed all13 resources (12workload+1separateJob), zeroinvalid/errors/skipped. This did not contact acluster. No new workflow has been dispatched by this preparation task.
 
 ## Reviewed deployment contracts
 
