@@ -16,7 +16,12 @@ apiVersion: v1
 kind: ConfigMap
 metadata: {name: runtime-settings, namespace: atlxpres-staging}
 data:
-  APP_ENV: production
+  APP_ENV: staging
+  ENABLE_DEV_LOGIN: 'false'
+  ENABLE_MOCK_PAYMENTS: 'false'
+  ADMIN_BOOTSTRAP_TOKEN: ''
+  ALLOWED_ORIGINS: https://provider.atlxpres.invalid
+  TRUSTED_PROXY_CIDRS: 192.0.2.20/32
   RUN_MIGRATIONS: 'false'
   RUN_INLINE_WORKERS: 'false'
   DB_MAX_CONNS: '4'
@@ -35,7 +40,7 @@ spec:
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
-    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
   selector: {matchLabels: {app: api}}
   template:
     metadata: {labels: {app: api}}
@@ -51,11 +56,9 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector: {matchLabels: {app: api}}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {app: api}}
       containers:
         - name: api
           image: registry.example.invalid/atlxpres/api@sha256:0000000000000000000000000000000000000000000000000000000000000000

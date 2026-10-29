@@ -1,0 +1,50 @@
+name: K3s preparation validation (no deployment)
+on:
+  workflow_dispatch:
+    inputs:
+      review_reference:
+        description: Explicit local/CI validation approval reference (no deployment authority)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  offline-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated parser dependency
+        run: npm install --prefix "$RUNNER_TEMP/k3s-validation" --ignore-scripts --no-audit --no-fund yaml@2.9.0
+      - name: Validate policies and failure cases
+        env:
+          NODE_PATH: ${{ runner.temp }}/k3s-validation/node_modules
+        run: |
+          node deploy/k3s/validate.cjs
+          node --test deploy/k3s/validate.test.cjs
+          if node deploy/k3s/validate.cjs --release; then
+            echo 'Unresolved preparation package must not pass release validation'
+            exit 1
+          fi
+  schema-review:
+    needs: offline-policy
+    # Configure required reviewers on this environment before dispatching.
+    # GitHub environment existence alone does NOT enforce a human approval gate.
+    environment: k3s-preparation-review
+    if: inputs.review_reference != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+      - name: Install pinned offline schema validator
+        run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+      - name: Validate standard Kubernetes schemas only
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.35.0 deploy/k3s/staging.yaml deploy/k3s/migration-job.example.yaml
+      # No kubeconfig/SSH/cloud credentials, kubectl apply, installer or live target.

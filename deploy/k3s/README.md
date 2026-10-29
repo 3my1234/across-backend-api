@@ -1,103 +1,136 @@
-# K3s preparation: not an installed or qualified cluster
+# K3s preparation for three NEW application servers
 
-Prioritize application/receipt and expanded-workload tests. These files prepare a
-reviewable Kubernetes configuration while those tests run. They do not install
-K3s, create VPS nodes, change Coolify/DNS/firewalls, provide credentials, publish
-images or authorize any production action. No cluster smoke or failover test has
-been performed. YAML parsing is not Kubernetes runtime acceptance.
+29 October 2026. This branch prepares local/CI artifacts only. It does not install,
+apply, purchase, move traffic, migrate Redis or alter either current VPS.
 
-`staging.yaml` uses a reserved `.invalid` hostname/image registry, zero digest
-placeholders and TEST-NET private-endpoint placeholders. Supply actual isolated
-staging values and exact reviewed image digests before any deployment review.
-Never substitute production credentials to make staging start.
+**Current topology decision supersedes the earlier reuse option:** retain the
+existing main VPS for Coolify and the unrelated website; retain the existing
+PostgreSQL VPS as an external database. Three planned NEW VPS form the K3s
+embedded-etcd server/application cluster. Total five VPS if all are retained.
+No current server is repurposed. Three voters tolerate one failed voter while
+quorum remains; ingress, PostgreSQL and Redis failover are separate dependencies.
+Actual new hardware, private IPs, node failure domains and region remain unknown.
+No procurement or cost quote is approved by these artifacts.
 
-## Boundaries and source checks
+## Working offline validation
 
-- API image/command correspond to the existing Dockerfile and `/app/across-api`.
-  The liveness route `/api/v1/health` returns a process response; readiness uses
-  `/api/v1/ready` and checks dependencies. Database outages must eject replicas
-  from routing without a dependency-driven API restart storm.
-- The actual API drains for three seconds and allows up to 65 seconds for
-  shutdown. A 90-second pod termination grace includes that window. Do not use a
-  30-second grace and assume existing requests can finish. Verify connection
-  draining and ingress timeout behavior against actual traffic in staging.
-- Worker health endpoints are served by the existing separate worker image on
-  `WORKER_HEALTH_ADDR=:8080`. Only email/native-push/receipt roles are selected;
-  financial and other consumers are not duplicated by an HPA. Inventory and
-  qualify omitted roles before describing the whole platform as migrated.
-- Worker replicas deliberately start at zero. The normal worker hard-codes the
-  public Expo endpoint. The capacity lab mocks it using a lab-only transport
-  adapter; that is not yet a tested mock route in the real worker image on K3s.
-  Keep Internet egress denied until an isolated adapter/proxy path and transport
-  tests are approved. Do not send real notifications to qualify staging.
-- No migrations run on API/worker startup. `migration-job.example.yaml` is a
-  separate manual review artifact. Replace its non-final job name and image,
-  provide a distinct least-privilege migration secret, verify backup/rollback
-  and schema compatibility, and obtain the user's per-step confirmation before
-  an eventual production migration. The migrator already caps its pool at two,
-  lock timeout at three seconds and statement timeout at 120 seconds.
+Install the pinned `yaml@2.9.0` parser in an isolated tooling directory (or use the
+existing mobile parser through NODE_PATH). Run from this backend worktree:
 
-## Resource and database budget
+```powershell
+$env:NODE_PATH="C:\Users\EMMA\Desktop\gouwu\mobile\node_modules"
+node deploy/k3s/validate.cjs
+node deploy/k3s/validate.test.cjs
+node deploy/k3s/validate.cjs --release
+```
 
-Initial values are assumptions for testing, not a qualified user count. API pods
-request 250m CPU/256Mi RAM, limit 1 CPU/512Mi RAM, and have a bounded temporary
-filesystem. Media/ffmpeg memory, subprocess concurrency, temporary storage and
-timeouts still need their own workload tests. The read-only root filesystem must
-be tested with actual upload paths; do not make broad write permissions a fix.
+The first two commands must pass. The last MUST fail: zero image digests, reserved
+addresses, `.invalid` hosts and absent secret objects make the preparation
+unreleasable. This is an offline contract checker, not Kubernetes admission or a
+runtime deployment check. Do not weaken the placeholder guard to obtain a green
+release flag. A concrete environment-specific package and separate policy review
+are required before deployment; the current validator deliberately accepts only
+the reviewed preparation image identities.
 
-HPA is limited to two through three APIs, one additional pod per minute, with a
-five-minute scale-down stabilization. It requires functioning CPU metrics. It
-adds pods on existing capacity, not VPS machines. The API's four-connection pool
-and disabled separate read URL mean at most 16 API connections during a
-three-replica rollout with one surge, before workers/tools/operational reserve.
-A future one-pod notification worker adds four. Include omitted roles,
-monitoring, migration, backups and admin tools in the real connection calculation.
-Do not add this budget to the historical production budget of 84/100 and assume
-parallel cutover is safe. Staging has its own database, and production budgets
-must be recalculated from a fresh inventory.
+Manual-only `.github/workflows/k3s-preparation.yml` runs parser/policy regressions
+and a separately environment-gated pinned kubeconform schema check. Configure
+required reviewers on `k3s-preparation-review`: an environment name or nonempty
+approval string alone is NOT human enforcement. The workflow has contents-read
+permission, no kubeconfig/SSH/cloud secret and no apply/install/traffic step.
+Kubernetes1.35 schema selection is a validation baseline, not a selected K3s
+release. Actual K3s version, CNI/ingress versions and cluster admission validation
+remain open. No new workflow has been dispatched by this preparation task.
 
-## Networking, secrets and availability
+## Reviewed deployment contracts
 
-The namespace defaults to denied ingress/egress. Explicit rules allow only DNS,
-placeholder private PostgreSQL/Redis and same-namespace mock SMTP/push traffic.
-Review DNS/Traefik labels and actual VPN/CNI routes; verify enforcement with
-positive and negative probes. Do not open PostgreSQL/Redis or overlay/etcd ports
-to the public Internet. No public Google, media-storage, billing or Expo access
-is enabled by these rules; those flows remain excluded until isolated transport
-and approved restricted egress are established.
+`staging.yaml` contains12 resources. APIs use `/app/across-api` and worker uses
+`/app/across-worker`, matching Dockerfiles. No image/tag built from another branch
+is implied; publish exact digest from the qualified source only after approval.
+Production/staging configuration validation remains active. Required runtime
+secret must supply JWT_SECRET (32+bytes), verified PostgreSQL TLS (or explicitly
+pinned encrypted peer), authenticated certificate-verified Redis TLS, and any
+application credentials. No secret is committed. ConfigMap overrides disable
+startup migrations, inline workers, dev login, bootstrap and mock payments.
+Origins/trusted ingress CIDRs must be exact; replace them only after identifying
+the actual proxy hops. Node private IP is not automatically the ingress sourceIP.
 
-Create runtime/TLS/migration secrets through a reviewed secure mechanism outside
-Git, encrypt secrets at rest on the cluster, restrict RBAC, and test rotation.
-There is no placeholder password or copied production `.env` in this directory.
-Do not log secret objects or connection strings in deployment evidence.
+Health probe is process liveness; readiness checks dependencies. API shutdown's
+3-second drain and65-second deadline require the90-second grace. EmptyDir/tmp is
+bounded; real media/ffmpeg writable paths and memory need staging tests. Pods run
+nonroot, read-only root, dropped capabilities and no service-account token.
 
-Preferred API anti-affinity permits a one-node staging demonstration. It does
-not provide host HA. For the proposed three-node application cluster, validate
-hard hostname separation, spare rollout capacity and tested node failure before
-claiming application resilience. The PodDisruptionBudget governs voluntary
-disruption, not arbitrary machine loss. PostgreSQL, Redis and external ingress
-failover are independent designs. Keep production PostgreSQL outside the initial
-application cluster. Do not install K3s beside live Coolify without a reviewed
-port, routing, firewall, resource and rollback plan.
+APIs have required hostname anti-affinity, two initial replicas and HPA2..3.
+Rollout is **maxSurge0/maxUnavailable1** so a three-node cluster at three replicas
+does not deadlock waiting for an impossible fourth distinct host. The PDB keeps
+one available for voluntary disruption; it does not protect involuntary node loss.
+HPA requires metrics-server and CPU requests, does not create VPS nodes and is
+not a qualified capacity claim. Review observed concurrency/admission/pool budgets
+before enabling any autoscaling. MaxAPI pool12 + futureoneworker4 + migrator2 =18
+connections BEFORE read pools, other roles, tools, old production consumers and
+operational reserve. Read URL is disabled. The overlapping cutover budget must
+include current Coolify consumers; do not simply add18 to the historical84/100.
 
-## Acceptance still required
+## Worker and external dependency gates
 
-1. Pin the K3s and image versions; verify OS, CPU/RAM/disk/I/O, available capacity,
-   private addresses, trust boundaries, metrics and node failure domains.
-2. Validate against the target Kubernetes API, then start only the isolated
-   environment after source/configuration and mock-egress review.
-3. Test startup, readiness/liveness, draining and rolling deployment; killed API
-   and failed-node recovery; secret rotation; DNS/Redis/database outage behavior.
-4. Qualify full worker entrypoints/roles, leases and receipt throughput with
-   controlled mock failures. Preserve shared authentication, message ordering,
-   authorization, Town Hall limits and driver expiry across instances.
-5. Observe per-operation p95/p99/errors and pool waits; PostgreSQL locks/I/O;
-   Redis eviction/recovery; notification queue age and eligible receipt backlog;
-   CPU/memory/disk saturation; ingress/certificate health and external backup
-   age. Prove alerts can fire and reach an operator using a reviewed test route.
-6. Restore a backup into isolated storage, measure data-loss/recovery bounds,
-   rehearse the complete approved cutover and rollback, then report a launch
-   decision supported by the measured workload and explicit exclusions.
+Worker replicas stay ZERO. Actual push URLs are constants in
+`internal/services/push_notifications.go` (`exp.host` send/getReceipts). Lab mocks
+use a lab transport adapter; that is not a production worker transport switch.
+SMTP uses configured mailtransport, browser-push targets stored subscriptions,
+and other roles can invoke payments/other services. No real provider acceptance
+or recipient delivery may be claimed from a stopped worker manifest. Qualify
+entrypoint with isolated mocks/transport-egress design before activation.
+Only email,push,push_receipts are listed; settlements/TownHall expiry/driver expiry
+and other selected consumers need explicit ownership inventory, leases, health,
+and scale design before calling this a full migration. Never autoscale singleton
+financial consumers blindly. Current experimental receipt schema/cutover remains
+a separately approved release action.
 
-No installation or apply commands are included because this is preparation,
-and the current approved priority is application qualification.
+Default deny ingress/egress and explicit DNS/private DB/private Redis rules are
+included. No production IPs are allowed by offline policy. Namespace mock routes
+are placeholders, not a deployed mock. Google, billing, object storage, remote
+OAuth/JWKS, real SMTP/Expo and other public egress are intentionally absent. A
+functional production package must review those routes and test allow/deny paths;
+opening0.0.0.0/0 is not the prepared solution. K3s CNI enforcement, hostNetwork,
+Traefik labels/source-IP and WireGuard routing need actual cluster verification.
+Existing Redis stays where it is: no migration, replacement or failover implied.
+
+`server-config.example.yaml` is a template, not an installer. Unique NEW host/IP,
+nonoverlappingCIDRs, encrypted network, private registration endpoint, protected
+join token and etcd off-node snapshot/restore are unresolved. Bootstrap-first vs
+join-other-server settings require explicit reviewed selection. No token value or
+installer command is embedded. Kubeconfig permissions are0600 and secrets at
+rest enabled in template. Reserve control-plane/etcd memory/SSDIO and verify all
+three new nodes' placement; hostnames alone do not prove failure-domain separation.
+
+`migration-job.example.yaml` remains separate, manual, backoff0 and bounded180s.
+It must never be bundled with auto-startup; backup/schema compatibility/exact
+source/userapproval are required before any execution. Networkpolicy currently
+permits placeholderprivateDB for it but has no real endpoint/secret/image.
+
+## Remaining acceptance and handover
+
+1. Inventory new-node hardware/private-network/IP/CIDR/MTU/disklatency and independent
+failure domains; select/pin K3s/CNI/Traefik/metrics versions and registration/ingress
+HA endpoint. Existing mainhost/website and DB cannot be commandeered.
+2. Obtain separate purchase/provision/install approval; no such commands run here.
+Configure protected CI environment then validate schemas, real target API admission
+and secret/configchecker with offline-only checks before pods start.
+3. Isolated smoke: readiness/liveness, false dependency failure vs restart behavior,
+HTTPdrain, uploads/tmp, rollingupdate/HPA, networkpolicies, secret rotation,
+node/voter failure and recovery, etcdsnapshot+tokenrestore, externalDB/Redis loss.
+4. Mockworker entrypoint roles/ownership/retries/fencing and receipt backlog recovery;
+shared chat/Hall/driver/auth correctness across pods. Real traffic/providerdelivery
+and production cutoff require subsequent explicit approval.
+5. Freshbackup/offserverretrieval, rolloutrollback, oncall/alertreceipt and overlapDB
+budget before a trafficchange. K3s assets do not convert isolated100 qualification
+into production500 or millions capacity.
+
+The user mentioned a PHP warning in the wider migration discussion. Exact warning,
+source application, runtime, log and impact are not supplied in this workstream;
+no invented fix or assertion that K3s resolves it is made. Retain unrelated website
+on existing mainhost and obtain sanitized warning text before investigating it.
+
+Official references checked29October:
+- https://docs.k3s.io/datastore/ha-embedded
+- https://docs.k3s.io/installation/requirements
+- https://kubernetes.io/docs/tasks/run-application/configure-pdb/
