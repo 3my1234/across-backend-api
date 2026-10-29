@@ -1,7 +1,7 @@
 param([switch]$ContinueStaged)
 $ErrorActionPreference = 'Stop'
 $workspace = 'C:\Users\EMMA\Desktop\gouwu'
-$run = 'cohost-2f12dc3ecbf8acb1'
+$run = 'cohost-ad5c7dfa8bb37a25'
 $review = Join-Path $workspace "qualification\cohost-review\$run"
 $private = Join-Path $workspace "qualification\cohost-private\$run"
 $remote = "/root/atlxpres-cohost/$run"
@@ -64,7 +64,7 @@ Remote '79.143.176.173' "python3 '$remote/tools/stage_host.py' '$remote' --prefl
 $baselineCode = @'
 import json,sys,time,subprocess
 from pathlib import Path
-base=Path('/root/atlxpres-cohost/cohost-2f12dc3ecbf8acb1')
+base=Path('/root/atlxpres-cohost/cohost-ad5c7dfa8bb37a25')
 sys.path.insert(0,str(base/'tools'))
 from baseline import validate
 if (base/'manifest.json').exists():raise RuntimeError('Setup already started; do not restage')
