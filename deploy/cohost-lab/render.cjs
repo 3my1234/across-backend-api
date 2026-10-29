@@ -8,7 +8,7 @@ function render(input) {
   if (!/^cohost-[a-f0-9]{16}$/.test(input.run)) throw Error('unique run nonce required');
   if (!['main','database'].includes(input.role)) throw Error('invalid role');
   for (const name of ['app','postgres','redis','gateway','socat']) {
-    if (!/^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$/.test(input.images[name] || '')) throw Error('locked digest required: '+name);
+    if (!/^(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/.test(input.images[name] || '')) throw Error('locked digest required: '+name);
   }
   const base = '/root/atlxpres-cohost/'+input.run;
   const label = {'atlxpres.cohost.run':input.run};
@@ -21,7 +21,7 @@ function render(input) {
       cpus:1,mem_limit:'3g',memswap_limit:'3g',pids_limit:256,cgroup_parent:parent,labels:label,
       restart:'no',ports:['127.0.0.1:55432:5432'],volumes:['synthetic-pg:/var/lib/postgresql/data'],
       healthcheck:{test:['CMD-SHELL','pg_isready -U lab -d capacity_lab'],interval:'2s',timeout:'2s',retries:30}}},
-    volumes:{'synthetic-pg':{labels:label}},networks:{default:{labels:label}}};
+    volumes:{'synthetic-pg':{labels:label}},networks:{default:{internal:true,labels:label}}};
   const paths=['capacity-lab','session-lab','notification-lab'];
   const services={};
   for (const folder of paths) {

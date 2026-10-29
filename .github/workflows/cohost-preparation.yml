@@ -52,3 +52,26 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server postgresql-client
       - name: Prove restricted SSH Unix socket reaches only the disposable PostgreSQL
         run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/cohost-lab/integration_ssh.py
+      - name: Build immutable test image bundle on free CI only
+        run: |
+          mkdir -p cohost-bundle
+          docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-cohost-app:review .
+          docker pull redis:7.2-alpine
+          docker pull haproxy:3.0-alpine
+          docker pull alpine/socat
+          python3 - <<'PY'
+          import json,subprocess,pathlib
+          tags=dict(app='atlxpres-cohost-app:review',postgres='postgres:16-alpine',redis='redis:7.2-alpine',gateway='haproxy:3.0-alpine',socat='alpine/socat:latest')
+          images={k:subprocess.check_output(['docker','image','inspect','-f','{{.Id}}',v],text=True).strip() for k,v in tags.items()}
+          pathlib.Path('cohost-bundle/images.json').write_text(json.dumps(dict(images=images,source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()),indent=2))
+          subprocess.run(['docker','save','-o','cohost-bundle/images.tar',*tags.values()],check=True)
+          PY
+          cp -R deploy/cohost-lab cohost-bundle/tools
+          cp deploy/capacity-lab/haproxy.cfg cohost-bundle/
+          gzip -1 cohost-bundle/images.tar
+          sha256sum cohost-bundle/images.tar.gz cohost-bundle/images.json > cohost-bundle/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cohost-reviewed-image-bundle
+          path: cohost-bundle/
+          retention-days: 3

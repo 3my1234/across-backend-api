@@ -7,7 +7,7 @@ for(const s of Object.values(main.services)){assert(s.cgroup_parent.endsWith('-m
 assert(main.networks.lab.internal);assert.deepEqual(main.services.gateway.ports,['127.0.0.1:58080:8080']);
 assert(!JSON.stringify(main).includes('${'));assert(main.services.api1.environment.DB_MAX_CONNS==='8');
 assert(main.services.api1.environment.HTTP_MAX_IN_FLIGHT==='64');assert(db.services.postgres.cpus===1);
-assert.deepEqual(db.services.postgres.ports,['127.0.0.1:55432:5432']);assert(db.volumes['synthetic-pg'].labels);
+assert.deepEqual(db.services.postgres.ports,['127.0.0.1:55432:5432']);assert(db.volumes['synthetic-pg'].labels);assert(db.networks.default.internal);
 assert.throws(()=>render({...args,run:'production',role:'main'}));
 assert.throws(()=>render({...args,images:{...images,app:'latest'},role:'main'}));
 assert.throws(()=>render({...args,role:'live'}));
