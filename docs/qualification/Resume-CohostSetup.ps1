@@ -59,6 +59,8 @@ foreach ($role in @('main','database')) {
 }
 # Reuse a valid completed baseline. Wait for a disconnected collector if present;
 # never start a second collector while the existing one is still running.
+Remote '173.212.219.169' "python3 '$remote/tools/stage_host.py' '$remote' --preflight"
+Remote '79.143.176.173' "python3 '$remote/tools/stage_host.py' '$remote' --preflight"
 $baselineCode = @'
 import json,sys,time,subprocess
 from pathlib import Path
