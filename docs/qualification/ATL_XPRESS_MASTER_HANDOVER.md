@@ -1,3 +1,16 @@
+# Latest status ? 29 October 2026, 11:15 Africa/Lagos
+
+Read this checkpoint before the historical detail below.
+
+- **Notification batching implemented and qualified in isolation:** batch size64; existing transaction retained; recipient/privacy, concurrency, duplicate-only pages, final-page failure rollback and real PostgreSQL worker recovery all passed in run40854663425. No required tests skipped. ABBA fanout SQLcalls1100->100; cumulative SQL time29?39% lower across two runs. Full500capacity is NOT proven.
+- **Long generator qualification RUNNING:** https://github.com/3my1234/across-backend-api/actions/runs/40855200111 ; exact sourceac854e5b597a564c96ed2bbddda7d14315261d74.500synthetic sessions/1800seconds/2CPU/2GiB. This branch intentionally excludes application batch code because it targets a synthetic server. Check complete artifacts, not interim status.
+- **Next calibration prepared, NOT dispatched:** backend branch experiment/launch-qualification, code d5a854c; corrected CI29ee9fa; calibration harness844af84; documentation checkpoint33b9ae9 (later docs-only HEAD may supersede). Require passed long-generator artifact before bounded180second actual-stack calibration. Explicit PG RAM8GiB, DB CPU2; this is RAM similarity, NOT dedicated production4CPU/network/storage equivalence. No full500 or1000 run has started in this continuation.
+- **K3s package prepared and pushed:** separate branch experiment/k3s-preparation at084717875d5a79356b3dd6e6e5471411814ec94d. Strict schema13/13,10policy/contracttests passed; unresolved placeholders intentionally blocked. No cluster install or apply. New topology is FIVE hosts: currentCoolify+unrelatedwebsite, currentexternalPG, THREE futureK3snodes. Retain both current roles; do not buy/configure new hosts without explicit approval.
+- **Mobile complete independently:** user tested APK63 at9758da7; PR60 merged ee7546c6997d70494dedd8edd21f22a46803c82f; all PR and postmerge checks passed. No need to rebuild simply for test-fixture-only changes.
+- **Production untouched by this backend/K3s work.** Existing backup/readiness observations are historical. Production sizing, off-server restore, alerts, current rollback and PHP-warning details remain incomplete. No production capacity or launch-readiness guarantee.
+
+The long generator's actual final outcome may arrive after this checkpoint. Read `qualification/GENERATOR_SUSTAINED_RESULTS_2026-10-29.md`, inspect the run/artifacts, and update this document rather than restarting the test automatically.
+
 # ATL Xpress master handover
 
 Updated 29 October 2026 (Africa/Lagos). This is the current entry point for a new conversation. It supersedes stale NEXT/ACTIVE statements in historical HANDOVER.md, not their retained evidence. All statuses are evidence-specific; a passing isolated test does not establish production capacity.
