@@ -8,13 +8,13 @@ Updated 29 October 2026, Africa/Lagos. Read this current checkpoint first. The p
 |---|---|---|
 | Notification batching | Implemented on the isolated backend branch. Correctness, concurrent retries, batch boundaries, final-page rollback, privacy and actual PostgreSQL receipt-worker recovery passed in **40854663425**, with no skipped required tests. | Full application capacity is not established by the microbenchmark. |
 | Matched batching benchmark | SQL calls **1,100 -> 100** per100 transactions; cumulative SQL execution time **29?39% lower** across two ABBA runs. Controller-only throughput **2.37?2.58x**. | Preserve query-only scope; do not claim equivalent platform throughput or database CPU reduction. |
-| Independent generator | **FAILED memory headroom:** 40855200111, source `ac854e5b597a564c96ed2bbddda7d14315261d74`, 500 synthetic sessions for1,800 seconds at2 CPUs/2GiB. Full1,804.6s,449,839offers/completions; original thresholds/CPU passed; peak~2GiB failed70%memory gate. | Calibration stays blocked. Focused memory diagnostic40864170840 is running; do not repeat the long run blindly. |
-| Actual-stack calibration | Prepared, **NOT dispatched**. Explicit8GiB PostgreSQL memory ceiling; DB CPU2, generator CPU2/2GiB, application limits and workload unchanged. | Requires the completed successful long-generator proof and exact measured client. This is bounded180-second calibration, not sustained500 qualification. |
+| Independent generator | **RUNNING at4GiB:** 40866958782, source5dc1fc983b5e157d82ea86a6c546c0b2cb4f592c, original recorder/500sessions/1,800seconds/2CPU. Earlier2GiB run failed memory; gzip alternative failed startupCPU and was rejected. | Require complete sustained proof, original70%memory/85%burstCPU/70%steadyCPU gates and actual budget match. No application calibration yet. |
+| Actual-stack calibration | Prepared, **NOT dispatched**. Explicit8GiB PostgreSQL memory ceiling; DB CPU2, generator CPU2/4GiB explicitly requested; application limits and workload unchanged. The generator allocation must match its passed proof. | Requires the completed successful long-generator proof and exact measured client. This is bounded180-second calibration, not sustained500 qualification. |
 | Full500/1,000 | **Not qualified.** No new actual application500 or1,000 run started in this continuation. | Shared-host/environment and application gates must pass before full500. No1,000 without a passing500 and review. |
 | K3s | Separate preparation branch, strict schema **13/13** resources and **10** policy/source tests passed. Placeholders intentionally block release. | Three future VPS, isolated live staging, transports/network/recovery validation and separate approval. No installation or apply. |
 | Mobile | APK63 accepted by the user; PR60 merged independently; all PR and postmerge checks passed. | Do not entangle mobile with backend qualification. Broader physical-device coverage remains distinct from visual acceptance. |
 
-Generator40855200111 has completed and FAILED only memory headroom. Read `GENERATOR_SUSTAINED_RESULTS_2026-10-29.md`. Focused memory diagnostic40864170840 is now running; it cannot substitute for the sustained gate.
+Generator40855200111 has completed and FAILED only memory headroom. Read `GENERATOR_SUSTAINED_RESULTS_2026-10-29.md`. Memory diagnostic40864170840 passed; lossless recorder validation40865534032 failed startupCPU and was rejected. Original-recorder sustained run40866958782 is running with explicit4GiB allocation. No short stage substitutes for sustained proof.
 
 ## Workspace and exact source references
 
@@ -95,10 +95,10 @@ Exact normalized client SHA256: baseline `db3013f473b41fc7d35e01d7385d620b247b97
 Only after a complete successful artifact review:
 
 ```powershell
-gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/launch-qualification -f phase=calibration -f generator_run=40855200111 -f calibration_memory=8g
+gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/launch-qualification -f phase=calibration -f generator_run=40866958782 -f calibration_memory=8g -f calibration_generator_memory=4g
 ```
 
-This performs a bounded180-second actual-stack calibration, with unchanged API/pool/admission/workload limits. PostgreSQL RAM8GiB/CPU2; generator2CPU/2GiB; host memory gate requires12GiB available. A1GiB control remains explicit if later needed for RAM attribution. Do not repeatedly rerun the undersized allocation without a question to answer. A4-core shared runner cannot independently supply4DB cores +2generator cores +APIs/workers; observe host contention rather than declaring production equivalence.
+This performs a bounded180-second actual-stack calibration, with unchanged API/pool/admission/workload limits. PostgreSQL RAM8GiB/CPU2; generator2CPU/4GiB explicitly declared and matched to proof; host memory gate requires14GiB available. A1GiB control remains explicit if later needed for RAM attribution. Do not repeatedly rerun the undersized allocation without a question to answer. A4-core shared runner cannot independently supply4DB cores +2generator cores +APIs/workers; observe host contention rather than declaring production equivalence.
 
 Collect complete resource limits, timestamped CPU/cgroup memory/events/I/O, per-operation latency/errors, database locks/pool waits, write reconciliation, queues and recovery. Original application gates and actual shared-host/generator headroom must pass before the unchanged30-minute500 qualification. No automatic escalation to1,000. If a prerequisite fails, preserve evidence and identify the smallest supported correction; do not hide errors or purchase resources.
 
@@ -154,3 +154,15 @@ Long run40855200111 completed1,804.592seconds with449,839offers=completions,500i
 A1.66GB generated metrics file may contribute through filesystem cache, but memory.stat was not recorded; process versus file-cache attribution is UNKNOWN. Focused180-second same-client/same-cap diagnostic40864170840 at5dce8fe now records that breakdown. No actual-stack calibration, full500,1,000 or production work was started. Do not bypass the failed gate or point calibration at the short diagnostic; it requires a passed1,800-second artifact.
 
 Backend qualification branch advanced only in tooling/docs: exact-client proofd2b6bad, consolidated master/archive/offline analyzer4672407, optionalI/O telemetry fix015fb92. Application source remains the previously tested batch candidate; no internal/migration/session-client changes. K3s branch0847178 and mobile merge remain separate.
+
+## Current recorder validation checkpoint
+
+Run40864170840 passed the focused183.164second stage with46,686requests. Peak total1.034GB comprised~849MBanonymous +175MBfilecache; the175MBmetrics file closely matches filecache. A lossless FIFO/gzip recorder was implemented atb6e475b on experiment/generator-headroom; it runs INSIDE the unchanged2CPU/2GiB generator cgroup, with complete raw metric reconstruction after measurement and unchanged client hashes, thresholds and memory accounting. It does not offload generator work into an unmeasured container. Recorder contract and focused stage validation40865534032 are RUNNING. If and only if these pass, repeat the full1,800second generator gate. Current long result40855200111 remains FAILED. Calibration and actual500 still blocked; no production changes.
+
+## Latest checkpoint ? explicit4GiB generator qualification
+
+Compression validation40865534032 FAILED only startupCPU:88.93%of2CPU >85%gate, despite reduced peak memory831MiB and correct46,686requests. Reject it; direct recorder restored. Existing long2GiB result40855200111 remains FAILED memory.
+
+New sustained run40866958782, exactsource5dc1fc983b5e157d82ea86a6c546c0b2cb4f592c, is RUNNING on experiment/generator-headroom. Same500syntheticidentities, client hashes, actions,2CPU,70%memory/85%burstCPU/70%steadyCPU thresholds; EXPLICIT4GiB memory allocation addresses measured trace+process footprint. This changes allocation, not threshold fractions, and uses only the existing standard isolated runner. Gate rejects mismatch between requested budget and actual DockerMemory. No resources purchased. Do not call a futurepass a2GiB result.
+
+Calibration branch4d658ef uses original recorder and requires requested generator allocation to match the successful sustained artifact. The prospective command is now `gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/launch-qualification -f phase=calibration -f generator_run=40866958782 -f calibration_memory=8g -f calibration_generator_memory=4g`, ONLY after complete successful artifact review. DB8GiB/gen4GiB requires14GiB availablehostmemory; failure stops before workload. Do not dispatch against earlier failed runs. No application500/1,000 or production changes.
