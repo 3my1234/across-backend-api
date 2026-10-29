@@ -6,7 +6,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, fanout, qualified-500]
+        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, gateway-probe, fanout, qualified-500]
         default: roles
       calibration_run:
         description: Successful bounded calibration independently reviewed for sustained500
@@ -700,4 +700,21 @@ jobs:
         with:
           name: inbox-regressions-${{ github.run_id }}
           path: inbox-evidence/
+          retention-days: 14
+
+  gateway-probe:
+    if: github.event.inputs.phase == 'gateway-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Isolate gateway quota with matched500-request constant responses
+        run: bash deploy/notification-lab/gateway-probe.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-probe-${{ github.run_id }}
+          path: gateway-evidence/
           retention-days: 14
