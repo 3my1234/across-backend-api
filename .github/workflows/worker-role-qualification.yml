@@ -214,6 +214,7 @@ jobs:
       LAB_SESSION_AUTH_MODE: established
       LAB_SESSION_APPROVAL: /exchange/approval.json
       LAB_GENERATOR_MEMORY: 2g
+      LAB_GENERATOR_RECORDER: ${{ github.workspace }}/deploy/notification-lab/generator_record_output.sh
       LAB_CALIBRATION_SUITE_DIR: ${{ github.workspace }}/session-exchange/calibration-suite
       LAB_EXPANDED_JOURNEYS: '1'
       LAB_NOTIFICATION_WORKERS: '0'
@@ -250,6 +251,8 @@ jobs:
           normalized=lambda path: hashlib.sha256(path.read_text(encoding='utf-8').encode()).hexdigest()
           assert normalized(Path('deploy/session-lab/sessions.js'))=='db3013f473b41fc7d35e01d7385d620b247b977e3dd86e9e8683d14a4bb337a3', 'Client differs from generator proof'
           assert normalized(p.parent/'executed-sessions.js')=='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49', 'Measured generator client differs'
+          recorder=next(Path('/tmp/generator-proof').rglob('record-output.sh'))
+          assert normalized(recorder)==normalized(Path('deploy/notification-lab/generator_record_output.sh')), 'Calibration recorder differs from sustained generator proof'
           assert hashlib.sha256(Path('deploy/notification-lab/generator_prewarm.py').read_text(encoding='utf-8').encode()).hexdigest()=='01c98dc035f0ec63cb74ca979640b4dbed44e455c74e3f533a5f9917c8f5fb06'
           PYGEN
       - name: Verify exact qualified candidate and unchanged workload
@@ -298,7 +301,7 @@ jobs:
           mkdir -p calibration-evidence
           git rev-parse HEAD >calibration-evidence/source.txt
           cp .github/workflows/worker-role-qualification.yml calibration-evidence/workflow.yml
-          cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py,generator_prewarm.py} calibration-evidence/
+          cp deploy/notification-lab/{calibration.sh,calibration-compose.yml,system-compose.yml,cgroup_sampler.py,generator_prewarm.py,generator_record_output.sh} calibration-evidence/
           printf '%s\n' "$LAB_CALIBRATION_DB_MEMORY" >calibration-evidence/requested-db-memory.txt
           printf '%s\n' "$LAB_LONG_GENERATOR_RUN" >calibration-evidence/generator-proof-run.txt
           cp deploy/session-lab/{sessions.js,policy.mjs,compose.yml} calibration-evidence/
