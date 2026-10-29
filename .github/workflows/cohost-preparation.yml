@@ -46,3 +46,9 @@ jobs:
           finally:
               subprocess.run(['docker','rm','-f',owned,sentinel],check=True)
           PY
+      - name: Exercise watchdog stop paths with simulated sensors and real disposable containers
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/cohost-lab/integration_watchdog.py
+      - name: Install disposable CI transport test tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server postgresql-client
+      - name: Prove restricted SSH Unix socket reaches only the disposable PostgreSQL
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/cohost-lab/integration_ssh.py
