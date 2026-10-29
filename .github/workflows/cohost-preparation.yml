@@ -1,0 +1,45 @@
+name: Cohost preparation safety checks
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-and-disposable-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Offline renderer and safety policy
+        run: |
+          npm install --prefix /tmp/cohost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
+          NODE_PATH=/tmp/cohost-tools/node_modules node deploy/cohost-lab/test-render.cjs
+          python3 -m unittest discover -s deploy/cohost-lab -p test_safety.py -v
+          python3 -m py_compile deploy/cohost-lab/safety.py deploy/cohost-lab/watchdog.py
+      - name: Validate stop ownership in disposable CI only
+        run: |
+          python3 - <<'PY'
+          import json,pathlib,subprocess,tempfile
+          run='cohost-'+'b'*16
+          def call(*args): return subprocess.check_output(args,text=True).strip()
+          owned=call('docker','run','-d','--network','none','--label','atlxpres.cohost.run='+run,'alpine:3.23','sleep','300')
+          sentinel=call('docker','run','-d','--network','none','--label','atlxpres.cohost.run=unrelated-ci-sentinel','alpine:3.23','sleep','300')
+          try:
+              with tempfile.TemporaryDirectory() as temp:
+                  base=pathlib.Path(temp);manifest=base/'manifest.json';sample=base/'sample.json'
+                  sample.write_text('{}')
+                  def invoke(ids):
+                      manifest.write_text(json.dumps(dict(run=run,role='main',container_ids=ids)))
+                      call('sudo','chown','root:root',str(manifest))
+                      result=subprocess.run(['sudo','python3','deploy/cohost-lab/safety.py',str(manifest),str(sample),'--stop-test'])
+                      call('sudo','chown',str(__import__('os').getuid()),str(manifest))
+                      return result.returncode
+                  assert invoke([sentinel]) != 0
+                  assert call('docker','inspect','-f','{{.State.Running}}',sentinel)=='true'
+                  assert invoke([owned]) == 2
+                  assert call('docker','inspect','-f','{{.State.Running}}',owned)=='false'
+                  assert call('docker','inspect','-f','{{.State.Running}}',sentinel)=='true'
+          finally:
+              subprocess.run(['docker','rm','-f',owned,sentinel],check=True)
+          PY
