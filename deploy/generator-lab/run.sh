@@ -13,11 +13,12 @@ GENERATOR_LAB=synthetic-only deploy/generator-lab/generator-target prepare gener
 chmod -R a+rwX generator-exchange
 profile="${GENERATOR_SESSION_PROFILE:-stage}"
 case "$profile" in
- stage) modes=(baseline prewarm);;
+ stage) if [[ ${GENERATOR_MEMORY_DIAGNOSTIC:-false} == true ]]; then modes=(prewarm); else modes=(baseline prewarm); fi;;
  sustained) modes=(prewarm);;
  *) echo 'Unsupported synthetic generator profile' >&2; exit 1;;
 esac
 printf '%s\n' "$profile" >generator-evidence/requested-profile.txt
+printf '%s\n' "${GENERATOR_MEMORY_DIAGNOSTIC:-false}" >generator-evidence/memory-diagnostic-only.txt
 for mode in "${modes[@]}"; do
  quota=2
  export LAB_GENERATOR_SUITE_DIR="$PWD/generator-suite-${mode}"
@@ -61,8 +62,11 @@ import json
 from pathlib import Path
 arms=[json.loads(p.read_text()) for p in Path('generator-evidence').glob('cpu-*/gate.json')]
 profile=Path('generator-evidence/requested-profile.txt').read_text().strip()
-assert len(arms)==(1 if profile=='sustained' else 2),'Requested resource arms must produce interpretable evidence'
+import os
+diagnostic=os.environ.get('GENERATOR_MEMORY_DIAGNOSTIC')=='true'
+assert not diagnostic or profile=='stage'
+assert len(arms)==(1 if profile=='sustained' or diagnostic else 2),'Requested resource arms must produce interpretable evidence'
 assert json.loads(Path('generator-evidence/cpu-2-prewarm/gate.json').read_text())['independent_generator_gate_passed'],'Local preparation candidate did not qualify; do not repeat application500'
-if profile=='stage':
+if profile=='stage' and not diagnostic:
  assert json.loads(Path('generator-evidence/cpu-2-baseline/gate.json').read_text())['assertions']['original_thresholds_pass'],'Baseline workload correctness failed'
 PYGATE

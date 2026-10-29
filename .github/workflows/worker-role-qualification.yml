@@ -6,13 +6,13 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, generator, generator-sustained]
+        options: [roles, receipts, expanded, inbox, system, queries, generator, generator-sustained, generator-memory]
         default: roles
 permissions:
   contents: read
 jobs:
   generator:
-    if: github.event.inputs.phase == 'generator' || github.event.inputs.phase == 'generator-sustained'
+    if: github.event.inputs.phase == 'generator' || github.event.inputs.phase == 'generator-sustained' || github.event.inputs.phase == 'generator-memory'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event.inputs.phase == 'generator-sustained' && 50 || 20 }}
     env:
@@ -20,6 +20,7 @@ jobs:
       LAB_GENERATOR_SUITE_DIR: ${{ github.workspace }}/deploy/session-lab
       LAB_INVESTIGATION_PHASE: system
       GENERATOR_SESSION_PROFILE: ${{ github.event.inputs.phase == 'generator-sustained' && 'sustained' || 'stage' }}
+      GENERATOR_MEMORY_DIAGNOSTIC: ${{ github.event.inputs.phase == 'generator-memory' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}

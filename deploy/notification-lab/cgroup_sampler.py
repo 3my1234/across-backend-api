@@ -45,6 +45,7 @@ while running:
                 'cpu': counters(path / 'cpu.stat'),
                 'memory_current': int((path / 'memory.current').read_text()),
                 'memory_events': counters(path / 'memory.events'),
+                'memory_breakdown': {key:value for key,value in counters(path / 'memory.stat').items() if key in ('anon','file','kernel','shmem','file_dirty','file_writeback','inactive_file','active_file','pagetables','slab')},
                 'cpu_max': (path / 'cpu.max').read_text().strip(),
             }
         except FileNotFoundError:
