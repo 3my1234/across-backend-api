@@ -27,6 +27,24 @@ def delta(before, after):
     return 100*(total-d[3]-d[4])/total,100*d[4]/total
 
 
+def run_probe_process(args, detail):
+    """Separate process launch from transfer/wait without changing safety deadlines."""
+    launched=time.monotonic()
+    with subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) as process:
+        detail['process_launch_seconds']=time.monotonic()-launched
+        waiting=time.monotonic()
+        try:
+            stdout,stderr=process.communicate(timeout=2.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            detail['process_timeout']=True
+            raise
+        finally:
+            detail['process_wait_seconds']=time.monotonic()-waiting
+        return subprocess.CompletedProcess(args,process.returncode,stdout,stderr)
+
+
 def probe(url,diagnostics=None):
     start=time.monotonic()
     detail=dict(url=url)
@@ -40,7 +58,7 @@ def probe(url,diagnostics=None):
               '--output','-' if ready else os.devnull,'--write-out',
               '\n%{http_code}\t%{time_namelookup}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}\t%{size_download}']
         if ready:args.extend(['--max-filesize','8192'])
-        result=subprocess.run(args+[url],capture_output=True,text=True,timeout=2.5)
+        result=run_probe_process(args+[url],detail)
         body,separator,status=result.stdout.rpartition('\n')
         parts=status.strip().split('\t')
         detail.update(exit_code=result.returncode,http_status=parts[0],error=result.stderr.strip()[:500],
@@ -48,6 +66,8 @@ def probe(url,diagnostics=None):
         ok=result.returncode==0 and bool(separator) and parts[0]=='200'
         if ready:ok=ok and len(body.encode())<=8192 and json.loads(body).get('ok') is True
         detail.update(healthy=ok,seconds=time.monotonic()-start)
+        if 'process_wait_seconds' in detail and len(parts)==7:
+            detail['wait_outside_transfer_seconds']=max(0,detail['process_wait_seconds']-float(parts[5]))
         return url,ok,detail['seconds']
     except Exception as error:
         detail.update(healthy=False,error_class=type(error).__name__,seconds=time.monotonic()-start)
