@@ -1,6 +1,9 @@
 import unittest
 from safety import reasons, validate_inventory, LABEL
 from watchdog import delta
+from relay import validate as validate_peers
+from access import handle as access_handle
+import json
 from verify_cgroup import verify_files
 from pathlib import Path
 import tempfile
@@ -10,6 +13,20 @@ class SafetyTests(unittest.TestCase):
         return dict(available_bytes=4*2**30,disk_free_bytes=40*2**30,oom=False,
             production_healthy=True,cpu_high_seconds=0,iowait_high_seconds=0,
             health_failures=0,latency_failures=0,peer_heartbeat_age_seconds=0)
+    def test_relay_requires_both_fresh_advancing_peers(self):
+        run="cohost-"+"a"*16
+        good=[dict(run=run,role=r,age_seconds=1,sequence=10) for r in ("main","database")]
+        self.assertEqual(validate_peers(good,{},run),{"main":10,"database":10})
+        with self.assertRaises(ValueError):validate_peers(good,{"main":10},run)
+        good[1]["age_seconds"]=999
+        with self.assertRaises(ValueError):validate_peers(good,{},run)
+    def test_forced_access_refuses_shell_and_wrong_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory)/("cohost-"+"a"*16);base.mkdir()
+            (base/"manifest.json").write_text(json.dumps(dict(run=base.name,role="main")))
+            with self.assertRaises(ValueError):access_handle(base,"sh -c whoami")
+            access_handle(base,"lease");self.assertTrue((base/"peer.lease").exists())
+            self.assertEqual(json.loads(access_handle(base,"status"))["age_seconds"],999)
     def test_parent_cgroup_caps_and_rejection(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)

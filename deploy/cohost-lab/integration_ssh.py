@@ -24,7 +24,7 @@ def wait_port(port):
 def main():
     assert os.environ.get("GITHUB_ACTIONS")=="true" and os.geteuid()==0,"CI root only"
     procs=[];pg=None
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory(dir="/root",prefix="cohost-ci-") as directory:
         base=Path(directory);base.chmod(0o700)
         ssh_port=free_port();db_port=free_port()
         try:
