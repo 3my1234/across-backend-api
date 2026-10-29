@@ -1,0 +1,43 @@
+# REVIEW PACKAGE ONLY: no workflow includes this overlay and no host is provisioned.
+# Proposed16-dedicated-vCPU disposable lab; requires verified systemd/cgroup-v2 slice.
+# Host/controller tasks use12-15; workload slice uses0-11. Auxiliary services
+# intentionally share10; all five critical resource classes are disjoint.
+services:
+  postgres:
+    cpuset: 0-3
+    cpus: 4
+    mem_limit: 8g
+    cgroup_parent: atlxpres-lab.slice
+  sessions:
+    cpuset: 4-5
+    cpus: 2
+    mem_limit: 4g
+    cgroup_parent: atlxpres-lab.slice
+  api1:
+    cpuset: '6'
+    cgroup_parent: atlxpres-lab.slice
+  api2:
+    cpuset: '7'
+    cgroup_parent: atlxpres-lab.slice
+  gateway:
+    cpuset: '8'
+    cpus: 1
+    cgroup_parent: atlxpres-lab.slice
+  notification-worker:
+    cpuset: '9'
+    cgroup_parent: atlxpres-lab.slice
+  notification-provider:
+    cpuset: '10'
+    cgroup_parent: atlxpres-lab.slice
+  redis:
+    cpuset: '10'
+    cgroup_parent: atlxpres-lab.slice
+  exporter:
+    cpuset: '11'
+    cgroup_parent: atlxpres-lab.slice
+  verifier:
+    cpuset: '11'
+    cgroup_parent: atlxpres-lab.slice
+  seed:
+    cpuset: '11'
+    cgroup_parent: atlxpres-lab.slice
