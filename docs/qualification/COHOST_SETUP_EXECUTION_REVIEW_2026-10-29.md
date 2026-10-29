@@ -7,9 +7,9 @@ The disposable safety/transport checks have passed. Actual VPS endpoint verifica
 ## Evidence completed
 
 - Read-only actual hosts: Docker systemd driver/cgroup v2 with CPU, memory, IO and PID controllers; proposed loopback ports unused; main test subnet does not overlap current Docker subnets; SSH permits required forwarding. Earlier passive samples: main CPU p95 26.32%, maximum 88.46%, RAM available6.28GiB; DB CPU p955.63%, maximum8.85%, RAM available7.07GiB. Each host has4vCPU. Samples are not peak guarantees or bandwidth qualification.
-- Disposable CI40930615454 at5c58e7b PASSED17policy tests, six watchdog-failure/real-stop drills, real volume/network cleanup plus refusal of unrelated data, and real PostgreSQL traffic through the full internal Docker `postgres:5432` alias ? Unix socket ? restricted SSH path. Shell/non-test forwarding denied. No live host was involved.
+- Final disposable CI40933059552 at0e2739a403350532c1a4bb9679894c37df60a949 PASSED17policy tests, six watchdog-failure/real-stop drills, real volume/network cleanup plus refusal of unrelated data, and real PostgreSQL traffic through the full internal Docker `postgres:5432` alias ? Unix socket ? restricted SSH path. Shell/non-test forwarding denied. No live host was involved.
 - Image bundle CI40930181592 at13d316c62ce8bdd35c1c2fe72bf3d4d357581914 PASSED and built immutable binaries. Lab-only CPU metadata now accepts the bounded3CPU profile; targeted Go tests passed and4/200remain rejected. Production API/migration/client code unchanged.
-- Image archive SHA256: `020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366`. Image manifest downloaded/verified; full corrected archive transfer/local checksum verification is pending in session39227. Execution must refuse missing or mismatched archive. Earlier image bundle40925392518 is superseded for fixture execution because its lab binary rejects3CPU metadata.
+- Image archive SHA256: `020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366`. Corrected image manifest AND full208MBarchive downloaded and independently SHA256-verified locally; LOCAL_VERIFIED.txt records completion. Execution must refuse missing or mismatched archive. Earlier image bundle40925392518 is superseded for fixture execution because its lab binary rejects3CPU metadata.
 
 ## Allocations
 
