@@ -6,19 +6,20 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, generator]
+        options: [roles, receipts, expanded, inbox, system, queries, generator, generator-sustained]
         default: roles
 permissions:
   contents: read
 jobs:
   generator:
-    if: github.event.inputs.phase == 'generator'
+    if: github.event.inputs.phase == 'generator' || github.event.inputs.phase == 'generator-sustained'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event.inputs.phase == 'generator-sustained' && 50 || 20 }}
     env:
       LAB_EXCHANGE_DIR: ${{ github.workspace }}/generator-exchange
       LAB_GENERATOR_SUITE_DIR: ${{ github.workspace }}/deploy/session-lab
       LAB_INVESTIGATION_PHASE: system
+      GENERATOR_SESSION_PROFILE: ${{ github.event.inputs.phase == 'generator-sustained' && 'sustained' || 'stage' }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
@@ -29,10 +30,11 @@ jobs:
           git diff --exit-code 620ac93 -- deploy/session-lab internal/ migrations/ cmd/api/
           go test -race ./deploy/generator-lab
           python3 -m unittest discover -s deploy/generator-lab -p 'test_*.py'
+          python3 deploy/generator-lab/verify_source.py
           CGO_ENABLED=0 go build -o deploy/generator-lab/generator-target ./deploy/generator-lab
           docker build -t atlxpres-generator-target:local deploy/generator-lab
           docker compose -f deploy/generator-lab/compose.yml pull sessions
-      - name: Compare original and locally prepared generator at two CPUs
+      - name: Qualify original actions with explicit local preparation at two CPUs
         run: bash deploy/generator-lab/run.sh
       - uses: actions/upload-artifact@v4
         if: always()

@@ -2,9 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSyntheticTargetBranches(t *testing.T) {
@@ -84,5 +88,71 @@ func TestCompletePopulationAndPayloadEnvelope(t *testing.T) {
 	}
 	if _, d := call("GET", "/marketplace/drivers/nearby?kind=courier", ""); d["items"].([]any)[0].(map[string]any)["transport_kind"] != "courier" {
 		t.Fatal(d)
+	}
+}
+
+func TestReviewedPreparationProfiles(t *testing.T) {
+	for _, profile := range []string{"stage", "sustained"} {
+		t.Run(profile, func(t *testing.T) {
+			t.Setenv("GENERATOR_SESSION_PROFILE", profile)
+			path := t.TempDir()
+			prepare(path)
+			raw, err := os.ReadFile(filepath.Join(path, "approval.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var approval map[string]any
+			if err = json.Unmarshal(raw, &approval); err != nil {
+				t.Fatal(err)
+			}
+			want := float64(180)
+			if profile == "sustained" {
+				want = 1800
+			}
+			if approval["profile"] != profile || approval["max_duration_seconds"] != want || approval["max_sessions"] != float64(500) {
+				t.Fatal(approval)
+			}
+		})
+	}
+	t.Setenv("GENERATOR_SESSION_PROFILE", "unreviewed")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("unreviewed profile accepted")
+		}
+	}()
+	generatorProfile()
+}
+
+func TestConcurrentPeerWritesHaveDistinctMessageIDs(t *testing.T) {
+	s := newTarget()
+	actors := population()
+	a := actors[0]
+	peer := actors[1]
+	outputs := make(chan map[string]any, 2)
+	s.mu.Lock()
+	for i, current := range []actor{a, peer} {
+		go func(i int, a actor) {
+			payload := fmt.Sprintf(`{"message":"concurrent synthetic","client_message_id":"key-%d"}`, i)
+			r := httptest.NewRequest("POST", "http://gateway:8080/api/v1/marketplace/conversations/"+a.Conversation+"/messages", strings.NewReader(payload))
+			r.Header.Set("Authorization", "Bearer "+a.Token)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+			var body map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			outputs <- body
+		}(i, current)
+	}
+	deadline := time.Now().Add(time.Second)
+	for s.requests.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	observed := s.requests.Load()
+	s.mu.Unlock()
+	if observed != 2 {
+		t.Fatal("both synthetic HTTP requests did not reach the response barrier")
+	}
+	first, second := <-outputs, <-outputs
+	if first["id"] == nil || second["id"] == nil || first["id"] == second["id"] {
+		t.Fatal("distinct committed synthetic messages shared an ID", first, second)
 	}
 }

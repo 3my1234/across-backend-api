@@ -59,7 +59,19 @@ func writeJSON(path string, v any) {
 		panic(err)
 	}
 }
+func generatorProfile() (string, int) {
+	profile := os.Getenv("GENERATOR_SESSION_PROFILE")
+	switch profile {
+	case "", "stage":
+		return "stage", 180
+	case "sustained":
+		return "sustained", 1800
+	default:
+		panic("unsupported synthetic generator profile")
+	}
+}
 func prepare(dir string) {
+	profile, seconds := generatorProfile()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		panic(err)
 	}
@@ -67,7 +79,7 @@ func prepare(dir string) {
 	writeJSON(filepath.Join(dir, "run.json"), base)
 	base["sessions"] = population()
 	writeJSON(filepath.Join(dir, "fixtures.json"), base)
-	writeJSON(filepath.Join(dir, "approval.json"), map[string]any{"authorized": true, "environment": "isolated-staging", "profile": "stage", "max_sessions": 500, "max_duration_seconds": 180, "spending_cap_usd": 0, "approved_at": time.Now().UTC(), "source": "User-authorized independent generator qualification; synthetic HTTP only, no application/database/production"})
+	writeJSON(filepath.Join(dir, "approval.json"), map[string]any{"authorized": true, "environment": "isolated-staging", "profile": profile, "max_sessions": 500, "max_duration_seconds": seconds, "spending_cap_usd": 0, "approved_at": time.Now().UTC(), "source": "User-authorized independent generator qualification; synthetic HTTP only, no application/database/production"})
 }
 
 type target struct {
@@ -80,6 +92,7 @@ type target struct {
 	first         map[string]time.Time
 	begun         time.Time
 	requests      atomic.Uint64
+	messageIDs    atomic.Uint64
 	responseBytes atomic.Uint64
 }
 
@@ -184,7 +197,7 @@ func (s *target) response(r *http.Request) (int, any) {
 			return 201, m
 		}
 		text, _ := input["message"].(string)
-		m := message{uuid(1000000 + int(s.requests.Load())), text, a.Role, time.Now().UTC()}
+		m := message{uuid(1000000 + int(s.messageIDs.Add(1))), text, a.Role, time.Now().UTC()}
 		s.messages[conv] = append(s.messages[conv], m)
 		s.replay[conv+key] = m
 		return 201, m
@@ -219,7 +232,7 @@ func (s *target) response(r *http.Request) (int, any) {
 	}
 	if strings.HasSuffix(p, "/messages") {
 		if r.Method == "POST" {
-			return 201, map[string]any{"id": uuid(2000000 + int(s.requests.Load()))}
+			return 201, map[string]any{"id": uuid(2000000 + int(s.messageIDs.Add(1)))}
 		}
 		items := s.messages[a.Conversation]
 		if len(items) > 40 {

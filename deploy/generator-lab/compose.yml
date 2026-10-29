@@ -12,7 +12,7 @@ services:
     environment:
       K6_NO_USAGE_REPORT: 'true'
       K6_NO_COLOR: 'true'
-      LAB_SESSION_PROFILE: stage
+      LAB_SESSION_PROFILE: ${GENERATOR_SESSION_PROFILE:-stage}
       LAB_SESSION_TARGET: '500'
       LAB_SESSION_MIX: mixed
       LAB_SESSION_AUTH_MODE: established

@@ -7,13 +7,21 @@ def percentile(values, fraction):
     ordered=sorted(values)
     return ordered[min(len(ordered)-1,int((len(ordered)-1)*fraction))] if ordered else None
 
+def reviewed_profile(configuration):
+    profile=configuration.get('profile')
+    seconds={'stage':180,'sustained':1800}.get(profile)
+    if seconds is None or configuration.get('seconds')!=seconds or configuration.get('target')!=500:raise ValueError('Unexpected reviewed500-session profile or duration')
+    return profile,seconds
+
 def analyze(directory, quota):
     root=Path(directory)
     summary=json.loads((root/'summary.json').read_text())
     metrics=summary['metrics']
+    configuration=summary['configuration']
+    profile,requested_seconds=reviewed_profile(configuration)
     count=lambda name: metrics.get(name,{}).get('values',{}).get('count',0)
     failures=[f'{name}:{label}' for name,value in metrics.items() for label,state in value.get('thresholds',{}).items() if not state.get('ok',False)]
-    observed=[];started=[];ended=[]
+    observed=[];started=[];ended=[];vus500=[]
     with (root/'timeseries.json').open() as stream:
         for line in stream:
             item=json.loads(line)
@@ -22,6 +30,7 @@ def analyze(directory, quota):
             if item.get('metric')=='offered_requests':observed.append(float(data['value']))
             if item.get('metric')=='http_reqs' and tags.get('phase')=='measured':ended.append(data['time'])
             if item.get('metric')=='offered_requests':started.append(data['time'])
+            if item.get('metric')=='vus' and data['value']==500:vus500.append(data['time'])
     from datetime import datetime
     stamp=lambda value:datetime.fromisoformat(value.replace('Z','+00:00')).timestamp()
     begin=min(map(stamp,started));end=max(map(stamp,ended))
@@ -57,12 +66,14 @@ def analyze(directory, quota):
       'original_thresholds_pass':not failures,
       'all_500_authenticated':count('authenticated_sessions')==500 and count('warmup_authenticated_sessions')==500,
       'all_500_started':count('session_starts')==500 and stats['active_identities']==500,
-      '180_seconds_measured':end-begin>=175,
+      'requested_duration_measured':end-begin>=requested_seconds-5,
+      'all_500_vus_sustained':sum(begin<=stamp(t)<=end for t in vus500)>=requested_seconds-10,
+      'local_preparation_identity_counts':profile!='sustained' or (count('local_generator_prepared')==500 and count('local_generator_used')==500),
       'offered_completed_accounting':sum(observed)==len(ended),
       'mock_received_every_request':stats['requests']==len(ended)+1004,
       'no_dropped_iterations':count('dropped_iterations')==0,
       'burst_spread_under_5_seconds':stats['first_activity_spread_seconds']<=5,
-      'generator_sample_coverage':generator['sampled_seconds']>=170,
+      'generator_sample_coverage':generator['sampled_seconds']>=requested_seconds-10,
       'generator_cpu_p95_under_70pct':generator['p95_cpu_quota_fraction']<.70,
       'generator_burst_cpu_p95_under_85pct':generator['burst_p95_cpu_quota_fraction'] is not None and generator['burst_p95_cpu_quota_fraction']<.85,
       'generator_throttle_periods_under_1pct':generator['throttled_period_fraction']<.01,
@@ -71,7 +82,7 @@ def analyze(directory, quota):
       'mock_cpu_p95_under_70pct':target['p95_cpu_quota_fraction']<.70,
       'mock_no_oom':target['oom_events']==0,
     }
-    return {'independent_generator_gate_passed':all(assertions.values()),'assertions':assertions,'failed_original_thresholds':failures,'offered':sum(observed),'completed':len(ended),'measured_seconds':end-begin,'http_per_second':len(ended)/(end-begin),'target':stats,'containers':result,'sample_interval_p99_seconds':percentile(intervals,.99),'scope':'Unchanged 500-VU session actions against synthetic stateful HTTP; no application/database/worker capacity claim. Does not prove shared-host headroom during actual qualification.'}
+    return {'independent_generator_gate_passed':all(assertions.values()),'assertions':assertions,'failed_original_thresholds':failures,'offered':sum(observed),'completed':len(ended),'measured_seconds':end-begin,'requested_seconds':requested_seconds,'vus500_samples':sum(begin<=stamp(t)<=end for t in vus500),'http_per_second':len(ended)/(end-begin),'target':stats,'containers':result,'sample_interval_p99_seconds':percentile(intervals,.99),'scope':'Unchanged 500-VU session actions against synthetic stateful HTTP; no application/database/worker capacity claim. Does not prove shared-host headroom during actual qualification.'}
 
 if __name__=='__main__':
     output=analyze(sys.argv[1],float(sys.argv[2]));Path(sys.argv[1],'gate.json').write_text(json.dumps(output,indent=2));print(json.dumps(output,indent=2))

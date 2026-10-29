@@ -3,14 +3,22 @@ set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${LAB_INVESTIGATION_PHASE:-} == system ]]
 dc() { docker compose -f deploy/generator-lab/compose.yml "$@"; }
 mkdir -p generator-exchange generator-evidence
+python3 deploy/generator-lab/verify_source.py >generator-evidence/qualified-harness-proof.json
 git rev-parse HEAD >generator-evidence/source.txt
 sha256sum deploy/session-lab/{sessions.js,policy.mjs,transport.mjs,established.mjs} >generator-evidence/unchanged-harness.sha256
 lscpu >generator-evidence/runner-cpu.txt
 free -h >generator-evidence/runner-memory.txt
-cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh,prewarm.py,test_prewarm.py} generator-evidence/
+cp deploy/generator-lab/{main.go,main_test.go,compose.yml,gate.py,run.sh,prewarm.py,test_prewarm.py,verify_source.py} generator-evidence/
 GENERATOR_LAB=synthetic-only deploy/generator-lab/generator-target prepare generator-exchange
 chmod -R a+rwX generator-exchange
-for mode in baseline prewarm; do
+profile="${GENERATOR_SESSION_PROFILE:-stage}"
+case "$profile" in
+ stage) modes=(baseline prewarm);;
+ sustained) modes=(prewarm);;
+ *) echo 'Unsupported synthetic generator profile' >&2; exit 1;;
+esac
+printf '%s\n' "$profile" >generator-evidence/requested-profile.txt
+for mode in "${modes[@]}"; do
  quota=2
  export LAB_GENERATOR_SUITE_DIR="$PWD/generator-suite-${mode}"
  mkdir -p "$LAB_GENERATOR_SUITE_DIR"
@@ -52,7 +60,9 @@ python3 - <<'PYGATE'
 import json
 from pathlib import Path
 arms=[json.loads(p.read_text()) for p in Path('generator-evidence').glob('cpu-*/gate.json')]
-assert len(arms)==2,'Both baseline and locally prepared arms must produce interpretable evidence'
+profile=Path('generator-evidence/requested-profile.txt').read_text().strip()
+assert len(arms)==(1 if profile=='sustained' else 2),'Requested resource arms must produce interpretable evidence'
 assert json.loads(Path('generator-evidence/cpu-2-prewarm/gate.json').read_text())['independent_generator_gate_passed'],'Local preparation candidate did not qualify; do not repeat application500'
-assert json.loads(Path('generator-evidence/cpu-2-baseline/gate.json').read_text())['assertions']['original_thresholds_pass'],'Baseline workload correctness failed'
+if profile=='stage':
+ assert json.loads(Path('generator-evidence/cpu-2-baseline/gate.json').read_text())['assertions']['original_thresholds_pass'],'Baseline workload correctness failed'
 PYGATE
