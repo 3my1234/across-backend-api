@@ -6,7 +6,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, fanout, qualified-500]
+        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, fanout, qualified-500]
         default: roles
       calibration_run:
         description: Successful bounded calibration independently reviewed for sustained500
@@ -209,7 +209,7 @@ jobs:
         if: always()
         run: docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml down --volumes --remove-orphans
   actual-stack-calibration:
-    if: github.event.inputs.phase == 'calibration'
+    if: github.event.inputs.phase == 'calibration' || github.event.inputs.phase == 'trigger-profile'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -304,7 +304,11 @@ jobs:
           docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml run --rm --no-deps exporter /app/lab notification-prepare
           docker compose -f deploy/capacity-lab/compose.yml exec -T postgres psql -U lab -d capacity_lab -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pg_stat_statements; ANALYZE;'
       - name: Calibrate actual stack with independently qualified generator
+        if: github.event.inputs.phase == 'calibration'
         run: bash deploy/notification-lab/calibration.sh
+      - name: Profile actual notification triggers and isolated database CPU scaling
+        if: github.event.inputs.phase == 'trigger-profile'
+        run: bash deploy/notification-lab/trigger-profile.sh
       - name: Preserve collection provenance and failure evidence
         if: always()
         run: |
