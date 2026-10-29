@@ -82,10 +82,14 @@ if not fresh():
     if not fresh():subprocess.run(['python3',str(base/'tools/operator_setup.py'),str(base),'baseline'],check=True,timeout=420)
 print('Fresh baseline validated; no load authorized.')
 '@
-$encodedBaseline = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($baselineCode))
-$baselineCommand = "python3 -c `"import base64;exec(base64.b64decode('$encodedBaseline'))`""
-Remote '173.212.219.169' $baselineCommand
-Remote '79.143.176.173' $baselineCommand
+function RemoteBaseline([string]$address) {
+    # PowerShell 5.1 strips nested native-command quotes. Send ASCII Python on
+    # stdin instead; the remote shell sees only the fixed command python3 -.
+    $baselineCode | & ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=6 -o ConnectTimeout=20 -o StrictHostKeyChecking=yes "root@$address" 'python3 -'
+    if ($LASTEXITCODE -ne 0) { throw "Baseline SSH failed ($LASTEXITCODE); setup stopped." }
+}
+RemoteBaseline '173.212.219.169'
+RemoteBaseline '79.143.176.173'
 try {
     Remote '79.143.176.173' "python3 '$remote/tools/operator_setup.py' '$remote' stage"
     Remote '173.212.219.169' "python3 '$remote/tools/operator_setup.py' '$remote' stage"
