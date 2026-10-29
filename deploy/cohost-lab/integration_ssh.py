@@ -69,9 +69,22 @@ def main():
                 if forward.poll() is not None:raise AssertionError("SSH failed: "+(base/"sshd.log").read_text())
                 time.sleep(.1)
             env={**os.environ,"PGPASSWORD":"lab-disposable-only"}
-            destination=call("psql","-h",str(socket_dir),"-p","55432","-U","lab","-d","capacity_lab","-XAtc",
-                "SELECT current_database() || ':' || marker FROM capacity_lab_identity",env=env)
+            probe_args=["psql","-h",str(socket_dir),"-p","55432","-U","lab","-d","capacity_lab","-XAtc",
+                "SELECT current_database() || ':' || marker FROM capacity_lab_identity"]
+            # Listener creation does not prove a forwarded channel is usable yet.
+            # This is bounded setup readiness, outside all capacity measurement.
+            ready_until=time.monotonic()+5;probe_attempts=0
+            while True:
+                probe_attempts+=1
+                result=subprocess.run(probe_args,env=env,text=True,capture_output=True,timeout=3)
+                if result.returncode==0:
+                    destination=result.stdout.strip();break
+                print('Bootstrap transport probe not ready:',result.stderr.strip(),flush=True)
+                if time.monotonic()>=ready_until or forward.poll() is not None:
+                    raise AssertionError('Forwarded PG readiness failed: '+(base/'sshd.log').read_text())
+                time.sleep(.2)
             assert destination=="capacity_lab:disposable-compose-only",destination
+            for _ in range(3):assert call(*probe_args,env=env)==destination
             network=call('docker','network','create','--internal','--label','atlxpres.cohost.run='+run,run+'-bridge')
             bridge=call('docker','run','-d','--user','0:0','--network',network,'--network-alias','postgres',
                 '--label','atlxpres.cohost.run='+run,'-v',str(socket_dir)+':/tunnel:ro',
@@ -98,7 +111,13 @@ def main():
                 except ConnectionResetError:response=b""
                 assert response==b"","forbidden destination accepted"
             print(json.dumps(dict(ssh_unix_pg_protocol="passed",saved_marker=destination,
-                docker_internal_postgres_alias="passed",arbitrary_command="denied",non_test_port="denied",public_database_port=False)))
+                bootstrap_probe_attempts=probe_attempts,docker_internal_postgres_alias="passed",arbitrary_command="denied",non_test_port="denied",public_database_port=False)))
+        except BaseException:
+            if (base/'sshd.log').exists():print('Retained SSH diagnostic:',(base/'sshd.log').read_text(),flush=True)
+            if pg:
+                subprocess.run(['docker','logs','--tail','40',pg],check=False)
+                subprocess.run(['docker','inspect','--format','{{json .State}}',pg],check=False)
+            raise
         finally:
             for process in reversed(procs):
                 process.terminate()
