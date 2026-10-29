@@ -17,12 +17,16 @@ def validate(doc,now):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('output',type=Path);a=ap.parse_args()
     values={u:[] for u in URLS};start=time.monotonic()
+    started_unix=time.time()
     while time.monotonic()-start<300 or min(map(len,values.values()))<60:
-        with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(probe,URLS))
+        details={}
+        with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(lambda url:probe(url,details),URLS))
+        with a.output.with_name('baseline-observations.jsonl').open('a') as log:
+            log.write(json.dumps(dict(baseline_started_unix=started_unix,collected_unix=time.time(),probes=details))+'\n')
         for url,ok,seconds in results:
             if not ok or seconds>2:
                 failure=dict(baseline='failed',url=url,healthy=ok,seconds=seconds,
-                    completed_samples={u:len(v) for u,v in values.items()},load_started=False)
+                    completed_samples={u:len(v) for u,v in values.items()},load_started=False,probe=details.get(url))
                 a.output.with_name('baseline-failure.json').write_text(json.dumps(failure,indent=2))
                 print(json.dumps(failure),flush=True)
                 raise ValueError('baseline health failure; do not arm test')

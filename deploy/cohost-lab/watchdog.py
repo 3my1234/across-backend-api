@@ -27,8 +27,9 @@ def delta(before, after):
     return 100*(total-d[3]-d[4])/total,100*d[4]/total
 
 
-def probe(url):
+def probe(url,diagnostics=None):
     start=time.monotonic()
+    detail=dict(url=url)
     try:
         ready=url.endswith('/ready')
         # curl races dual-stack connections and bounds the COMPLETE transfer.
@@ -36,15 +37,23 @@ def probe(url):
         args=['curl','-q','--silent','--show-error','--location','--max-redirs','5',
               '--proto','=https','--proto-redir','=https','--max-time','2',
               '--connect-timeout','2','--user-agent','ATL-Xpress-cohost-safety/1.0',
-              '--output','-' if ready else os.devnull,'--write-out','\n%{http_code}']
+              '--output','-' if ready else os.devnull,'--write-out',
+              '\n%{http_code}\t%{time_namelookup}\t%{time_connect}\t%{time_appconnect}\t%{time_starttransfer}\t%{time_total}\t%{size_download}']
         if ready:args.extend(['--max-filesize','8192'])
         result=subprocess.run(args+[url],capture_output=True,text=True,timeout=2.5)
         body,separator,status=result.stdout.rpartition('\n')
-        ok=result.returncode==0 and bool(separator) and status.strip()=='200'
+        parts=status.strip().split('\t')
+        detail.update(exit_code=result.returncode,http_status=parts[0],error=result.stderr.strip()[:500],
+            phases=dict(zip(('dns_seconds','connect_seconds','tls_seconds','first_byte_seconds','total_seconds','download_bytes'),parts[1:])))
+        ok=result.returncode==0 and bool(separator) and parts[0]=='200'
         if ready:ok=ok and len(body.encode())<=8192 and json.loads(body).get('ok') is True
-        return url,ok,time.monotonic()-start
-    except Exception:
-        return url,False,time.monotonic()-start
+        detail.update(healthy=ok,seconds=time.monotonic()-start)
+        return url,ok,detail['seconds']
+    except Exception as error:
+        detail.update(healthy=False,error_class=type(error).__name__,seconds=time.monotonic()-start)
+        return url,False,detail['seconds']
+    finally:
+        if diagnostics is not None:diagnostics[url]=detail
 
 
 def state(ids):

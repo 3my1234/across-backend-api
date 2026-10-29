@@ -26,5 +26,19 @@ class ProbeTests(unittest.TestCase):
             _,healthy,seconds=probe('https://atlxpres.com/')
             self.assertTrue(healthy);self.assertGreater(seconds,2)
             self.assertNotIn('--max-filesize',call.call_args.args[0])
+    def test_actual_failed_request_keeps_phases_and_curl_error(self):
+        details={}
+        result=subprocess.CompletedProcess([],28,'\n000\t0.010\t0.020\t0.000\t0.000\t2.000\t0','curl: (28) SSL connection timeout')
+        with patch('watchdog.subprocess.run',return_value=result):
+            self.assertFalse(probe('https://atlxpres.com/',details)[1])
+        row=details['https://atlxpres.com/']
+        self.assertEqual(row['exit_code'],28)
+        self.assertEqual(row['phases']['dns_seconds'],'0.010')
+        self.assertEqual(row['phases']['tls_seconds'],'0.000')
+        self.assertIn('SSL connection timeout',row['error'])
+        self.assertNotIn('body',row)
+    def test_ready_body_still_validated_with_timing_metadata(self):
+        with patch('watchdog.subprocess.run',return_value=subprocess.CompletedProcess([],0,'{"ok":true}\n200\t0.001\t0.002\t0.003\t0.004\t0.005\t238','')):
+            self.assertTrue(probe('https://api.atlxpres.com/api/v1/ready')[1])
 
 if __name__=='__main__':unittest.main()
