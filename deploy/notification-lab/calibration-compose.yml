@@ -4,7 +4,5 @@ services:
   postgres:
     mem_limit: ${LAB_CALIBRATION_DB_MEMORY:?explicit reviewed 1g or 8g ceiling required}
   sessions:
-    entrypoint: [/bin/sh]
-    command: [/recorder.sh]
     cpus: 2
-    volumes: ['${LAB_GENERATOR_RECORDER:?explicit reviewed recorder required}:/recorder.sh:ro', '${LAB_CALIBRATION_SUITE_DIR:?explicit isolated suite required}:/suite:ro']
+    volumes: ['${LAB_CALIBRATION_SUITE_DIR:?explicit isolated suite required}:/suite:ro']

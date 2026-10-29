@@ -6,7 +6,6 @@ case "${LAB_CALIBRATION_DB_MEMORY:-}" in 1g|8g) ;; *) echo 'Only reviewed isolat
 dc() { docker compose -f deploy/capacity-lab/compose.yml -f deploy/session-lab/compose.yml -f deploy/notification-lab/compose.yml -f deploy/notification-lab/system-compose.yml -f deploy/notification-lab/calibration-compose.yml "$@"; }
 sql() { dc exec -T postgres psql -U lab -d capacity_lab -X -At -v ON_ERROR_STOP=1 -c "$1"; }
 mkdir -p calibration-evidence
-export LAB_GENERATOR_RECORDER="$PWD/deploy/notification-lab/generator_record_output.sh"
 export LAB_CALIBRATION_SUITE_DIR="$PWD/session-exchange/calibration-suite"
 mkdir -p "$LAB_CALIBRATION_SUITE_DIR"
 cp deploy/session-lab/* "$LAB_CALIBRATION_SUITE_DIR/"
@@ -93,9 +92,6 @@ PYSAMPLER
  dc run --rm --no-deps verifier >"$arm/reconciliation.jsonl" 2>"$arm/reconciliation-errors.log"
  reconciled=$?
  set -e
- gzip -t session-exchange/timeseries.json.gz
- sha256sum session-exchange/timeseries.json.gz >"$arm/compressed-trace.sha256"
- gzip -dc session-exchange/timeseries.json.gz >session-exchange/timeseries.json
  for file in k6.log summary.json timeseries.json k6-exit-code.txt; do if test -f "session-exchange/$file"; then mv "session-exchange/$file" "$arm/"; fi; done
  dc logs --no-color >"$arm/services.log"
  dc ps --all --format json >"$arm/containers.json"
