@@ -12,6 +12,25 @@ import subprocess
 import time
 
 
+def validate_networks(rows,target='172.29.248.0/24'):
+    import ipaddress
+    target=ipaddress.ip_network(target)
+    for row in rows:
+        ipam=row.get('IPAM')
+        if ipam is None:ipam={}
+        if not isinstance(ipam,dict):raise ValueError('invalid network IPAM metadata')
+        configs=ipam.get('Config')
+        if configs is None:configs=[]  # Docker host/none networks have no IPAM subnets.
+        if not isinstance(configs,list):raise ValueError('invalid network subnet metadata')
+        for config in configs:
+            if not isinstance(config,dict):raise ValueError('invalid network subnet entry')
+            subnet=config.get('Subnet')
+            if subnet:
+                network=ipaddress.ip_network(subnet)
+                if network.version==target.version and network.overlaps(target):
+                    raise ValueError('test subnet collision')
+
+
 def plan(request, compose):
     run=request.get("run","");role=request.get("role")
     if not re.fullmatch(r"cohost-[a-f0-9]{16}",run) or role not in ("main","database"):
@@ -36,11 +55,11 @@ def plan(request, compose):
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument("directory",type=Path);ap.add_argument("--execute",action="store_true");a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument("directory",type=Path);ap.add_argument("--execute",action="store_true");ap.add_argument('--preflight',action='store_true');a=ap.parse_args()
     base=a.directory.resolve();request=json.loads((base/"request.json").read_text());raw=(base/"compose.json").read_bytes()
     if hashlib.sha256(raw).hexdigest()!=request.get("compose_sha256"):raise ValueError("reviewed compose hash mismatch")
     compose=json.loads(raw);commands=plan(request,compose)
-    if not a.execute:
+    if not (a.execute or a.preflight):
         print(json.dumps(dict(setup_only=True,commands=commands),indent=2));return
     if os.name!="posix" or os.geteuid()!=0:raise ValueError("Linux root required")
     if base!=Path('/root/atlxpres-cohost')/request['run']:raise ValueError("fixed new test directory required")
@@ -57,7 +76,7 @@ def main():
         raise ValueError("required resource-control backend unavailable")
     existing=capture(["docker","ps","-aq","--filter","label=atlxpres.cohost.run="+request['run']])
     if existing:raise ValueError("nonce already has containers")
-    import socket,ipaddress
+    import socket
     port=58080 if request['role']=='main' else 55432
     with socket.socket() as sock:
         sock.settimeout(1)
@@ -65,13 +84,10 @@ def main():
     if request['role']=='main':
         networks=capture(['docker','network','ls','-q']).splitlines()
         rows=json.loads(capture(['docker','network','inspect',*networks])) if networks else []
-        target=ipaddress.ip_network('172.29.248.0/24')
-        for row in rows:
-            for config in row.get('IPAM',{}).get('Config',[]):
-                subnet=config.get('Subnet')
-                if subnet:
-                    network=ipaddress.ip_network(subnet)
-                    if network.version==4 and network.overlaps(target):raise ValueError('test subnet collision')
+        validate_networks(rows)
+    if a.preflight:
+        print(json.dumps(dict(read_only_host_preflight='passed',role=request['role'],resources_created=False)))
+        return
     production=capture(['docker','ps','-q','--no-trunc']).splitlines()
     if not production:raise ValueError("production inventory unexpectedly empty")
     # A separate setup-only watchdog protects production during NEW resource creation.

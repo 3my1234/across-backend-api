@@ -5,6 +5,10 @@ from image_identity import identities,resolve
 
 def main():
     assert os.environ.get('GITHUB_ACTIONS')=='true','CI only'
+    from stage_host import validate_networks
+    builtin=json.loads(subprocess.check_output(['docker','network','inspect','bridge','host','none'],text=True,timeout=10))
+    validate_networks(builtin)
+    print('Real Docker bridge/host/none network inventory validation passed.')
     with tempfile.TemporaryDirectory() as tmp:
         base=Path(tmp);raw=base/'image.tar';archive=base/'images.tar.gz'
         subprocess.run(['docker','image','save','-o',str(raw),'alpine:3.23'],check=True,timeout=30)
