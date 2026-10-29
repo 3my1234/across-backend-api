@@ -1,186 +1,148 @@
-# Latest status ? 29 October 2026, 11:15 Africa/Lagos
-
-Read this checkpoint before the historical detail below.
-
-- **Notification batching implemented and qualified in isolation:** batch size64; existing transaction retained; recipient/privacy, concurrency, duplicate-only pages, final-page failure rollback and real PostgreSQL worker recovery all passed in run40854663425. No required tests skipped. ABBA fanout SQLcalls1100->100; cumulative SQL time29?39% lower across two runs. Full500capacity is NOT proven.
-- **Long generator qualification RUNNING:** https://github.com/3my1234/across-backend-api/actions/runs/40855200111 ; exact sourceac854e5b597a564c96ed2bbddda7d14315261d74.500synthetic sessions/1800seconds/2CPU/2GiB. This branch intentionally excludes application batch code because it targets a synthetic server. Check complete artifacts, not interim status.
-- **Next calibration prepared, NOT dispatched:** backend branch experiment/launch-qualification, code d5a854c; corrected CI29ee9fa; calibration harness844af84; documentation checkpoint33b9ae9 (later docs-only HEAD may supersede). Require passed long-generator artifact before bounded180second actual-stack calibration. Explicit PG RAM8GiB, DB CPU2; this is RAM similarity, NOT dedicated production4CPU/network/storage equivalence. No full500 or1000 run has started in this continuation.
-- **K3s package prepared and pushed:** separate branch experiment/k3s-preparation at084717875d5a79356b3dd6e6e5471411814ec94d. Strict schema13/13,10policy/contracttests passed; unresolved placeholders intentionally blocked. No cluster install or apply. New topology is FIVE hosts: currentCoolify+unrelatedwebsite, currentexternalPG, THREE futureK3snodes. Retain both current roles; do not buy/configure new hosts without explicit approval.
-- **Mobile complete independently:** user tested APK63 at9758da7; PR60 merged ee7546c6997d70494dedd8edd21f22a46803c82f; all PR and postmerge checks passed. No need to rebuild simply for test-fixture-only changes.
-- **Production untouched by this backend/K3s work.** Existing backup/readiness observations are historical. Production sizing, off-server restore, alerts, current rollback and PHP-warning details remain incomplete. No production capacity or launch-readiness guarantee.
-
-The long generator's actual final outcome may arrive after this checkpoint. Read `qualification/GENERATOR_SUSTAINED_RESULTS_2026-10-29.md`, inspect the run/artifacts, and update this document rather than restarting the test automatically.
-
 # ATL Xpress master handover
 
-Updated 29 October 2026 (Africa/Lagos). This is the current entry point for a new conversation. It supersedes stale NEXT/ACTIVE statements in historical HANDOVER.md, not their retained evidence. All statuses are evidence-specific; a passing isolated test does not establish production capacity.
+Updated 29 October 2026, Africa/Lagos. Read this current checkpoint first. The previous complete handover is preserved in `ATL_XPRESS_MASTER_HANDOVER_HISTORY_2026-10-29.md`; its historical execution instructions are not current commands.
 
-## Start here
+## Current checkpoint
 
-Workspace: `C:/Users/EMMA/Desktop/gouwu` (the workspace root itself is NOT a Git repository). Read this file, then inspect the exact worktrees below. Do not replay old operator deployment/migration commands from chat or archived handovers. No production operation or server purchase is currently authorized.
-
-Immediate sequence: finish notification-batch regression and matched benchmark; only if both pass, run prepared long independent generator qualification; establish honest isolated database/resource headroom; run bounded actual-stack calibration with unchanged gates; only after prerequisites pass, unchanged 500-session sustained qualification. K3s preparation runs separately. Stop escalation on a failed prerequisite and preserve artifacts.
-
-## Product, repositories and ownership
-
-ATL Xpress is a Nigerian marketplace with customer/provider accounts, products and services, provider subscriptions/payment records, Flutterwave checkout, Town Hall requests/bids, direct/community chat, support, admin roles, notifications, and nearby passenger drivers/couriers with leased location presence.
-
-- Backend: `https://github.com/3my1234/across-backend-api`, Go/Fiber, PostgreSQL, Redis, API and separate worker processes; durable SQL notification/outbox records and push receipts. Relevant paths: `internal/controllers`, `internal/services`, `cmd/api`, `cmd/worker`, `cmd/capacity-lab`, `deploy/session-lab`, `deploy/notification-lab`, `.github/workflows`.
-- Mobile: `https://github.com/3my1234/across-mobile-app`, React Native/Expo SDK54, TypeScript, Expo Image, Android EAS preview APKs. Mobile worktree below. Backend optimization is not mobile code.
-- Web: `https://github.com/3my1234/across-admin-panel`, provider PWA and separate admin resource. Provider automatic deployment was disabled; admin automatic deployment was enabled in last operator inventory. Do not assume those historical settings still hold before a future release.
-- Redis supports shared runtime state; exact persistence/recovery and dependency inventory must be completed before any migration. PostgreSQL remains authoritative for business data.
-
-## Current infrastructure and approved K3s direction
-
-Two existing independent Contabo EU VPS hosts, not nested VMs:
-
-1. Main/application host `173.212.219.169`: Coolify, original API, two API replica slots, gateway, worker, Redis, admin and provider web resources. Also an unrelated website which MUST stay online under Coolify. Never repurpose this host as a K3s node by assumption.
-2. Database host `79.143.176.173`: dedicated ATL Xpress PostgreSQL (`across_db`), registered as a remote server in Coolify, private database connectivity. No production load test or reset.
-
-Reported production DB sizing is approximately four vCPUs/eight GiB. Fresh CPU model, allocated RAM, filesystem/IOPS/latency, disk headroom, network RTT, exact DB settings and failure domains are NOT verified by that description. No speculative capacity/cost claim.
-
-User intends THREE additional independent VPS hosts shortly. Target is FIVE hosts total: existing main/Coolify + unrelated website; existing external PostgreSQL; three NEW K3s server/application nodes with embedded etcd. Do not purchase them or assume arrival. No K3s installation on either existing host. Three nodes do not make external PostgreSQL, Redis, external ingress or the entire platform highly available. Confirm hardware, private networking and real failure domains before installation.
-
-The October28 `K3S_INFRASTRUCTURE_DECISION_2026-10-28.md` four-host/reuse-main option is SUPERSEDED by the five-host target. Keep it only as historical alternatives. K3s work currently has reserved placeholders and must fail closed before live use. New package status/commit is recorded in the live checkpoint below.
-
-## Exact worktrees and source state
-
-| Worktree under workspace | Branch | Source/status |
+| Workstream | Verified state | Next gate |
 |---|---|---|
-| `.worktrees/launch-qualification` | `experiment/launch-qualification` | Notification batching candidate `d5a854c2d00914b5db944f3f8bae8659599df134`, pushed; NOT merged/deployed. Includes prior nearby/inbox/chat/worker experiments. Inspect `git status --short`; never overwrite another worktree. |
-| `.worktrees/generator-headroom` | `experiment/generator-headroom` | Prepared long generator phase `ac854e5`; original short proof source `41ccc8344a6974d43126b96343746bc4f4ed76d1`. No application-source changes. Dispatch held until batch correctness AND benchmark pass. |
-| `.worktrees/mobile-login-overload` | `experiment/media-google-promoted-banners` | APK63 application source `9758da7`; subsequent fixture-only commit `40c686224597b69ba5e4311ae6960cafe30d30a4`; PR60 merged to mobile main `ee7546c6997d70494dedd8edd21f22a46803c82f`. |
-| `.worktrees/inbox-performance` | `perf/inbox-page-work` | Historical inbox differential/source proof `67245f4`; preserve evidence. |
-| `.worktrees/notification-workers` | `perf/receipt-throughput` | Receipt throughput/lease recovery source `d72df8b1f205886f9b03db889c79d5359d9628ec`; experimental migration108, NOT production schema. |
-| `.worktrees/expanded-capacity-ramp` | `experiment/expanded-capacity-ramp` | Historical expanded workload/importer/failure evidence; do not dispatch obsolete branch blind. |
+| Notification batching | Implemented on the isolated backend branch. Correctness, concurrent retries, batch boundaries, final-page rollback, privacy and actual PostgreSQL receipt-worker recovery passed in **40854663425**, with no skipped required tests. | Full application capacity is not established by the microbenchmark. |
+| Matched batching benchmark | SQL calls **1,100 -> 100** per100 transactions; cumulative SQL execution time **29?39% lower** across two ABBA runs. Controller-only throughput **2.37?2.58x**. | Preserve query-only scope; do not claim equivalent platform throughput or database CPU reduction. |
+| Independent generator | **RUNNING:** 40855200111, source `ac854e5b597a564c96ed2bbddda7d14315261d74`, 500 synthetic sessions for1,800 seconds at2 CPUs/2GiB. Safety/race/source gates passed. | Inspect the completed artifact and every duration, accounting and headroom gate. Do not start another copy. |
+| Actual-stack calibration | Prepared, **NOT dispatched**. Explicit8GiB PostgreSQL memory ceiling; DB CPU2, generator CPU2/2GiB, application limits and workload unchanged. | Requires the completed successful long-generator proof and exact measured client. This is bounded180-second calibration, not sustained500 qualification. |
+| Full500/1,000 | **Not qualified.** No new actual application500 or1,000 run started in this continuation. | Shared-host/environment and application gates must pass before full500. No1,000 without a passing500 and review. |
+| K3s | Separate preparation branch, strict schema **13/13** resources and **10** policy/source tests passed. Placeholders intentionally block release. | Three future VPS, isolated live staging, transports/network/recovery validation and separate approval. No installation or apply. |
+| Mobile | APK63 accepted by the user; PR60 merged independently; all PR and postmerge checks passed. | Do not entangle mobile with backend qualification. Broader physical-device coverage remains distinct from visual acceptance. |
 
-Get authoritative local inventory with `git worktree list --porcelain` from the backend worktree and `git status --short` in each active tree. Check the live checkpoint for later commits; hashes above identify measured source, not necessarily latest documentation HEAD. No mobile changes belong in backend qualification PRs. No backend experimental branch has approval for main merge or production deployment.
+The run's final result may arrive after this checkpoint. First inspect `GENERATOR_SUSTAINED_RESULTS_2026-10-29.md` and GitHub run40855200111. An in-progress run is not a pass.
 
-## Verified mobile release checkpoint
+## Workspace and exact source references
 
-User installed/tested APK63 and accepted its appearance, then explicitly requested applying APK changes independently of scaling. Mobile PR60: https://github.com/3my1234/across-mobile-app/pull/60 (MERGED).
+Workspace: `C:/Users/EMMA/Desktop/gouwu`. This root is **not a Git repository**. Work within the appropriate worktree and inspect `git status --short` before editing. Do not overwrite another worktree or infer that an old background process is still running.
 
-- Version63 EAS build `5a4ba444-89cf-461a-80b8-7d67b295e378`, source9758da7, FINISHED.
-- APK: https://expo.dev/artifacts/eas/cKMDrsdssKWTfhqfBTHxxBhIykvaezxVPlO9k-xjy7c.apk
-- Ads now listing-proportioned photo frames with captions, preserved carousel/dots/pausing. Services prioritize visible first images and limit render batches. Stable canonical disk cache remains; private images remain memory-only. No measured phone loading speedup claim.
-- Shared gallery fallback, Google handoff and bounded login overload fixes are INCLUDED in that APK/merge. Registration is NOT automatically retried; password hashing/admission unchanged.
-- All49 native provider suites, targeted gallery/Google/login/ads/cache/recovery checks passed. CI launch40842461051, discovery40842461066, native Android40842461077 and postmerge launch40842584350 all SUCCESS (verified October29).
-- `--auto` merged immediately rather than gating on all checks; remaining checks subsequently passed. Do not repeat that assumption; inspect required branch protections before a future merge.
-- User's report is visual/device acceptance of tested APK, not a report that every gallery/auth/device/network scenario was exercised. No new APK/store publication is needed simply for the fixture-only merge. Retain broader device acceptance limitations.
+| Worktree | Branch | Exact references |
+|---|---|---|
+| `.worktrees/launch-qualification` | `experiment/launch-qualification` | Batch code `d5a854c2d00914b5db944f3f8bae8659599df134`; corrected no-skip CI source29ee9fa; calibration harness844af84; handover4790940; exact-client gate `d2b6bad367640f7a4565dbf4c79c2ced0a392c30`. Later documentation HEAD may differ. NOT merged/deployed. |
+| `.worktrees/generator-headroom` | `experiment/generator-headroom` | Measured source `ac854e5b597a564c96ed2bbddda7d14315261d74`. Its synthetic target intentionally excludes application batching. |
+| `.worktrees/k3s-readiness` | `experiment/k3s-preparation` | `084717875d5a79356b3dd6e6e5471411814ec94d`; implementation8da2613. Deployment preparation only. Its historical application baseeb9ffd1 is not a production release candidate. |
+| `.worktrees/mobile-login-overload` | `experiment/media-google-promoted-banners` | APK63 application source9758da7; fixture-only40c6862; mobile main merge `ee7546c6997d70494dedd8edd21f22a46803c82f`. |
+| `.worktrees/notification-workers` | `perf/receipt-throughput` | Historical receipt source `d72df8b1f205886f9b03db889c79d5359d9628ec`; includes experimental migration108. |
+| `.worktrees/inbox-performance` | `perf/inbox-page-work` | Historical inbox source67245f4 and its retained differential proof. |
+| `.worktrees/expanded-capacity-ramp` | `experiment/expanded-capacity-ramp` | Historical fixture/importer/500 evidence. Do not dispatch its old workflow blindly. |
 
-Evidence: local `qualification/ANDROID_WIDE_ADS_BUILD_2026-10-29.md`, `ANDROID_ADS_GALLERY_ACCEPTANCE_2026-10-28.md`. Earlier version60/61/62 layouts were superseded; do not release those by mistake.
+Backend repository: `3my1234/across-backend-api`. Mobile: `3my1234/across-mobile-app`. Provider PWA/admin: `3my1234/across-admin-panel`.
 
-## Performance history: preserve outcomes and scope
+The tracked master is `docs/qualification/ATL_XPRESS_MASTER_HANDOVER.md` on the backend qualification branch. Its workspace mirror is `qualification/ATL_XPRESS_MASTER_HANDOVER.md`. Read local evidence reports under workspace `qualification/`; tracked repository reports may be under `docs/`. Keep mirrors aligned when updating.
 
-Important raw reports live under workspace `qualification/`; tracked backend documentation is separate. Full CI run URLs use `https://github.com/3my1234/across-backend-api/actions/runs/<run-id>`.
+## Product and current production infrastructure
 
-| Evidence | Finding and limitation |
+ATL Xpress is a Nigerian marketplace with products/services, customer/provider accounts, subscriptions and Flutterwave payments, Town Hall requests/bids, direct/community chat, support/admin roles, durable notifications, and driver/courier discovery using leased location presence.
+
+Backend: Go/Fiber, PostgreSQL, Redis, separate API and worker processes. Mobile: React Native/Expo SDK54, TypeScript and Expo Image. Provider web/admin are separate Coolify resources from the same web repository.
+
+Existing independent Contabo EU hosts:
+
+- **Main host173.212.219.169:** Coolify, original API, two API replica slots, gateway, worker, Redis, admin/provider web and an unrelated website. The unrelated website must remain online under Coolify.
+- **Database host79.143.176.173:** dedicated external PostgreSQL, database `across_db`, remote Coolify server and private database connectivity. No destructive test or reset on this host.
+
+Reported database sizing is approximately4vCPU/8GiB. Fresh CPU model, allocated memory, storage/IOPS/latency, settings, network RTT and failure-domain inventory are not established by that description. Do not label the shared lab production-equivalent.
+
+No production numeric safe-traffic limit has been established. Historical healthy containers, a passing100-session isolated test and a local backup readability check do not prove broad launch readiness.
+
+## Notification batching and correctness evidence
+
+Files: `internal/controllers/community_controller.go`, `community_fanout_test.go`, `community_fanout_capacity_test.go`.
+
+The helper selects at most64 eligible recipients in UUID order and uses an INSERT SELECT inside the caller's existing business transaction. It preserves active membership, sender exclusion, both block directions, generic private preview, recipient metadata, event keys, conflict deduplication and per-row trigger effects. Cursor progress follows selected recipients rather than inserted rows, so duplicate-only pages do not hide later recipients.
+
+Tests cover privacy, rollback,140 recipients across three batches, four concurrent retries, new later recipients following duplicate pages, and a final-page injected failure that rolls back notifications, the business message and row-trigger enqueue effects. Existing Town Hall reply/authorization/seat-limit/expiry tests passed. Separate real PostgreSQL receipt tests executed claim/crash recovery/fencing, eligibility/drain, backoff, cancellation/device rejection and Retry-After checks.
+
+Run40853697871 passed controller tests and ABBA but **skipped** receipt tests because an opt-in flag was missing. Preserve that result honestly. The corrected workflow/run40854663425 supplied `RECEIPT_TEST_LOCAL=true` and explicitly rejects skipped required tests; every required test executed and passed.
+
+ABBA benchmark: same10-recipient synthetic fixture,100 transactions/arm, PostgreSQL16 at2CPU/1GiB. Each transaction verifies10 notifications and10 enqueue probes, then rolls back. SQL elapsed time is not exclusive CPU. The enqueue probe is not the full production transport chain; the later application test must still establish integrated behavior. Batch size bounds each statement, not arbitrary total room transaction duration; existing admission limits remain required. No pool/admission/security limit was increased.
+
+Evidence: `NOTIFICATION_BATCHING_RESULTS_2026-10-29.md`; raw files and SHA manifests in `notification-batching-20261029/40853697871/` and `40854663425/`.
+
+## Performance history and limits
+
+Backend Actions links use `https://github.com/3my1234/across-backend-api/actions/runs/<id>`.
+
+| Evidence | What it establishes |
 |---|---|
-| Original chat-history isolated benchmark | Reported ~55 to460 requests/s (~8.37x), p95~740 to80ms; query-only, NOT full-platform throughput. Indexed bounded branch merge and old-page/prepared-plan regressions retained. |
-| Matched mixed workload | Reported ~38% throughput improvement with reduced PG CPU; not independent-session production capacity. Retained earlier reports/evidence. |
-| Initial 100 session stage | Login burst admission503 prevented activity qualification. Corrected test serially authenticates distinct users before measured workload, retaining protections. |
-| Initial 100 sessions/30min HTTP-only | 80,898requests/44.85RPS, worst operation p95~48.14ms/p99~58.37ms,12,125ACKstoredonce. Workers off; queue growth not failed delivery. |
-| Receipt qualification40627566223 | 100session sustained with actual workers/mock transports; 81,186requests,11,995ACKstoredonce; send/receipt recovery/drain proof. See RECEIPT_CAPACITY_RESULTS_2026-10-28.md. Real15min receipt eligibility preserved. |
-| Expanded sustained10040636465564 | 90,152requests,zero HTTPerrors/overload/drops,14,372ACKstoredonce; Town Hall bids,487GPSupdates,120offline,3036nearby; mockqueues/receipts drain. Different runner hardware limits unmatched comparisons. See EXPANDED_SUSTAINED_RESULTS_2026-10-28.md. |
-| 500importer timeout40688491116 | Fixture preparation failed before measurement; NOT500capacityfailure. Named historical trigger importer correction separately tested; real triggers restored. |
-| Repeated 500bursts | All500sessionsauthenticated, then overload and pool waits; earlier569 and1243HTTP503/p95610and959ms. About2s aborted windows, NOT sustained500 capacity. ACKpreserved; unconfirmed commits require idempotent retry accounting. |
-| Nearby corrected comparison40741981937 | Ordered cheap geo candidates then lazy entitlement checks, no prelimit; full ordered equality including revocations. ~1.33?1.86x query-only throughput. No RedisGEO/pool/admission change. Actual handler/privacy/expiry/docs tests40746907768PASS. |
-| Independent generator40747865966 | 500sessions/180s,46,683offered=completed,~254.89RPS, no drops/throttle/OOM; initial CPU p95~49.84% of2CPU after local prep vs~97.95% previous. Exact real cached auth bindings and traffic preserved. Not30min proof. |
-| Actual stack calibration40750457084 | At2d350ae, aborted1.863s:1253offers/1127responses/753HTTP503; successful p95~716.79ms. Generator p95~44.9%of2CPU/no throttle/OOM in captured shortwindow. PG2CPU saturated,385memory.maxevents/~1GiB ceiling.43ACKallstoredonce,52unconfirmedcommits, no duplicates. Full500unqualified. |
+| Original chat-history comparison | Approximately55->460requests/s, p95~740->80ms, query-only. Bounded/indexed pagination already exists; do not rewrite it without new evidence. |
+| Matched mixed workload | Approximately38% throughput gain reported with reduced PG CPU; not independent production-session capacity. |
+| Initial100 established sessions/30min, workers off | 80,898 requests,12,125 acknowledged writes stored once; notification backlog was expected with workers disabled. |
+| Receipt sustained100:40627566223 | 81,186 requests,11,995 acknowledged writes stored once; actual workers with mock transports and real15-minute receipt eligibility. Receipt/send recovery and drain proof. |
+| Expanded sustained100:40636465564 | 90,152 requests,14,372 acknowledged writes stored once; real Town Hall bids,487GPS updates,120offline transitions and3,036nearby searches; mock notification queues/receipts drained. |
+| Importer timeout40688491116 | Preparation failed before measurement. Not a500-capacity failure. Named historical-import trigger handling corrected and independently tested. |
+| Repeated500 bursts | Authentication completed, then overload/pool waits and ~2s aborts. Earlier569/1,243HTTP503 and p95~610/959ms. No sustained500 qualification. |
+| Nearby40741981937 / handler40746907768 | Ordered cheap candidates followed by lazy eligibility, no candidate prelimit. Full result equality including revocations; query-only~1.33?1.86x. Handler/privacy/expiry/document tests passed. No Redis GEO/pool changes. |
+| Independent generator40747865966 | 500synthetic sessions/180s,46,683offers=completions,~254.89RPS; no drops/throttle/OOM. Local preparation reduced initial CPU saturation while preserving the measured traffic. Not30-minute evidence. |
+| Actual calibration40750457084 | Aborted1.863s:1,253offers,1,127responses,753HTTP503, successful p95~716.79ms. Generator p95~44.9%of2CPU with no observed throttling; PG2CPU saturated and hit its1GiB ceiling with385memory-max events. All43acknowledged writes stored once;52unconfirmed commits, no duplicate keys. |
 
-The retained calibration SQL window includes authentication/burst/recovery. Notification INSERT600calls/2625ms is cumulative elapsed SQL time, NOT exclusive CPU attribution. Worker SQL was~3.5% retained elapsed; notifications are an evidence-supported API fanout target, not a guarantee batching alone fixes capacity.
+The calibration's600notification INSERT calls/2,625ms span authentication, burst and recovery. That cumulative elapsed SQL total justified batching; it was not exclusive CPU attribution or proof that batching alone solves capacity. Preserve all failed runs and unconfirmed-commit accounting.
 
-Reports: `ACTUAL_STACK_CALIBRATION_RESULTS_2026-10-28.md`, `NEARBY_ORDERED_ELIGIBILITY_RESULTS_2026-10-28.md`, `GENERATOR_HEADROOM_RESULTS_2026-10-28.md`, `GENERATOR_SUSTAINED_PREPARATION_2026-10-29.md`, `ISOLATED_DATABASE_RESOURCE_MATRIX_2026-10-29.md`, `SESSION_AND_AUTH_CAPACITY_RESULTS_2026-10-27.md` (tracked backend docs), receipt and expanded reports above. Raw latest calibration: `qualification/actual-stack-calibration-20261028/40750457084/`; generator: `qualification/generator-headroom-20261028/40747865966/`.
+Relevant reports: `ACTUAL_STACK_CALIBRATION_RESULTS_2026-10-28.md`, `NEARBY_ORDERED_ELIGIBILITY_RESULTS_2026-10-28.md`, `GENERATOR_HEADROOM_RESULTS_2026-10-28.md`, `RECEIPT_CAPACITY_RESULTS_2026-10-28.md`, `EXPANDED_SUSTAINED_RESULTS_2026-10-28.md` and the archived complete handover.
 
-## Current notification batching implementation
+## Generator gate and next justified action
 
-Code: `internal/controllers/community_controller.go`, `community_fanout_test.go`, `community_fanout_capacity_test.go` on launch-qualification.
+Run40855200111 sourceac854e5 began its measurement step at10:09:32UTC/11:09:32Lagos, including serial authentication/preparation before1,800 measured seconds. Wait for its actual outcome. No duplicate dispatch.
 
-- Replace recipient SELECT + per-recipient INSERT loop with bounded64-recipient ordered CTE INSERT SELECT, inside caller's EXISTING business transaction.
-- Preserve active recipients, self-exclusion, both directions of social blocks, generic private preview, metadata, per-recipient event key and ONCONFLICT dedup.
-- Cursor progresses by SELECTED recipient UUID, not inserted count, so completely duplicate pages cannot hide later new recipients.
-- Normal Town Hall room population fits one batch. No new unbounded Go recipient slice, independent commit, external send or pool/admission adjustment.
-- Tests: private payload/recipient filtering and rollback;140recipients crossing3pages; four concurrent retries; later recipients after duplicate-only pages; final-page injected error rolls back earlier notifications, business message and row-trigger enqueue probe.
-- Matched ABBA benchmark: same10recipientfixture,100transactions/arm, original helper retained test-only, row-trigger probe, real pg_stat_statements; expected1100vs100fanoutSQLcalls. Counts and SQLexecution timings are NOT results until CI succeeds.
-- Row-trigger probe is not actual worker recovery. Separate receipt lease/recovery tests run in same CI; full real transport/trigger chain remains application qualification responsibility.
-- Fanout CI40853697871 atd5a854c is RUNNING at initial checkpoint. Inspect actual outcome/artifact before long generator dispatch. No new migration introduced by batching; candidate already contains experimental receipt migration108 inherited from previous work.
+Its gates require at least1,795 measured seconds,1,790seconds of CPU coverage and1,790snapshots at500VUs; original client thresholds, p95CPU<70%ofquota, initial6s p95<85%,<1%throttled periods, memory<70%of2GiB, noOOM/drops,500valid identities and complete offered/completed/mock accounting. The synthetic-target atomic message-ID correction is mock-only. This is generator qualification, not application/database/worker capacity.
 
-## Test environment qualification and resource constraints
+Exact normalized client SHA256: baseline `db3013f473b41fc7d35e01d7385d620b247b977e3dd86e9e8683d14a4bb337a3`; prepared `dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49`. Calibration now checks both baseline and downloaded executed-client hashes. No weaker thresholds or substituted tokens.
 
-Existing approved resource is standard public GitHub runner (~4vCPU/16GiB, actual hardware varies). Prior PG2CPU/1GiB is smaller than reported production. No production destructive test.
+Only after a complete successful artifact review:
 
-Prepared long independent generator phase on `experiment/generator-headroom`:
+```powershell
+gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/launch-qualification -f phase=calibration -f generator_run=40855200111 -f calibration_memory=8g
+```
 
-`gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/generator-headroom -f phase=generator-sustained`
+This performs a bounded180-second actual-stack calibration, with unchanged API/pool/admission/workload limits. PostgreSQL RAM8GiB/CPU2; generator2CPU/2GiB; host memory gate requires12GiB available. A1GiB control remains explicit if later needed for RAM attribution. Do not repeatedly rerun the undersized allocation without a question to answer. A4-core shared runner cannot independently supply4DB cores +2generator cores +APIs/workers; observe host contention rather than declaring production equivalence.
 
-DO NOT dispatch until batch correctness AND matchedbenchmarkPASS. Sourceac854e5, mock-only atomic messageID racefix. Same500identity client hashes as shortproof; existing1800s profile. Gates>=1795smeasurement/>=1790sCPUcoverage/>=1790snapshots500VU; p95CPU<70%quota/initial6s<85%,<1%throttledperiods,memory<70%2GiB,noOOM/drops/accountingloss. No passwords/production traffic. This validates generator against synthetictarget, not app capacity.
+Collect complete resource limits, timestamped CPU/cgroup memory/events/I/O, per-operation latency/errors, database locks/pool waits, write reconciliation, queues and recovery. Original application gates and actual shared-host/generator headroom must pass before the unchanged30-minute500 qualification. No automatic escalation to1,000. If a prerequisite fails, preserve evidence and identify the smallest supported correction; do not hide errors or purchase resources.
 
-Resource matrix: keep optimized source/data/settings/workload fixed, compare PG1GiBvs8GiB at SAME2CPU; generator2CPU/2GiB. This isolates RAM only. Do not claim four-production-DB-CPU equivalence from a shared4corehost; API/worker/gateway/Redis also need CPU. Observe host idle/runqueue/steal/swap, cgroupCPU/throttle/memory/OOM, DBIO/queries/locks/pools, perendpointlatency andqueueage. If headroom inadequate, preserve evidence/propose an available separately isolated environment; no paid runner or server purchase without approval. Fresh production I/O andnetworkinventory remains unknown.
+## K3s package: preserve separately
 
-Do not add new workloads to the unchanged primary500benchmark and call it comparable. Document tested/excluded journeys separately (media transfer/authburst/workerrealexternaldelivery); additional coverage must be separately named/gated. Do not progress1000withoutsuccessful500anduserreview/approval.
+Target: FIVE hosts. Existing main VPS retains Coolify and the unrelated website; existing database VPS remains external PostgreSQL; THREE future independent VPS form the K3s server/application cluster using embedded etcd. The old four-host/reuse-main option is superseded. No installation on either current host.
 
-## Production state, safety and unresolved launch items
+Branch `experiment/k3s-preparation`,084717875d5a79356b3dd6e6e5471411814ec94d. Files include `deploy/k3s/staging.yaml`, `README.md`, `server-config.example.yaml`, `validate.cjs`, `validate.test.cjs`, a separate migration-job example, and manual validation workflow `.github/workflows/k3s-preparation.yml`. Existing migration example is not a job execution.
 
-Last operator evidence October28, NOT a fresh October29 inventory:
+Strict kubeconformv0.7.0 with Kubernetes1.35.0 schemas:13/13resources valid, no invalid/error/skipped entries. Ten offline policy/mutation/source tests passed. This schema baseline is not a chosen production K3s version or live admission/failover proof.
 
-- Main18:46UTC: API/2replicas/workerhealthy,restart0/noOOM; API+workerproductionflags passed; timeractive/serviceinactive. Backend image source30b0b68. Admin/provider068ff62. Earlier string image names changed IDs after runtime reconciliation; don't infer commit from sha alone.
-- Publicreadiness403 occurred with default PythonUserAgent; descriptive readonlyUserAgent yielded200/all8checks. Collector now identifies stage/status safely. No route/securitybypasschange.
-- DB18:49UTC: schema107, email/nativepush/browserpending0 in one snapshot (not drainrateproof). Latestarchive558545bytes,mtime18:17:17.534887UTC,sha256 `a7c59da4945377249200266d4227e3a56a1c22eed4497dce597eaf2ee4e96c87`;inventory/fulldecodePASS. CoolifybackupSuccess18:17:31UTCand`atlxpres-db-backup-storage` listed.
-- Localarchive validation is NOT offserverdownload/restore/PITR or measuredRPO/RTO. Externalalertreceipt/oncall/firewall/security/productiontrafficlimit/currentrollback remain incomplete.
-- Historical private rollback captures remain on hosts; latest checkout/media backend capture `/root/atlxpres-release-rollback/20261026T092109Z-573ce9bb`; webcapture `/root/atlxpres-checkout-media-web-rollback/20261026T100016Z-f4c1e455`. They are historical and not a fresh release-matched guarantee. Never paste their private contents.
-- PHP security warning mentioned by user/advisory is UNRESOLVED. Exact advisory/CVE/package/version and affected unrelated site ownership are not established here. Do not claim patched or infer a CVE. Locate original evidence before a scoped remediation.
-- No defensible numeric production traffic ceiling. Passed100isolatedsessions !=100productioncapacity, and500isnotqualified. No broadlaunchreadinessclaim.
+Package includes bounded API/HPA/pool configuration, nonroot/read-only/tokenless pods, dependency-aware readiness versus liveness, startup/drain allowances, hard host separation and a zero-surge/one-unavailable rollout that fits three nodes. Worker replicas remain0 and egress denied until real transports/roles are qualified; push send/receipt URLs are hardcoded Expo endpoints and browser-push destinations are stored URLs. A lab mock adapter is not automatically a real-worker staging transport. Isolate DB, Redis, object storage and every external delivery path before enabling workers.
 
-Production changes requiring explicit confirmation: backend/mainmerge, migration108(oranyproductionmigration), deploy/restart, K3sinstallation, DNS/ingress/firewall/VPN/proxy, Redis migration, database restore/failover, secret/billing changes, new compute/purchase, trafficcutover. No real email/push/payment sends in lab. Keep original/admission/pool/securitygates. Do not send messages to third parties. Existing mobilemergeapproval was specific to acceptedAPK, not backendreleaseauthorization.
+Remaining: actual new-host inventory, private IPs/nonoverlappingCIDRs/MTU/CNI enforcement, pinned K3s/ingress versions, HA registration/traffic endpoint, secrets and exact trusted proxies, old/new DB connection overlap budget, all worker roles/ownership, etcd snapshots plus protected server-token restore, external DB/Redis recovery, alerts, node failure, rolling rollback and live staging acceptance. GitHub Environment reviewers must actually be configured before claiming enforced approval. Placeholders intentionally block release; no live apply/deploy path is authorized.
 
-## K3s package acceptance checklist
+See `K3S_PREPARATION_HANDOVER_2026-10-29.md`. Additional nodes alone do not make PostgreSQL, Redis or external ingress highly available.
 
-Prepare working local/CI configuration, not a conceptual-only diagram; keep it on its own branch. Pin image digests and reviewed K3s version at actual rollout, no live placeholders or embedded credentials. API probes must distinguish health/readiness and allow startup/drain; grace period must exceed current3sdrain+65sshutdown. Disable inline migrations/workers; standalone migration job explicitapproval and verifiedschema. Sum DBconnectionbudgets across normal/surge/migrator/worker/observer, including readpool aliases; never let HPA multiply an unbounded budget.
+## Mobile status, kept separate
 
-Staging must use isolated DB/Redis/objectstorage/mocktransports. Existing worker transport URLs must be checked; defaultworkerreplicas0anddeniedexternalnetwork until full mockegress configured. Namespace networkpolicy alone needs supported enforcingCNI and host/firewall validation. Three etcdvoters require privateconnectivity/TLS/encryption/secrets/backup/restore/failuredomainproof. HAingress/loadbalancer is separate fromcontrolplanequorum. Do not reuse productioncredentials in syntheticstaging.
+User tested APK63 at9758da7 and approved applying it. Mobile PR60 mergedee7546c; final fixture-only40c6862 does not change the tested app. Version63 EAS build5a4ba444-89cf-461a-80b8-7d67b295e378 finished. Ads use listing-shaped frames, captions, dots and safe rotation; visible service photos are prioritized and render batches bounded. Gallery fallback, Google handoff and bounded login overload handling are included. Registration is not automatically retried and password/admission protections remain unchanged.
 
-Validate manifest structure + Kubernetes API schema/rendering; local/CI dryrun is NOT live install/failoverproof. Prepare approval-gated deployworkflow with noautomaticproductiontrigger; CIcannotassumeGitHubEnvironmentprotection exists. Productionproductionapproval must be failclosed/readable before changing clusters. Stagefunctionaljourneys,rollingrollback,nodefailure,backuprestore,monitoringalertdelivery require futureisolatedcluster.
+All49native-provider suites and targeted gallery/auth/ads/cache/recovery checks passed. PR launch40842461051, discovery40842461066, Android40842461077 and postmerge40842584350 all succeeded. GitHub merged immediately with --auto before every check finished; remaining checks subsequently passed. Do not assume --auto enforces required checks in future.
 
-## Ordered continuation
+Evidence: `ANDROID_WIDE_ADS_BUILD_2026-10-29.md` and `ANDROID_ADS_GALLERY_ACCEPTANCE_2026-10-28.md`. No new APK/store release is required for the fixture-only merge. Visual acceptance does not prove every Android/gallery/auth/network combination or a measured image-speed improvement. Server-side thumbnails remain a separate possible follow-up.
 
-Immediate: inspect actualGitstates and checkpoint; reviewfanoutCIoutcome; fixonlyspecificfailures; retainABBA/equality/rollback/workerproof; launchlonggeneratoronlyafterpass; comparecorrectsoftwarewithcontrolledDBRAMandsharedhostmetrics; boundedcalibration; unchanged500sustainedonlyifallgatespass; archiveandwriteactualfindings.
+## Production safety and unresolved launch gates
 
-Inparallel: completeK3spackage/separatebranchwithvalidation; inventorydependenciesandmissingproductionmetadataread-only; keepdocumentationcurrentandallunknownsexplicit.
+Last operator inventory is historical October28, not a new live inspection:
 
-Awaitingservers: verify threenewhostspecs/storage/network/failuredomains; obtain explicitinstallapproval; configureisolatedclusterandstagingdependencies; validateHA/rollout/rollback/alerts/restore; proposecutoverforapproval. ExistingCoolify/unrelatedwebsiteandexternalPGmustremainuntouched.
+- Main host: backend30b0b68/API+two replicas+worker healthy, no restarts/OOM; backend production/security flags passed; replica timeractive/serviceinactive. Admin/provider web068ff62 in the last reported inventory.
+- Public-readiness403 with default Python UserAgent resolved to200/all8checks using a descriptive read-only UserAgent. No routing/security bypass was changed.
+- DB schema107; one snapshot showed zero pending email/native/browser queues. This is not drain-rate proof. Local archive558,545bytes, modified18:17:17.534887UTC, full inventory/decode passed; Coolify backup completed18:17:31UTC with `atlxpres-db-backup-storage` listed. SHA256 `a7c59da4945377249200266d4227e3a56a1c22eed4497dce597eaf2ee4e96c87`.
+- Archive readability is not off-server retrieval, restore/PITR or measuredRPO/RTO. Fresh release-matched rollback, independent restore, external alert receipt/on-call, firewall/security verification and production traffic limits remain incomplete.
+- Receipt migration108 exists only in experimental backend work. Batching adds no new migration. Existing production schema is107 in retained evidence. Old/new worker receipt ownership needs a reviewed release sequence; do not migrate or mix roles by assumption.
+- Historical private rollback directories remain on the hosts, including backend `/root/atlxpres-release-rollback/20261026T092109Z-573ce9bb` and web `/root/atlxpres-checkout-media-web-rollback/20261026T100016Z-f4c1e455`. Do not paste their private contents or assume they are current.
+- The mentioned PHP security warning is unresolved; its advisory/CVE/package/version and affected site are not established. Do not invent a diagnosis or mark it patched.
 
-Awaitingapproval: purchases/prodchanges/1000stage/prodcutover/securityremediationwithscope. Optionalfuture: thumbnail/CDNdeliveryforpubliclistingphotos, DBreplication/failover,RedisHA,horizontalautoscalingonlyaftermeasurements.
+No purchases, K3s installation on existing hosts, backend main merge, production migration/deployment/restart, DNS/ingress/firewall/VPN/proxy change, Redis/PostgreSQL migration/restore/failover, secret/billing change or traffic cutover without explicit approval. Synthetic lab only; no real email/push/payment delivery. Preserve Coolify/unrelated website and external PostgreSQL. Mobile approval does not authorize backend release.
 
-## Live checkpoint
+## Continuation checklist
 
-Initial current checkpoint: batch code/testsd5a854c pushed; fanout40853697871 running; generatorlongstagepreparednotdispatched; K3swork delegated toexistingagent onaseparateworktree (exactbranchpending). Root owns qualification/masterhandover. Continue fromactualCIstate, neverassume backgroundprocessesstillrunning afterbranch.
-
-## Branch starter message
-
-Read `C:/Users/EMMA/Desktop/gouwu/qualification/ATL_XPRESS_MASTER_HANDOVER.md` first, then its live checkpoint and `git status` in `.worktrees/launch-qualification`. Continue notification batching/ABBA at recorded source, qualify the prepared30minute500VUgenerator and honestisolatedDBresources, then run the unchanged500stage only after prerequisites pass. MobileAPK63 changes are accepted and already merged via PR60; do not entanglethem. Finish the separateK3spackage for existingCoolify+externalPG plus threefutureK3snodes, without installing on currentservers. Preserve evidence, production/unrelatedwebsite, secrets and all approvalgates; no purchases, prodmerge/migrations/deploy/routing/Redischange or1000stage by assumption. Update this handover with verified outcomes rather than restart diagnostics.
-
-### Verified update: notification comparison and skipped worker correction
-
-Fanout40853697871: controller correctness and ABBA benchmark PASS atd5a854c. SQL1100->100calls, mean118.675->72.365ms (~39.02% less), controller~2.58x throughput, shortsequentialmicrobenchmark only. Artifact review found workerlease tests SKIPPED due missing RECEIPT_TEST_LOCAL. Correctedworkflow29ee9fa/run40854663425 is running and explicitlyrejectsrequiredskips. Longgenerator remainsHELD. Read NOTIFICATION_BATCHING_RESULTS_2026-10-29.md; do not mistake greenoverall40853697871 for recoveryproof.
-
-### K3s package verified and pushed
-
-Separate worktree `.worktrees/k3s-readiness`, branch `experiment/k3s-preparation`, HEAD `084717875d5a79356b3dd6e6e5471411814ec94d`; implementation8da2613. Based on historical experimentaleb9ffd1, NOT a production application release. Select deployment-only changes for any future integration; do not merge that entire historical app base blindly.
-
-Files: deploy/k3s/staging.yaml, README.md, server-config.example.yaml, validate.cjs, validate.test.cjs; .github/workflows/k3s-preparation.yml; docs/K3S_PREPARATION_HANDOVER_2026-10-29.md. Strict kubeconformv0.7.0 validation using Kubernetes1.35.0 schema passed13/13resources,0errors/invalid/skipped. Ten offline policy/mutation/source-contract tests passed. This schema baseline is NOT a chosen productionK3sversion. No cluster was contacted. Release guard intentionally fails placeholders; no live deploy path.
-
-Three-new-node target retains existing Coolify/website and external PostgreSQL. Hard host anti-affinity with zero-surge/one-unavailable rollout avoids a fourth-node requirement at the3podcap. Worker remains stopped and egress denied pending actual transport/role qualification. Missing reviewers on GitHubEnvironment would not enforce humanapproval; configuration remains an explicit future gate. No purchase/install/prodDNS/firewall/Redis/credential change.
-
-Read `qualification/K3S_PREPARATION_HANDOVER_2026-10-29.md` for exact remaining network, hardware, HA ingress, storage, worker, restore, monitoring and PHP-warning unknowns. Production readiness remains incomplete.
-
-### Current execution checkpoint ? no-skip proof and long generator
-
-Batch implementation source d5a854c is now qualified by corrected CI40854663425 at29ee9fa: all controller, privacy, batch-boundary, concurrent retry, final-page rollback and actual PostgreSQL receipt lease/recovery tests executed/PASS with no skips. Two matched ABBA runs retained; SQL1100->100calls, cumulativeSQL29?39% lower, controller2.37?2.58x only. Read NOTIFICATION_BATCHING_RESULTS_2026-10-29.md and both raw artifact directories.
-
-Long independent synthetic-generator run https://github.com/3my1234/across-backend-api/actions/runs/40855200111 is RUNNING at exactsource ac854e5b597a564c96ed2bbddda7d14315261d74; created10:08:44UTC/11:08:44Lagos. Local/race/hash gates passed; thirty-minute measurement step active. See GENERATOR_SUSTAINED_RESULTS_2026-10-29.md for the agent's latest report. No actual application500 or1000 has started in this continuation.
-
-RAM-sized actual-stack calibration preparation source844af84 on experiment/launch-qualification is pushed and NOT dispatched. Workflow phasecalibration now REQUIRES explicit generator_run, passed1800secondgate artifact and no internal/migration/API/session workload changes versus29ee9fa. PostgreSQL RAM choice defaults8g, optional1g control; DB2CPU/gen2CPU2GiB/application limits unchanged. Host memory gate12GiB available for8g. cgroup samples now retain memory.max, blockIOcounters and timestampedhostCPUjiffies; no production telemetry access. Local YAML/Bash/Python/JS/policy/transport checks passed.
-
-NEXT only after40855200111 concludesSUCCESS and its completeartifact is independently reviewed: `gh workflow run worker-role-qualification.yml --repo 3my1234/across-backend-api --ref experiment/launch-qualification -f phase=calibration -f generator_run=40855200111 -f calibration_memory=8g`. This is bounded180s calibration, NOT full500sustained; do not auto-escalate. Actual shared-host/generator/DB/correctness/headroom gates must pass before proposing unchanged30minute500 qualification. NoRAM-gain attribution without matchedresourcecontrol;8GiB RAM doesnotreproduce4CPUdedicatedproductionDB.
-
-Handover code/document checkpoint commits: batchd5a854c, no-skipCI29ee9fa, initialcommittedmaster52d9d36, calibrationprep844af84; later documentation HEAD may differ. K3s separatebranch084717875d5a79356b3dd6e6e5471411814ec94d. Mobilemain ee7546c6997d70494dedd8edd21f22a46803c82f. Inspect gitstatus and CI before executing anything; no implicit approvals from this record.
+1. Verify clean worktrees and actual generator run/artifact; finish the independent1,800-second result analysis.
+2. If it passes, dispatch the gated8GiB bounded calibration using the exact command above; preserve failures as well as passes.
+3. Validate actual shared-host/generator/DB and application gates before adapting the existing unchanged sustained500 workflow to the explicitly qualified source/environment. Retain original latency, integrity, authorization, bidding, retry and queue-recovery thresholds.
+4. Keep1,000 gated. If calibration fails, identify its specific blocker and propose only an evidence-supported correction or honest test-environment requirement.
+5. Keep K3s preparation intact. Await three new VPS and separate provisioning/installation/cutover approval. Do not disturb current production roles.
+6. Update this master, its tracked mirror, reports and exact commit/run references after each result. Use `BRANCH_STARTER_MESSAGE_2026-10-29.txt` only with this current checkpoint.
