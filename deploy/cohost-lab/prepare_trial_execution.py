@@ -57,14 +57,19 @@ foreach ($role in @('main','database')) {
     if ($LASTEXITCODE -ne 0 -or -not $mainPin) { throw 'Trusted main host-key pin missing' }
     $bundleObject = @{
         approval = (Get-Content -Raw (Join-Path $review 'main/trial-approval.json') | ConvertFrom-Json)
-        main_key = Get-Content -Raw (Join-Path $private 'ci-main')
-        database_key = Get-Content -Raw (Join-Path $private 'ci-database')
+        main_key = [IO.File]::ReadAllText((Join-Path $private 'ci-main'))
+        database_key = [IO.File]::ReadAllText((Join-Path $private 'ci-database'))
         main_known_hosts = $mainPin
-        database_known_hosts = Get-Content -Raw (Join-Path $review 'main/database_known_hosts')
+        database_known_hosts = [IO.File]::ReadAllText((Join-Path $review 'main/database_known_hosts'))
     }
     $secretInstalled = $false
     try {
-        $bundleObject | ConvertTo-Json -Depth 20 -Compress | & gh secret set COHOST_TRIAL_BUNDLE --repo $repo
+        Write-Host 'Serializing plain-string temporary test credentials.'
+        $bundleJson = $bundleObject | ConvertTo-Json -Depth 8 -Compress
+        $roundTrip = $bundleJson | ConvertFrom-Json
+        if ($roundTrip.main_key -isnot [string] -or $roundTrip.database_key -isnot [string] -or $bundleJson.Length -ge 48000) { throw 'Temporary credential bundle has invalid types or exceeds the reviewed size' }
+        Write-Host 'Uploading temporary restricted test credentials to GitHub.'
+        $bundleJson | & gh secret set COHOST_TRIAL_BUNDLE --repo $repo
         if ($LASTEXITCODE -ne 0) { throw 'Temporary restricted-key secret upload failed' }
         $secretInstalled = $true
         $liveHead = & gh api 'repos/3my1234/across-backend-api/git/ref/heads/experiment/launch-qualification' --jq '.object.sha'
@@ -86,11 +91,14 @@ foreach ($role in @('main','database')) {
         if ($trialExit -ne 0) { throw "Trial did not pass (exit $trialExit); evidence retained, no escalation" }
     } finally {
         $bundleObject = $null
+        $bundleJson = $null
+        $roundTrip = $null
         if ($secretInstalled) { & gh secret delete COHOST_TRIAL_BUNDLE --repo $repo }
     }
 """
     if old not in template:raise ValueError('reviewed setup template anchor changed')
     template=template.replace(old,execute)
+    template=template.replace("tar -xf setup.tar && chmod -R go-rwx","timeout 45s tar -xf setup.tar && timeout 45s chmod -R go-rwx")
     password_verify='    Remote \'173.212.219.169\' "python3 \'$remote/tools/operator_setup.py\' \'$remote\' verify"'
     key_verify="    Native -exe 'ssh' -arguments @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','IdentitiesOnly=yes','-i',(Join-Path $private 'ci-main'),'root@173.212.219.169','setup-verify')"
     if password_verify not in template:raise ValueError('exact verification handoff anchor changed')
