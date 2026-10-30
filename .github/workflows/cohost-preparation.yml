@@ -1,13 +1,25 @@
 name: Cohost preparation safety checks
+run-name: ${{ inputs.execute && format('Cohost trial {0}', inputs.run_nonce) || 'Cohost offline safety' }}
 on:
   push:
     branches: [experiment/launch-qualification]
     paths: [deploy/cohost-lab/**, .github/workflows/cohost-preparation.yml]
   workflow_dispatch:
+    inputs:
+      execute:
+        description: "FALSE is offline-only. TRUE requires separately approved live cohost trial."
+        type: boolean
+        default: false
+      run_nonce:
+        description: "Exact separately approved cohost nonce"
+        type: string
+        default: ""
 permissions:
   contents: read
+  actions: read
 jobs:
   offline-and-disposable-safety:
+    if: ${{ !inputs.execute }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -20,6 +32,8 @@ jobs:
           NODE_PATH=/tmp/cohost-tools/node_modules node deploy/cohost-lab/test-render.cjs
           python3 -m unittest discover -s deploy/cohost-lab -p 'test_*.py' -v
           python3 -m py_compile deploy/cohost-lab/safety.py deploy/cohost-lab/watchdog.py
+          node deploy/cohost-lab/test-stage-gate.mjs
+          python3 deploy/cohost-lab/trial_runner.py --plan
       - name: Validate stop ownership in disposable CI only
         run: |
           python3 - <<'PY'
@@ -90,3 +104,70 @@ jobs:
             cohost-bundle/images.json
             cohost-bundle/SHA256SUMS
           retention-days: 3
+  qualification:
+    if: ${{ inputs.execute }}
+    concurrency:
+      group: existing-vps-cohost-trial
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Retain and verify existing successful long-generator proof
+        if: inputs.execute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COHOST_TRIAL_BUNDLE: ${{ secrets.COHOST_TRIAL_BUNDLE }}
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess
+          approval=json.loads(os.environ['COHOST_TRIAL_BUNDLE'])['approval']
+          run=str(approval['safety_run'])
+          assert run.isdigit()
+          proof=json.loads(subprocess.check_output(['gh','run','view',run,'--json','conclusion,status,headSha']))
+          assert proof['status']=='completed' and proof['conclusion']=='success'
+          assert proof['headSha']==approval['source_commit']
+          PY
+          gh run view 40866958782 --json conclusion,status > /tmp/long-generator-run.json
+          python3 -c "import json; d=json.load(open('/tmp/long-generator-run.json')); assert d['status']=='completed' and d['conclusion']=='success'"
+          gh run download 40866958782 --name generator-headroom-40866958782 --dir /tmp/generator-proof
+          python3 deploy/cohost-lab/check_generator.py /tmp/generator-proof
+          docker pull grafana/k6:2.3.0
+      - name: Install temporary operator-approved restricted access
+        if: inputs.execute
+        env:
+          COHOST_TRIAL_BUNDLE: ${{ secrets.COHOST_TRIAL_BUNDLE }}
+          EXPECTED_NONCE: ${{ inputs.run_nonce }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re
+          d=json.loads(os.environ['COHOST_TRIAL_BUNDLE'])
+          assert re.fullmatch('cohost-[a-f0-9]{16}',os.environ['EXPECTED_NONCE'])
+          assert d['approval']['run']==os.environ['EXPECTED_NONCE']
+          PY
+          python3 deploy/cohost-lab/install_ci_bundle.py .cohost-private
+      - name: Execute staged trial ONLY after explicit live authorization
+        if: inputs.execute
+        run: python3 deploy/cohost-lab/trial_runner.py --execute --approval .cohost-private/approval.json --ssh-config .cohost-private/ssh_config --output cohost-evidence
+      - name: Preserve public evidence even after abort
+        if: always() && inputs.execute
+        uses: actions/upload-artifact@v4
+        with:
+          name: cohost-trial-${{ github.run_id }}
+          path: cohost-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Remove runner-local temporary credentials and synthetic bearer fixtures
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          root=Path.cwd().resolve()
+          for p in [root/'.cohost-private',*root.glob('private-cohost-*')]:
+              assert p.parent==root
+              if p.exists():shutil.rmtree(p)
+          PY

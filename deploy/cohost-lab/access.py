@@ -38,6 +38,27 @@ def main():
         s=p.stat()
         if s.st_uid!=0 or s.st_mode&0o022:raise ValueError("unsafe ownership or permissions")
     command=os.environ.get("SSH_ORIGINAL_COMMAND","")
+    if command.startswith('upload '):
+        from exchange import put
+        put(base,command[7:],sys.stdin.buffer)
+        return
+    if command.startswith('download '):
+        from exchange import get
+        get(base,command[9:],sys.stdout.buffer)
+        return
+    if command=='cleanup':
+        from operator_setup import clean
+        clean(base)
+        print('Exact trial cleanup complete',flush=True)
+        return
+    if command in ('publish-fixture','gateway-relay','observations','observations-full'):
+        from trial_host import operation
+        operation(base,command)
+        return
+    if command=='activate':
+        from trial_host import activate
+        activate(base)
+        return
     if command.startswith("control "):
         encoded=command[8:]
         if len(encoded)>100000:raise ValueError("oversized control request")

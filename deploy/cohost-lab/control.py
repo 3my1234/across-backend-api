@@ -6,7 +6,7 @@ import subprocess
 import sys
 from safety import validate_inventory
 
-LAB_COMMANDS={"seed","prepare-sessions","verify-sessions","observe-sessions","observe-system","notification-verify","queue-check","lifecycle"}
+LAB_COMMANDS={"seed","prepare-sessions","verify-sessions","observe-sessions","observe-system","notification-verify","queue-check","lifecycle","export","notification-prepare"}
 
 def command(manifest,operation):
     action=operation.get("action");service=operation.get("service")
@@ -21,17 +21,19 @@ def command(manifest,operation):
         connection=[] if manifest['role']=="database" else ['-h','/tunnel','-p','55432']
         return ['docker','exec',ident,'psql',*connection,'-U','lab','-d','capacity_lab','-XAtc',
             "SELECT current_database() || ':' || current_setting('cluster_name')"]
-    if action=="start" and service in ("api1","api2","gateway","notification-worker") and manifest.get("load_authorized") is not True:
+    if action=="start" and service in ("api1","api2","gateway","notification-worker","notification-provider") and manifest.get("load_authorized") is not True:
         raise ValueError("application startup/load not authorized")
+    if action=='start' and service not in ('api1','api2','gateway','notification-worker','notification-provider','seed','exporter','verifier','queue-check','lifecycle','redis','postgres','db-probe'):
+        raise ValueError('service startup denied')
     if action in ("start","stop","logs"):
         return ["docker",action,*( ["--time","2"] if action=="stop" else ["--tail","2000"] if action=="logs" else []),ident]
     if action!="exec":raise ValueError("operation denied")
     args=operation.get("args",[])
     if not args or not all(isinstance(x,str) and len(x)<65536 for x in args):raise ValueError("invalid args")
     if args[0]=="/app/lab":
-        if service not in ("seed","exporter","verifier","queue-check","lifecycle"):raise ValueError("wrong lab service")
+        if service not in ("seed","exporter","verifier","queue-check","lifecycle","export","notification-prepare"):raise ValueError("wrong lab service")
         if len(args)!=2 or args[1] not in LAB_COMMANDS:raise ValueError("unreviewed lab command")
-        if args[1]=="seed" and manifest.get("fixture_preparation_authorized") is not True:raise ValueError("fixture preparation not authorized")
+        if args[1] in ("seed","prepare-sessions","notification-prepare") and manifest.get("fixture_preparation_authorized") is not True:raise ValueError("fixture preparation not authorized")
     elif args[0]=="psql":
         if service!="postgres" or manifest["role"]!="database":raise ValueError("database host required")
         # Fixed host/database/user; SQL only through stdin. No metacommand or -h override.

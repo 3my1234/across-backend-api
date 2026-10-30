@@ -124,7 +124,7 @@ def main():
             sample=dict(available_bytes=mem["MemAvailable"],disk_free_bytes=shutil.disk_usage(base).free,
                 oom=oom>initial_oom or any(x.get("OOMKilled") for x in states),
                 production_healthy=all(x.get("Running") and x.get("Health",{}).get("Status","healthy")=="healthy" for x in prod),
-                cpu_high_seconds=high_cpu,iowait_high_seconds=high_io,
+                cpu_high_seconds=high_cpu,iowait_high_seconds=high_io,cpu_busy_percent=busy,iowait_percent=wait,
                 health_failures=max(failures.values()),latency_failures=max(slow.values()),
                 peer_heartbeat_age_seconds=(0 if time.monotonic()-started<900 else 999) if a.setup_only else (max(0,time.time()-peer.stat().st_mtime) if peer.exists() else 999))
             (base/"sample.json").write_text(json.dumps(sample))
