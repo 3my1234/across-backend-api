@@ -56,6 +56,13 @@ class Runner:
                 stop.wait(5)
         except BaseException as error:self.error=RuntimeError('resource observer: '+str(error))
     def start(self):
+        # Establish pinned SSH masters before applying the strict recurring
+        # heartbeat deadline. Cold authentication is not a runtime heartbeat.
+        # This read-only handshake cannot activate resources or refresh leases.
+        from trial_policy import peer_progress
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            statuses=list(pool.map(lambda r:json.loads(self.ssh(r,'status',timeout=15)),('main','database')))
+        peer_progress(statuses,{},self.approval['run'])
         # Do not refresh leases until fresh advancing status exists on BOTH hosts.
         thread=threading.Thread(target=self.leases,daemon=True);thread.start();self.children_thread=thread
         deadline=time.monotonic()+10
