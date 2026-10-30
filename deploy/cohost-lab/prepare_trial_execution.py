@@ -32,6 +32,10 @@ def prepare(workspace,safety_run):
     initialize="""
 $repo = '3my1234/across-backend-api'
 $localSource = 'SOURCE_COMMIT'
+# Fail locally before any SSH/setup if retained evidence or safety CI is invalid.
+Native -exe 'python' -arguments @('PROOF_CHECKER','PROOF_DIRECTORY')
+$safety = & gh run view 'SAFETY_RUN' --repo $repo --json conclusion,status,headSha | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $safety.status -ne 'completed' -or $safety.conclusion -ne 'success' -or $safety.headSha -ne $localSource) { throw 'Exact source safety CI is not passed; no setup started' }
 $secretPresent = & gh secret list --repo $repo --json name --jq '.[].name'
 if ($LASTEXITCODE -ne 0) { throw 'Cannot check temporary secret name' }
 if ($secretPresent -contains 'COHOST_TRIAL_BUNDLE') { throw 'Temporary trial secret already exists; do not overwrite' }
@@ -48,7 +52,7 @@ foreach ($role in @('main','database')) {
     $t.approved_unix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     [IO.File]::WriteAllText((Join-Path $path 'trial-approval.json'),($t | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
 }
-""".replace('SOURCE_COMMIT',source)
+""".replace('SOURCE_COMMIT',source).replace('SAFETY_RUN',str(safety_run)).replace('PROOF_CHECKER',str(root/'deploy/cohost-lab/check_generator.py').replace("'","''")).replace('PROOF_DIRECTORY',str(root/'deploy/cohost-lab/proofs/generator-40866958782').replace("'","''"))
     template=template[:pos]+initialize+template[pos:]
     old="    Write-Host 'Setup and restricted-key connectivity passed. No load started. Removing disposable test resources.'"
     execute="""

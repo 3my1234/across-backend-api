@@ -1,0 +1,68 @@
+{
+  "generator_memory_limit_bytes": 4294967296,
+  "independent_generator_gate_passed": true,
+  "assertions": {
+    "k6_exit_zero": true,
+    "original_thresholds_pass": true,
+    "all_500_authenticated": true,
+    "all_500_started": true,
+    "requested_duration_measured": true,
+    "all_500_vus_sustained": true,
+    "local_preparation_identity_counts": true,
+    "offered_completed_accounting": true,
+    "mock_received_every_request": true,
+    "no_dropped_iterations": true,
+    "burst_spread_under_5_seconds": true,
+    "generator_sample_coverage": true,
+    "generator_cpu_p95_under_70pct": true,
+    "generator_burst_cpu_p95_under_85pct": true,
+    "generator_throttle_periods_under_1pct": true,
+    "generator_memory_under_70pct": true,
+    "generator_no_oom": true,
+    "mock_cpu_p95_under_70pct": true,
+    "mock_no_oom": true
+  },
+  "failed_original_thresholds": [],
+  "offered": 449804.0,
+  "completed": 449804,
+  "measured_seconds": 1804.65629196167,
+  "requested_seconds": 1800,
+  "vus500_samples": 1800,
+  "http_per_second": 249.24635344886696,
+  "target": {
+    "active_identities": 500,
+    "baseline_messages_per_page": 40,
+    "first_activity_spread_seconds": 2.9810669389999997,
+    "historical_body_bytes": 348,
+    "requests": 450808,
+    "response_bytes": 3772299724,
+    "synthetic_only": true,
+    "synthetic_token_bytes": 512
+  },
+  "containers": {
+    "atlxpres-generator-sessions-measured": {
+      "quota_cores": 2.0,
+      "sample_count": 18032,
+      "sampled_seconds": 1804.6331527233124,
+      "mean_cpu_quota_fraction": 0.08926105910052369,
+      "p95_cpu_quota_fraction": 0.19951153715227812,
+      "burst_p95_cpu_quota_fraction": 0.6101542426008018,
+      "throttled_period_fraction": 0.00022169262317796375,
+      "peak_memory_bytes": 2687139840,
+      "oom_events": 0
+    },
+    "atlxpres-capacity-lab-gateway-1": {
+      "quota_cores": 1,
+      "sample_count": 18032,
+      "sampled_seconds": 1804.6331527233124,
+      "mean_cpu_quota_fraction": 0.060355672196109586,
+      "p95_cpu_quota_fraction": 0.12494853508222341,
+      "burst_p95_cpu_quota_fraction": 0.269851713917839,
+      "throttled_period_fraction": 0.0,
+      "peak_memory_bytes": 76582912,
+      "oom_events": 0
+    }
+  },
+  "sample_interval_p99_seconds": 0.13015127182006836,
+  "scope": "Unchanged 500-VU session actions against synthetic stateful HTTP; no application/database/worker capacity claim. Does not prove shared-host headroom during actual qualification."
+}

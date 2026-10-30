@@ -34,6 +34,7 @@ jobs:
           python3 -m py_compile deploy/cohost-lab/safety.py deploy/cohost-lab/watchdog.py
           node deploy/cohost-lab/test-stage-gate.mjs
           python3 deploy/cohost-lab/trial_runner.py --plan
+          python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-40866958782
       - name: Validate stop ownership in disposable CI only
         run: |
           python3 - <<'PY'
@@ -131,10 +132,9 @@ jobs:
           assert proof['status']=='completed' and proof['conclusion']=='success'
           assert proof['headSha']==approval['source_commit']
           PY
-          gh run view 40866958782 --json conclusion,status > /tmp/long-generator-run.json
-          python3 -c "import json; d=json.load(open('/tmp/long-generator-run.json')); assert d['status']=='completed' and d['conclusion']=='success'"
-          gh run download 40866958782 --name generator-headroom-40866958782 --dir /tmp/generator-proof
-          python3 deploy/cohost-lab/check_generator.py /tmp/generator-proof
+          # Exact previously verified evidence travels with the reviewed source.
+          # No historical artifact-storage request is needed to start a trial.
+          python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-40866958782
           docker pull grafana/k6:2.3.0
       - name: Install temporary operator-approved restricted access
         if: inputs.execute
