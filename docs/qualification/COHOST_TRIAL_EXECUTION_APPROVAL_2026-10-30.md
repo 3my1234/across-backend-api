@@ -48,3 +48,11 @@ That command records the approved exact source and envelope, stages small tools 
 
 ## Remaining release scope
 No real email/push delivery, payment, media transfer, store submission or native rendering is exercised by this trial. Production backup restore rehearsal, received alerts/rollback and critical device/payment readiness remain separate release evidence requirements. A test pass qualifies this workload/profile, not millions of users or automatic broad launch.
+
+## Final validated package
+
+Source: dbffabfddb183497a1c796b2871bba3ef11a7226. Disposable CI41014532150 PASSED all63Python regressions, Node renderer/session-stage gate mutations, real owned-container shutdown/cleanup and restricted internal PostgreSQL transport tests. Live qualification job SKIPPED. Local generated PowerShell AST passed.
+
+Current fresh trial nonce: cohost-0c667adb06298ad8. All setup/load/fixture approval flags remainFALSE. Operator SHA256: 78fefc462c9da69fbd9c6856996b6b134a71a42308b615473d8ea193ac81d55e. Public validation record: qualification/COHOST_TRIAL_FINAL_VALIDATION.json. CIlogs/metadata retained qualification/cohost-integration-20261030/41014532150. Source and safety proof are frozen; do not push a new branch HEAD between approval and this run.
+
+Continuous observer transition is validated against separate root-owned approval without restarting the watchdog or creating a heartbeat gap. Generator uses original root container user for private synthetic fixture access. Intentional pool-observer shutdown is distinguished from premature loss. No application, DB, Redis, DNS, K3s or live-host mutation was performed during this preparation.

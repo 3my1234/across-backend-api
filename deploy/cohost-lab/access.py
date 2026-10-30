@@ -31,6 +31,15 @@ def handle(base, command):
     raise ValueError("command denied")
 
 
+def setup_verify_command(base,manifest):
+    run=manifest.get('run','')
+    if not re.fullmatch('cohost-[a-f0-9]{16}',run) or base!=Path('/root/atlxpres-cohost')/run:
+        raise ValueError('fixed run directory required')
+    if manifest.get('role')!='main' or manifest.get('load_authorized') is not False:
+        raise ValueError('setup-only main verification required')
+    return ['/usr/bin/python3',str(base/'tools/operator_setup.py'),str(base),'verify']
+
+
 def main():
     base=Path(sys.argv[1]).resolve()
     if os.name!="posix" or os.geteuid()!=0:raise ValueError("Linux root forced helper required")
@@ -38,6 +47,11 @@ def main():
         s=p.stat()
         if s.st_uid!=0 or s.st_mode&0o022:raise ValueError("unsafe ownership or permissions")
     command=os.environ.get("SSH_ORIGINAL_COMMAND","")
+    if command=='setup-verify':
+        import subprocess
+        cmd=setup_verify_command(base,json.loads((base/'manifest.json').read_text()))
+        subprocess.run(cmd,check=True,timeout=180)
+        return
     if command.startswith('upload '):
         from exchange import put
         put(base,command[7:],sys.stdin.buffer)

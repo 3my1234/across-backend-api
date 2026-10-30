@@ -141,3 +141,15 @@ class ObserverTransitionTests(unittest.TestCase):
         from watchdog import approved_trial_transition
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(FileNotFoundError):approved_trial_transition(Path(tmp),dict(run='cohost-'+'a'*16))
+
+
+class RestrictedSetupVerifyTests(unittest.TestCase):
+    def test_only_exact_main_setup_verification(self):
+        from access import setup_verify_command
+        run='cohost-'+'a'*16;base=Path('/root/atlxpres-cohost')/run
+        manifest=dict(run=run,role='main',load_authorized=False)
+        command=setup_verify_command(base,manifest)
+        self.assertEqual(command[-1],'verify');self.assertEqual(command[1],str(base/'tools/operator_setup.py'))
+        for changed in (dict(manifest,role='database'),dict(manifest,load_authorized=True),dict(manifest,run='production')):
+            with self.assertRaises(ValueError):setup_verify_command(base,changed)
+        with self.assertRaises(ValueError):setup_verify_command(Path('/tmp'),manifest)

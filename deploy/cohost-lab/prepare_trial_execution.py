@@ -91,6 +91,10 @@ foreach ($role in @('main','database')) {
 """
     if old not in template:raise ValueError('reviewed setup template anchor changed')
     template=template.replace(old,execute)
+    password_verify='    Remote \'173.212.219.169\' "python3 \'$remote/tools/operator_setup.py\' \'$remote\' verify"'
+    key_verify="    Native -exe 'ssh' -arguments @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','IdentitiesOnly=yes','-i',(Join-Path $private 'ci-main'),'root@173.212.219.169','setup-verify')"
+    if password_verify not in template:raise ValueError('exact verification handoff anchor changed')
+    template=template.replace(password_verify,key_verify)
     template=template.replace('No load test was started.','See retained trial result; cleanup evidence is separate from capacity acceptance.')
     script=workspace/'qualification/Invoke-CohostQualification.ps1'
     script.write_text(template,encoding='utf-8-sig')
