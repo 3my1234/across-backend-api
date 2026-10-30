@@ -163,6 +163,7 @@ jobs:
       - name: Remove runner-local temporary credentials and synthetic bearer fixtures
         if: always()
         run: |
+          python3 deploy/cohost-lab/install_ci_bundle.py --cleanup .cohost-private
           python3 - <<'PY'
           from pathlib import Path
           import shutil
