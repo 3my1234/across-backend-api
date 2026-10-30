@@ -85,3 +85,30 @@ queue drain and original receipt eligibility tail. Failures stop progression.
 Application p95<500ms, p99<1500ms, zero overloads, integrity, resource and
 production-health requirements remain unchanged. No numeric safe launch limit
 can be assigned from orchestration failures.
+
+## Completed artifact-fix validation and remaining runtime risk
+
+Source5a8436497cad12dd9443b8a883c4b3fcb19b4b7f; free Linux safety
+run41110029840 PASSED, including original retained proof check, Linux socket
+regression, actual disposable watchdog shutdown/owned cleanup and restricted
+SSH/PostgreSQL protocol checks. Local79tests passed (one Linux-only skipped on
+Windows). The generated operator's PowerShell syntax and ordering were checked:
+local proof and exact passed-source CI preflight occur before any host setup.
+Historical generator artifact downloading is removed. Current GitHub metadata,
+Docker image retrieval and result-artifact availability are still external
+services; this is not a guarantee that they cannot fail.
+
+The new per-endpoint700 watchdog logs now establish what earlier logs could not:
+main API readiness timed out at19:34:02 Lagos (curl28, HTTP000, TLS1.596s,
+transfer2.001s with no response bytes). At19:35:07 and19:35:11 all three main-host
+public probes exceeded the observer deadline; database-host connection timeouts
+were also recorded around19:35:03. All captured production container health
+states remained healthy. This identifies real transport/observer failures, not
+their underlying network/host/application cause. A subsequent independent audit
+at19:44:52/19:45:02 found all protected probes healthy. Those transient events
+remain a runtime risk; genuine failed health gates still stop the next trial.
+
+Current infrastructure is validated for attempting the unchanged trial, not
+certified500-capable or free of external-network failures. No further audit is
+needed for the now-closed700 run. The local execution package is ready under the
+existing approval; no new live resources or load were started by this work.

@@ -1,4 +1,4 @@
-import json, subprocess, unittest
+import json, subprocess, tempfile, unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from trial_runner import Runner
@@ -37,6 +37,16 @@ class StartupTests(unittest.TestCase):
     def test_recurring_status_deadline_remains_two_seconds(self):
         runner=self.runner()
         runner.ssh=Mock(side_effect=subprocess.TimeoutExpired('ssh',2))
-        with patch('trial_runner.subprocess.run'):runner.leases()
+        with tempfile.TemporaryDirectory() as tmp:
+            runner.output=Path(tmp)
+            with patch('trial_runner.subprocess.run'):runner.leases()
+            report=json.loads((runner.output/'peer-relay-failure.json').read_text())
+            self.assertEqual(report['phase'],'status')
+            self.assertEqual(report['error_class'],'TimeoutExpired')
         self.assertIsInstance(runner.error,subprocess.TimeoutExpired)
         self.assertTrue(all(call.kwargs['timeout']==2 for call in runner.ssh.call_args_list))
+
+    def test_seed_disconnect_does_not_hide_original_relay_failure(self):
+        runner=self.runner();runner.error=ValueError('stale peer: observed age4')
+        runner.control=Mock(side_effect=subprocess.CalledProcessError(1,'ssh'))
+        with self.assertRaisesRegex(RuntimeError,'observed age4'):runner.lab('seed','seed')

@@ -19,25 +19,38 @@ class Runner:
         cmd='control '+base64.b64encode(json.dumps(op).encode()).decode()
         return self.ssh(role,cmd,timeout,input,destination)
     def lab(self,command,service='exporter',destination=None,timeout=750):
-        return self.control('main','exec',service,['/app/lab',command],timeout,destination=destination)
+        try:return self.control('main','exec',service,['/app/lab',command],timeout,destination=destination)
+        except Exception:
+            # Report the initiating safety failure instead of only the later
+            # SQL disconnect caused by watchdog cleanup during preparation.
+            self.check()
+            raise
     def sql(self,sql):
         return self.control('database','exec','postgres',['psql','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1'],input=sql.encode(),timeout=60).decode().strip()
     def check(self):
         if self.error:raise RuntimeError('independent watchdog/relay stopped: '+str(self.error))
     def leases(self):
         from trial_policy import peer_progress
+        statuses=[];phase='initial'
         try:
             while not self.stop.is_set():
+                phase='status'
                 with concurrent.futures.ThreadPoolExecutor(2) as pool:
                     statuses=list(pool.map(lambda r:json.loads(self.ssh(r,'status',timeout=2)),('main','database')))
+                phase='validate'
                 progress=peer_progress(statuses,self.previous,self.approval['run'])
                 if progress is None:
                     self.stop.wait(.5);continue
                 self.previous=progress
+                phase='lease'
                 with concurrent.futures.ThreadPoolExecutor(2) as pool:list(pool.map(lambda r:self.ssh(r,'lease',timeout=2),('main','database')))
                 self.stop.wait(.5)
         except BaseException as error:
             self.error=error
+            report=dict(observed_unix=time.time(),phase=phase,error_class=type(error).__name__,error=str(error),last_statuses=statuses,last_accepted_sequences=self.previous)
+            print('Peer relay stopped: '+json.dumps(report),file=sys.stderr,flush=True)
+            try:(self.output/'peer-relay-failure.json').write_text(json.dumps(report,indent=2))
+            except OSError:pass # Keep the original safety failure if evidence disk fails.
             subprocess.run(['docker','stop','--timeout','2','cohost-generator'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
             for process in self.children:
                 if process.poll() is None:
