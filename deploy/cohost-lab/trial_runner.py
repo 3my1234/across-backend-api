@@ -194,9 +194,12 @@ class Runner:
         if not failures:
             with (public/'gate.json').open('wb') as gate:
                 subprocess.run(['node',str(self.root/'deploy/cohost-lab/stage_gate.mjs'),str(public/'summary.json'),str(public/'reconciliation.jsonl'),profile,str(target)],check=True,stdout=gate)
+        if observer.poll() is not None:failures.append('pool observer ended before the full stage/recovery window')
         self.control('main','stop','exporter');self.service('exporter')
+        try:observer.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(observer.pid,signal.SIGTERM);failures.append('pool observer failed to stop')
         observer_out.close()
-        if observer.poll() not in (None,0,255):failures.append('pool observer stopped unexpectedly')
         if failures:raise RuntimeError('; '.join(failures))
         self.sql("UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();")
     def notifications(self):
