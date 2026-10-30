@@ -119,7 +119,7 @@ class Runner:
         if hashlib.sha256(generated.encode()).hexdigest()!=expected:raise RuntimeError('executed generator differs from qualified source')
         (suite/'sessions.js').write_text(generated)
         (public/'executed-client.sha256').write_text(expected)
-        args=['docker','run','--label','atlxpres.cohost.run='+self.approval['run'],'--name','cohost-generator','--network','host','--add-host','gateway:127.0.0.1',
+        args=['docker','run','--user','0:0','--label','atlxpres.cohost.run='+self.approval['run'],'--name','cohost-generator','--network','host','--add-host','gateway:127.0.0.1',
             '--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512',
             '-v',str(suite)+':/suite:ro','-v',str(private)+':/exchange',
             '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_AUTH_MODE=established',

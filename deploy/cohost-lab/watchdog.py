@@ -84,6 +84,18 @@ def state(ids):
     return [json.loads(x) for x in rows]
 
 
+def approved_trial_transition(base,current):
+    """Keep the existing independent observer alive across an explicitly approved arm."""
+    from trial_policy import validate
+    approval=base/'trial-approval.json'
+    for path in (approval,base/'trial-started'):
+        info=path.stat()
+        if info.st_uid!=0 or info.st_mode&0o022:raise ValueError('unsafe trial transition ownership')
+    validate(json.loads(approval.read_text()),current['run'])
+    if current.get('fixture_preparation_authorized') is not True or not 0<current.get('trial_deadline_unix',0)-time.time()<=7200:
+        raise ValueError('bounded explicit trial transition required')
+
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("manifest",type=Path)
     ap.add_argument("--stop-test",action="store_true")
@@ -115,7 +127,9 @@ def main():
             current=json.loads(a.manifest.read_text())
             if current.get("run")!=m["run"] or current.get("role")!=m["role"] or current.get("production_container_ids")!=ids:
                 raise ValueError("protected inventory changed")
-            if a.setup_only and current.get("load_authorized") is not False:raise ValueError("setup guard cannot authorize load")
+            if a.setup_only and current.get('load_authorized') is not False:
+                approved_trial_transition(base,current)
+                a.setup_only=False
             m=current
             states=state(ids+m.get("container_ids",[]))
             prod=states[:len(ids)]

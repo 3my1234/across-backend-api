@@ -123,3 +123,21 @@ class ActualGeneratorTests(unittest.TestCase):
         from generator_monitor import resource_gate
         rows=self.samples();rows[-1]['cpu_max']='100000 100000'
         with self.assertRaises(ValueError):resource_gate(rows,0,20,20)
+
+
+class ObserverTransitionTests(unittest.TestCase):
+    def test_valid_approval_required_without_restarting_observer(self):
+        from watchdog import approved_trial_transition
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);a=TrialPolicyTests().approval()
+            (base/'trial-approval.json').write_text(json.dumps(a));(base/'trial-started').write_text('started')
+            current=dict(run=a['run'],fixture_preparation_authorized=True,trial_deadline_unix=time.time()+7100)
+            with patch('watchdog.Path.stat',return_value=SimpleNamespace(st_uid=0,st_mode=0o600)):
+                approved_trial_transition(base,current)
+                a['load_authorized']=False;(base/'trial-approval.json').write_text(json.dumps(a))
+                with self.assertRaises(ValueError):approved_trial_transition(base,current)
+    def test_missing_root_approval_never_promotes_setup_mode(self):
+        from watchdog import approved_trial_transition
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):approved_trial_transition(Path(tmp),dict(run='cohost-'+'a'*16))

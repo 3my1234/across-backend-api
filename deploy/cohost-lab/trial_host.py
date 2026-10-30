@@ -27,16 +27,18 @@ def activate(base):
     call(['systemctl','stop',prefix+role+'reaper.service'])
     call(['systemd-run','--unit',prefix+role+'trialreaper.service','--property','MemoryMax=128M','--property','CPUQuota=25%',
           '/usr/bin/python3',str(base/'tools/trial_host.py'),str(base),'reap'])
-    call(['systemctl','stop',prefix+role+'guard.service'])
+    call(['systemctl','is-active','--quiet',prefix+role+'guard.service'])
     m['load_authorized']=True;m['fixture_preparation_authorized']=True
     m['trial_deadline_unix']=time.time()+LIFETIME
-    (base/'manifest.json').write_text(json.dumps(m))
     (base/'trial-started').write_text(str(time.time()))
+    temporary=base/'trial-manifest.json'
+    temporary.write_text(json.dumps(m));temporary.chmod(0o600)
+    temporary.replace(base/'manifest.json')
     if role=='database':
         call(['systemctl','set-property','--runtime',prefix+'database.slice','CPUQuota=300%'])
         call(['docker','update','--cpus','3',m['services']['postgres']])
-    call(['systemd-run','--unit',prefix+role+'guard.service','--property','MemoryMax=128M','--property','CPUQuota=25%',
-          '/usr/bin/python3',str(base/'tools/watchdog.py'),str(base/'manifest.json'),'--stop-test'])
+    # Preserve the running observer and its independent sequence: no heartbeat gap.
+    # It validates the separate root-owned approval before changing to peer-lease mode.
     call(['python3',str(base/'tools/verify_cgroup.py'),str(base/'manifest.json')])
     print(json.dumps(dict(activated=role,run=m['run'],application_load_started=False)),flush=True)
 
