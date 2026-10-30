@@ -4,19 +4,22 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from watchdog import URLS,probe
 
+POLICY="http-2s-observer-2.5s-v1"
+
 def validate(doc,now):
+    if doc.get("timing_policy")!=POLICY:raise ValueError("approved split timing policy evidence required")
     if doc.get('observed_seconds',0)<300 or not 0<=now-doc.get('finished_unix',0)<=900:
         raise ValueError('fresh five-minute baseline required')
     rows=doc.get('urls',{})
     if set(rows)!=set(URLS):raise ValueError('all protected sites required')
     for value in rows.values():
-        if value.get('successful_samples',0)<60 or not 0<value.get('p95_seconds',0)<=2:
+        if value.get('successful_samples',0)<60 or not 0<value.get('p95_seconds',0)<=2 or not 0<value.get('observer_p95_seconds',0)<=2.5:
             raise ValueError('baseline evidence incomplete/unhealthy')
     return {url:rows[url]['p95_seconds'] for url in URLS}
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('output',type=Path);a=ap.parse_args()
-    values={u:[] for u in URLS};start=time.monotonic()
+    values={u:[] for u in URLS};observers={u:[] for u in URLS};start=time.monotonic()
     started_unix=time.time()
     while time.monotonic()-start<300 or min(map(len,values.values()))<60:
         details={}
@@ -31,9 +34,10 @@ def main():
                 print(json.dumps(failure),flush=True)
                 raise ValueError('baseline health failure; do not arm test')
             values[url].append(seconds)
+            observers[url].append(details[url]['observer_seconds'])
         time.sleep(5)
-    doc=dict(observed_seconds=time.monotonic()-start,finished_unix=time.time(),urls={
-        url:dict(successful_samples=len(v),p95_seconds=sorted(v)[int((len(v)-1)*.95)]) for url,v in values.items()})
+    doc=dict(timing_policy=POLICY,observed_seconds=time.monotonic()-start,finished_unix=time.time(),urls={
+        url:dict(successful_samples=len(v),p95_seconds=sorted(v)[int((len(v)-1)*.95)],observer_p95_seconds=sorted(observers[url])[int((len(v)-1)*.95)]) for url,v in values.items()})
     validate(doc,time.time());a.output.write_text(json.dumps(doc,indent=2))
     print('Five-minute baseline passed; no load authorized.')
 if __name__=='__main__':main()

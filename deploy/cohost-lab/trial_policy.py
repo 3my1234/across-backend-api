@@ -6,7 +6,7 @@ LIFETIME=7200
 def validate(approval,run,now=None):
     now=time.time() if now is None else now
     if not re.fullmatch('cohost-[a-f0-9]{16}',run):raise ValueError('invalid trial nonce')
-    expected=dict(run=run,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,
+    expected=dict(timing_policy="http-2s-observer-2.5s-v1",run=run,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,
         main_cpu=2,main_memory=2684354560,database_cpu=3,database_memory=3221225472,
         generator_cpu=2,generator_memory=4294967296,lifetime_seconds=LIFETIME)
     for key,value in expected.items():

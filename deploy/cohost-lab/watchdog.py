@@ -5,6 +5,7 @@ peer lease. Stop mode only delegates to immutable-ID/ownership-checked safety.py
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -33,8 +34,11 @@ def run_probe_process(args, detail):
     with subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) as process:
         detail['process_launch_seconds']=time.monotonic()-launched
         waiting=time.monotonic()
+        deadline=detail.pop('_observer_deadline',launched+2.5)
         try:
-            stdout,stderr=process.communicate(timeout=2.5)
+            remaining=deadline-waiting
+            if remaining<=0:raise subprocess.TimeoutExpired(args,2.5)
+            stdout,stderr=process.communicate(timeout=remaining)
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()
@@ -47,7 +51,7 @@ def run_probe_process(args, detail):
 
 def probe(url,diagnostics=None):
     start=time.monotonic()
-    detail=dict(url=url)
+    detail=dict(url=url,_observer_deadline=start+2.5)
     try:
         ready=url.endswith('/ready')
         # curl races dual-stack connections and bounds the COMPLETE transfer.
@@ -65,14 +69,19 @@ def probe(url,diagnostics=None):
             phases=dict(zip(('dns_seconds','connect_seconds','tls_seconds','first_byte_seconds','total_seconds','download_bytes'),parts[1:])))
         ok=result.returncode==0 and bool(separator) and parts[0]=='200'
         if ready:ok=ok and len(body.encode())<=8192 and json.loads(body).get('ok') is True
-        detail.update(healthy=ok,seconds=time.monotonic()-start)
-        if 'process_wait_seconds' in detail and len(parts)==7:
-            detail['wait_outside_transfer_seconds']=max(0,detail['process_wait_seconds']-float(parts[5]))
-        return url,ok,detail['seconds']
+        if len(parts)!=7:raise ValueError('complete HTTP timing metadata required')
+        http_seconds=float(parts[5]);observer_seconds=time.monotonic()-start
+        if not math.isfinite(http_seconds) or http_seconds<=0:raise ValueError('invalid HTTP transfer duration')
+        timing_ok=http_seconds<=2 and math.isfinite(observer_seconds) and 0<=observer_seconds<=2.5
+        detail.update(transport_healthy=ok,healthy=ok and timing_ok,http_seconds=http_seconds,observer_seconds=observer_seconds,seconds=observer_seconds,timing_policy='http-2s-observer-2.5s-v1')
+        if 'process_wait_seconds' in detail:
+            detail['wait_outside_transfer_seconds']=max(0,detail['process_wait_seconds']-http_seconds)
+        return url,detail['healthy'],http_seconds
     except Exception as error:
         detail.update(healthy=False,error_class=type(error).__name__,seconds=time.monotonic()-start)
         return url,False,detail['seconds']
     finally:
+        detail.pop('_observer_deadline',None)
         if diagnostics is not None:diagnostics[url]=detail
 
 

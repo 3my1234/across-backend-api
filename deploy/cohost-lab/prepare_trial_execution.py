@@ -14,7 +14,7 @@ def prepare(workspace,safety_run):
     review=Path(generated['review']).resolve();run=review.name;private=Path(generated['private_keys_location'])
     prior=workspace/'qualification/cohost-review/cohost-0cfe085cbad1ec57/main/database_known_hosts'
     shutil.copyfile(prior,review/'main/database_known_hosts')
-    trial=dict(run=run,load_authorized=False,fixture_preparation_authorized=False,spending_cap_usd=0,
+    trial=dict(timing_policy="http-2s-observer-2.5s-v1",run=run,load_authorized=False,fixture_preparation_authorized=False,spending_cap_usd=0,
         main_cpu=2,main_memory=2684354560,database_cpu=3,database_memory=3221225472,
         generator_cpu=2,generator_memory=4294967296,lifetime_seconds=LIFETIME,approved_unix=0,
         source_commit=source,safety_run=str(safety_run),image_source=json.loads((review/'main/request.json').read_text())['image_source'],

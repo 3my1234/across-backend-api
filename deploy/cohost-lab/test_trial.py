@@ -6,7 +6,7 @@ from exchange import put,get,path_for
 
 class TrialPolicyTests(unittest.TestCase):
     def approval(self):
-        return dict(run='cohost-'+'a'*16,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,
+        return dict(timing_policy='http-2s-observer-2.5s-v1',run='cohost-'+'a'*16,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,
             main_cpu=2,main_memory=2684354560,database_cpu=3,database_memory=3221225472,
             generator_cpu=2,generator_memory=4294967296,lifetime_seconds=LIFETIME,
             approved_unix=time.time(),source_commit='a'*40,stages=[list(s) for s in STAGES])

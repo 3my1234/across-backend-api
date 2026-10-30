@@ -27,7 +27,7 @@ class SafetyTests(unittest.TestCase):
             self.assertNotIn("port-forwarding",result[0]);self.assertIn("127.0.0.1:55432",result[1])
             self.assertIn("expiry-time=",result[1]);self.assertNotIn("127.0.0.1:5432",result[1])
     def test_baseline_must_be_fresh_complete_and_five_minutes(self):
-        d=dict(observed_seconds=300,finished_unix=1000,urls={u:dict(successful_samples=60,p95_seconds=.2) for u in URLS})
+        d=dict(timing_policy='http-2s-observer-2.5s-v1',observed_seconds=300,finished_unix=1000,urls={u:dict(successful_samples=60,p95_seconds=.2,observer_p95_seconds=.2) for u in URLS})
         self.assertTrue(validate_baseline(d,1001))
         with self.assertRaises(ValueError):validate_baseline(d,2000)
         d["observed_seconds"]=30
