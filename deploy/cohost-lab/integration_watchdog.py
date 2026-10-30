@@ -44,7 +44,7 @@ def scenario(case,sentinel):
                 if case=="production-health":result[0]["Running"]=False
                 return result
             w.Path=mapped;w.cpu=cpu;w.state=states
-            w.probe=lambda u:(u,case not in ("public-health","http-timeout","observer-stall"),.01)
+            w.probe=lambda u,diagnostics=None:(u,case not in ("public-health","http-timeout","observer-stall"),.01)
             w.time.sleep=lambda _:None;w.time.monotonic=monotonic
             from collections import namedtuple
             Disk=namedtuple("Disk","total used free")

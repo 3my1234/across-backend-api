@@ -122,14 +122,20 @@ def main():
     before=cpu();last=time.monotonic();high_cpu=high_io=0
     failures={u:0 for u in URLS};slow={u:0 for u in URLS}
     initial_oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
+    next_tick=time.monotonic()+1
     try:
         while True:
-            time.sleep(1);now=time.monotonic();elapsed=now-last;last=now
+            # Target one-second sampling, rather than adding a full second to
+            # every completed probe/inspect cycle. Never publish during a scan.
+            time.sleep(max(0,next_tick-time.monotonic()))
+            now=time.monotonic();next_tick=now+1;elapsed=now-last;last=now
             after=cpu();busy,wait=delta(before,after);before=after
             high_cpu=high_cpu+elapsed if busy>85 else 0
             high_io=high_io+elapsed if wait>10 else 0
             mem={k:int(v.split()[0])*1024 for k,v in (x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines())}
-            with ThreadPoolExecutor(max_workers=4) as pool: results=list(pool.map(probe,URLS))
+            probe_details={}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results=list(pool.map(lambda url:probe(url,probe_details),URLS))
             for url,ok,latency in results:
                 failures[url]=0 if ok else failures[url]+1
                 slow[url]=slow[url]+1 if latency>max(2,3*baseline[url]) else 0
@@ -151,7 +157,8 @@ def main():
                 health_failures=max(failures.values()),latency_failures=max(slow.values()),
                 peer_heartbeat_age_seconds=(0 if time.monotonic()-started<900 else 999) if a.setup_only else (max(0,time.time()-peer.stat().st_mtime) if peer.exists() else 999))
             (base/"sample.json").write_text(json.dumps(sample))
-            with (base/"watchdog.jsonl").open("a") as log: log.write(json.dumps(dict(utc=time.time(),sample=sample))+"\n")
+            with (base/"watchdog.jsonl").open("a") as log:
+                log.write(json.dumps(dict(utc=time.time(),sample=sample,probes=probe_details))+"\n")
             why=reasons(sample,m["role"])
             if why:
                 print(json.dumps(dict(abort=why)),flush=True)

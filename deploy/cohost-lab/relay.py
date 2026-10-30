@@ -16,7 +16,8 @@ def validate(statuses, previous, run):
     for role,s in zip(("main","database"),statuses):
         if s.get("run")!=run or s.get("role")!=role:raise ValueError("peer identity mismatch")
         age=s.get("age_seconds");sequence=s.get("sequence")
-        if type(age) not in (int,float) or not 0<=age<=3:raise ValueError("stale peer")
+        if type(age) not in (int,float) or not 0<=age<=3:
+            raise ValueError(f"stale peer: role={role} age_seconds={age!r} sequence={sequence!r} observed_unix={time.time()}")
         if type(sequence) is not int or sequence<=previous.get(role,0):raise ValueError("nonadvancing peer")
     return {s["role"]:s["sequence"] for s in statuses}
 
