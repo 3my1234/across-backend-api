@@ -22,6 +22,7 @@ jobs:
       DATABASE_URL: postgres://lab:lab-disposable-only@127.0.0.1:5432/capacity_lab?sslmode=disable
       SETTLEMENT_TEST_LOCAL: 'true'
       RECEIPT_TEST_LOCAL: 'true'
+      MIGRATION_REVIEW_LOCAL: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,11 +30,11 @@ jobs:
       - name: Verify release regressions against real disposable PostgreSQL
         run: |
           set -o pipefail
-          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db | tee reconciliation-tests.log
+          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db ./internal/migrations | tee reconciliation-tests.log
           python3 - <<'PY'
           from pathlib import Path
           s=Path('reconciliation-tests.log').read_text()
-          for name in ('TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests'):
+          for name in ('TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
               assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
           PY
       - name: Measure actual conditional polling handler and SQL cost
