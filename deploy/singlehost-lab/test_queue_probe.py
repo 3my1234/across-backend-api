@@ -8,7 +8,7 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'empty pre-workload'):exercise(sql,lambda:self.fail('must not run worker'))
         self.assertFalse(any('DELETE' in text or 'INSERT' in text for text in calls))
     def test_failed_worker_check_still_deletes_only_identified_probe(self):
-        calls=[];counts=iter(['0','1','0'])
+        calls=[];counts=iter(['0','0','1','0'])
         def sql(text):
             calls.append(text)
             if text.startswith('SELECT marker'):return 'disposable-compose-only'

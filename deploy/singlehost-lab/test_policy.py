@@ -1,13 +1,22 @@
-import copy,sys,time,unittest
+import copy,sys,time,unittest,tempfile
+from unittest.mock import patch
 from pathlib import Path
 from policy import validate
-from runtime import slices
+from runtime import slices,observations
 from runner import SingleHostRunner
 from supervise import require_live_fixture
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'cohost-lab'))
 from trial_policy import STAGES
 
 class PolicyTests(unittest.TestCase):
+    def test_post_abort_evidence_does_not_require_a_live_docker_sensor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder);(base/'watchdog-error.json').write_text('{"error_class":"TimeoutExpired"}')
+            (base/'ci.key').write_text('must-not-be-exposed')
+            with patch('runtime.call',side_effect=AssertionError('must not query stalled Docker')):
+                result=observations(base,full=True)
+            self.assertIn('TimeoutExpired',result['watchdog-error.json'])
+            self.assertNotIn('must-not-be-exposed',str(result))
     def test_foundation_fixture_cannot_start_a_live_qualification(self):
         doc={'services':{name:{'environment':{'LAB_ACTOR_PAIRS':'500','LAB_SCENARIO':'large-busy'}} for name in ('seed','exporter')}}
         require_live_fixture(doc)
@@ -38,7 +47,7 @@ class PolicyTests(unittest.TestCase):
         runner=SingleHostRunner(Path('.'),Path('unused'),self.approval(),Path('unused'))
         good=dict(run=runner.approval['run'],topology='singlehost',ready=True,age_seconds=.1)
         runner.validate_status(good)
-        for key,value in (('run','another'),('topology','cohost'),('ready',False),('age_seconds',5.01),('age_seconds',float('nan'))):
+        for key,value in (('run','another'),('topology','cohost'),('ready',False),('closed',True),('guard_error',True),('age_seconds',5.01),('age_seconds',float('nan'))):
             with self.subTest(key=key),self.assertRaises(ValueError):runner.validate_status({**good,key:value})
 
 if __name__=='__main__':unittest.main()

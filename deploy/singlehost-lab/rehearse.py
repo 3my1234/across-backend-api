@@ -121,26 +121,33 @@ def main():
         print('Starting actual unchanged20-session smoke',flush=True)
         with (output/'k6.log').open('wb') as log:code=subprocess.run(generator,stdout=log,stderr=subprocess.STDOUT,timeout=330).returncode
         (exchange/'k6-exit-code.txt').write_text(str(code));shutil.copyfile(output/'k6.log',exchange/'k6.log')
-        if (exchange/'summary.json').exists():shutil.copyfile(exchange/'summary.json',output/'summary.json')
+        for filename in ('summary.json','timeseries.json'):
+            if (exchange/filename).exists():shutil.copyfile(exchange/filename,output/filename)
         # Always attempt acknowledged-write reconciliation, including a failed load gate.
-        exec_lab(base,'verifier','verify-sessions',output/'reconciliation.jsonl')
-        if code:raise RuntimeError('unchanged20-session smoke gate failed: '+str(code))
-        subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),'smoke','20'],check=True)
-        result['smoke_sessions']=20;result['smoke_seconds']=45;result['write_reconciliation_passed']=True
+        application_failures=[]
+        try:exec_lab(base,'verifier','verify-sessions',output/'reconciliation.jsonl')
+        except Exception as error:application_failures.append('reconciliation: '+str(error))
+        if code:application_failures.append('unchanged20-session k6 gate exit '+str(code))
+        if not application_failures:
+            gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),'smoke','20'])
+            if gate.returncode:application_failures.append('original stage gate failed')
+        result['planned_smoke_sessions']=20;result['planned_smoke_seconds']=45;result['application_failures']=application_failures
+        result['write_reconciliation_passed']=not application_failures
         result['effective_cgroups_after_seed']=verify_limits(base)
         # Preserve logs before the actual hard-stop integration destroys the lab.
         m,_=inventory(base)
         for name,ident in m['services'].items():
-            with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','100',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
+            with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','2000',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
         from rehearse_transport import exercise
         result.update(exercise(root,base,output,sentinel))
-        result['passed']=True
+        result['passed']=not application_failures
+        if application_failures:raise RuntimeError('Application gates failed; shutdown/transport replay retained: '+'; '.join(application_failures))
     finally:
         if created:
             try:
                 m,_=inventory(base)
                 for name,ident in m['services'].items():
-                    with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','100',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
+                    with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','2000',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
             finally:cleanup(base)
             result['cleanup_completed']=(base/'cleanup.complete').exists()
         if sentinel:

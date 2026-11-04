@@ -4,6 +4,8 @@ import re,uuid
 def exercise(sql,run):
     if sql('SELECT marker FROM capacity_lab_identity').strip()!='disposable-compose-only':raise ValueError('synthetic database marker required')
     if int(sql('SELECT count(*) FROM notification_push_deliveries'))!=0:raise ValueError('queue preflight requires an empty pre-workload native queue')
+    eligible=sql("SELECT count(*) FROM notifications n JOIN user_push_tokens t ON t.user_id=n.user_id AND t.disabled_at IS NULL WHERE n.created_at>=now()-interval '48 hours' AND NOT n.is_read")
+    if int(eligible)!=0:raise ValueError('queue preflight must not backfill unrelated eligible notifications')
     tag='singlehost-queue-probe:'+uuid.uuid4().hex
     ident=sql("INSERT INTO notifications(user_id,type,title,body,data,event_key) SELECT buyer,'ticket_reply','Isolated queue recovery probe','Synthetic preflight only','{}'::jsonb,'"+tag+"' FROM capacity_lab_actors ORDER BY buyer LIMIT 1 RETURNING id::text").strip().splitlines()[0]
     if not re.fullmatch('[a-f0-9-]{36}',ident):raise ValueError('probe notification UUID missing')

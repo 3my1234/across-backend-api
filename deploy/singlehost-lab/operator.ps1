@@ -84,6 +84,7 @@ try {
     }
     if (-not $action) { throw 'Dispatched trial did not appear; no duplicate dispatch' }
     Write-Host "Trial: https://github.com/$repo/actions/runs/$($action.databaseId)"
+    Write-Host 'GitHub watch shows step status, not streamed logs. Open the link for30-second phase heartbeats. The workload includes30minutes at500 sessions plus receipt verification; hard limit120minutes. Do not start another copy.'
     Native -exe 'gh' -arguments @('run','watch',"$($action.databaseId)",'--repo',$repo,'--exit-status','--interval','15')
 } finally {
     $bundle=$null;$bundleJson=$null

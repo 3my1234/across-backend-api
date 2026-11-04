@@ -38,10 +38,10 @@ def compose(base,*args,timeout=120):
     doc=json.loads((base/'compose.runtime.json').read_text())
     return call(['docker','compose','--project-name',doc['name'],'--file',str(base/'compose.runtime.json'),*args],timeout,cwd=base)
 
-def inventory(base):
+def inventory(base,timeout=30):
     doc=json.loads((base/'compose.runtime.json').read_text());run=doc['name'].removesuffix('-singlehost');identity(run)
-    ids=call(['docker','ps','-aq','--no-trunc','--filter','label='+LABEL+'='+run]).decode().split()
-    rows=json.loads(call(['docker','inspect',*ids])) if ids else []
+    ids=call(['docker','ps','-aq','--no-trunc','--filter','label='+LABEL+'='+run],timeout=timeout).decode().split()
+    rows=json.loads(call(['docker','inspect',*ids],timeout=timeout)) if ids else []
     if ids:validate_inventory(dict(run=run,container_ids=ids),rows)
     names={r['Config']['Labels']['com.docker.compose.service']:r['Id'] for r in rows}
     if len(names)!=len(rows) or not set(names)<=set(doc['services']):raise ValueError('unexpected owned service inventory')
@@ -61,8 +61,8 @@ def sql(base,text):
     manifest,_=inventory(base)
     return call(['docker','exec','-i',manifest['services']['postgres'],'psql','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1'],input=text.encode()).decode().strip()
 
-def verify_limits(base):
-    manifest,rows=inventory(base)
+def verify_limits(base,snapshot=None):
+    manifest,rows=inventory(base) if snapshot is None else snapshot
     for row in rows:
         service=row['Config']['Labels']['com.docker.compose.service'];expected=identity(manifest['run'])+('-db.slice' if service=='postgres' else '-app.slice')
         if row['HostConfig']['CgroupParent']!=expected:raise ValueError('wrong parent cgroup')
@@ -96,6 +96,36 @@ def verify_host_bridge(base):
         connection.sendall(b'*1\r\n$4\r\nPING\r\n')
         if connection.recv(64)!=b'+PONG\r\n':raise ValueError('owned Redis bridge check failed')
     return dict(private_host_bridge_verified=True,redis_address=address,published_ports=False)
+
+def capture_evidence(base):
+    """Best-effort bounded diagnostics before deleting test containers."""
+    destination=base/'public';destination.mkdir(mode=0o700,exist_ok=True)
+    began=time.monotonic();errors=[]
+    try:
+        manifest,rows=inventory(base,timeout=5)
+        for name,ident in manifest['services'].items():
+            if time.monotonic()-began>20:errors.append('diagnostic budget reached');break
+            try:
+                with (destination/(name+'.log')).open('wb') as out:subprocess.run(['docker','logs','--tail','2000',ident],stdout=out,stderr=subprocess.STDOUT,check=False,timeout=5)
+            except Exception as error:errors.append(name+': '+type(error).__name__)
+        try:(destination/'effective-limits.json').write_text(json.dumps(verify_limits(base,snapshot=(manifest,rows))))
+        except Exception as error:errors.append('cgroup: '+type(error).__name__)
+    except Exception as error:errors.append('inventory: '+type(error).__name__)
+    if errors:(destination/'collection-errors.json').write_text(json.dumps(errors))
+
+def observations(base,full=False):
+    names=('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','cleanup.complete','cleanup.finalized')
+    report={name:(base/name).read_text() for name in names if (base/name).exists()}
+    if not full and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-10:])
+    if full and (base/'public').exists():
+        report['final_test_logs']={path.name:path.read_text(errors='replace') for path in (base/'public').iterdir() if path.is_file() and path.suffix in ('.log','.json')}
+    if (base/'cleanup.complete').exists() or (base/'watchdog-error.json').exists():return report
+    try:
+        manifest,_=inventory(base)
+        report['containers']=call(['docker','stats','--no-stream','--format','{{json .}}',*manifest['container_ids']]).decode() if manifest['container_ids'] else ''
+        report['parent_cgroup']=verify_limits(base)
+    except Exception as error:report['live_observation_error']=type(error).__name__
+    return report
 
 def cleanup(base):
     # Inspect and validate immutable IDs before deleting any object. No broad prune.

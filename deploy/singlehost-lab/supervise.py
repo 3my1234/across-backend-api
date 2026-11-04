@@ -1,7 +1,7 @@
 """Reviewed single-host job. No live execution without explicit topology approval."""
 import argparse,base64,json,os,re,signal,subprocess,sys,time
 from pathlib import Path
-from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,verify_host_bridge,active_imports,cleanup,call
+from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,verify_host_bridge,active_imports,capture_evidence,observations,cleanup,call
 
 def remove_key(base):
     path=base/'installed-key.json'
@@ -112,7 +112,7 @@ def job(base):
             monitor.terminate()
             try:monitor.wait(timeout=10)
             except subprocess.TimeoutExpired:monitor.kill();monitor.wait(timeout=5)
-        cleanup(base)
+        capture_evidence(base);cleanup(base)
 
 def access(base,command):
     approval=validate_approval(base)
@@ -126,13 +126,17 @@ def access(base,command):
             if time.monotonic()>deadline:raise RuntimeError('job cleanup not confirmed')
             time.sleep(1)
         print('Single-host cleanup confirmed');return
+    if command=='status':
+        lease=base/'local.lease'
+        print(json.dumps(dict(run=base.name,topology='singlehost',age_seconds=time.time()-lease.stat().st_mtime if lease.exists() else 999,
+            ready=(base/'setup.ready').exists(),closed=(base/'cleanup.complete').exists(),guard_error=(base/'watchdog-error.json').exists())));return
+    if command in ('observations','observations-full'):
+        print(json.dumps(observations(base,full=command=='observations-full')));return
     guard_ready(base)
     if not (base/'setup.ready').exists():raise RuntimeError('setup incomplete')
     metadata=json.loads((base/'supervisor.json').read_text())
     if time.time()>=metadata['deadline_unix']:raise RuntimeError('hard deadline reached')
     m,_=inventory(base)
-    if command=='status':
-        print(json.dumps(dict(run=base.name,topology='singlehost',age_seconds=time.time()-(base/'local.lease').stat().st_mtime,ready=True)));return
     if command=='activate':
         if (base/'trial-started').exists():raise ValueError('trial already activated')
         with (base/'trial-started').open('x') as out:out.write(str(time.time()))
@@ -173,12 +177,6 @@ def access(base,command):
         temporary=path.with_suffix('.incoming')
         with temporary.open('xb') as out:out.write(raw)
         temporary.replace(path);return
-    if command in ('observations','observations-full'):
-        report={name:(base/name).read_text() for name in ('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json') if (base/name).exists()}
-        if command=='observations' and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-10:])
-        report['parent_cgroup']=verify_limits(base)
-        report['containers']=call(['docker','stats','--no-stream','--format','{{json .}}',*m['container_ids']]).decode()
-        print(json.dumps(report));return
     raise ValueError('command denied')
 
 def main():
@@ -187,7 +185,7 @@ def main():
     elif a.action=='cleanup':
         validate_approval(base)
         try:
-            if (base/'compose.runtime.json').exists():cleanup(base)
+            if (base/'compose.runtime.json').exists():capture_evidence(base);cleanup(base)
         finally:remove_key(base)
         (base/'cleanup.finalized').write_text(str(time.time()))
     else:access(base,os.environ.get('SSH_ORIGINAL_COMMAND',''))

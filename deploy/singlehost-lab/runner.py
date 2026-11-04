@@ -69,7 +69,7 @@ class SingleHostRunner(Runner):
         self.children_thread=threading.Thread(target=check_local_guard,daemon=True);self.children_thread.start()
 
     def validate_status(self,status):
-        if status.get('run')!=self.approval['run'] or status.get('topology')!='singlehost' or status.get('ready') is not True:raise ValueError('wrong single-host trial status')
+        if status.get('run')!=self.approval['run'] or status.get('topology')!='singlehost' or status.get('ready') is not True or status.get('closed') or status.get('guard_error'):raise ValueError('wrong/closed single-host trial status')
         age=status.get('age_seconds')
         if type(age) not in (float,int) or not 0<=age<=5:raise ValueError('local watchdog not fresh')
 
