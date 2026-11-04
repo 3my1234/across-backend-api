@@ -26,6 +26,7 @@ function render(input) {
   // The host can reach its own private bridge. SSH forwards ONLY this exact
   // gateway address; no Docker published-port/NAT or host relay is needed.
   delete doc.services.gateway.ports;
+  if (input.verifier_override===true) doc.services.verifier.volumes.push(base+'/verifier.bin:/app/lab:ro');
   // Docker may assign a stopped static endpoint's address to a dynamic service
   // started first. Keep all dynamic allocations outside the reserved low addresses.
   doc.networks.lab.ipam.config[0].ip_range='172.29.248.128/25';

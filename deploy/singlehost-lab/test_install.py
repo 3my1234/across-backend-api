@@ -1,8 +1,15 @@
 import io,tarfile,tempfile,unittest
 from pathlib import Path
 from install_host import extract,key_line
+from runtime import active_imports
 
 class InstallSafetyTests(unittest.TestCase):
+    def test_existing_import_is_detected_without_mistaking_container_logs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for pid,args in {11:b'/usr/bin/docker\0load\0--input\0archive.gz\0',12:b'docker\0image\0load\0',13:b'docker\0logs\0load\0'}.items():
+                path=root/str(pid);path.mkdir();(path/'cmdline').write_bytes(args)
+            self.assertEqual(sorted(active_imports(root)),[11,12])
     def test_archive_traversal_and_links_rejected(self):
         for name,kind in (('../escape',tarfile.REGTYPE),('/absolute',tarfile.REGTYPE),('link',tarfile.SYMTYPE)):
             with self.subTest(name=name),tempfile.TemporaryDirectory() as folder:

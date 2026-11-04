@@ -1,7 +1,7 @@
 """Reviewed single-host job. No live execution without explicit topology approval."""
 import argparse,base64,json,os,re,signal,subprocess,sys,time
 from pathlib import Path
-from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,verify_host_bridge,cleanup,call
+from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,verify_host_bridge,active_imports,cleanup,call
 
 def remove_key(base):
     path=base/'installed-key.json'
@@ -30,6 +30,7 @@ def validate_approval(base):
     if approval['run']!=base.name:raise ValueError('approval nonce mismatch')
     import hashlib
     if hashlib.sha256((base/'compose.json').read_bytes()).hexdigest()!=approval.get('compose_sha256'):raise ValueError('reviewed Compose changed')
+    if hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()!=approval['verifier_sha256']:raise ValueError('reviewed verifier binary changed')
     if not re.fullmatch('[a-f0-9]{40}',approval.get('source_commit','')):raise ValueError('immutable source required')
     return approval
 
@@ -40,6 +41,11 @@ def guard_ready(base):
 def write_json(path,data):
     tmp=path.with_suffix('.next');tmp.write_text(json.dumps(data));tmp.chmod(0o600);tmp.replace(path)
 
+def require_live_fixture(doc):
+    for name in ('seed','exporter'):
+        env=doc.get('services',{}).get(name,{}).get('environment',{})
+        if env.get('LAB_ACTOR_PAIRS')!='500' or env.get('LAB_SCENARIO')!='large-busy':raise ValueError('live qualification requires unchanged500-pair large-busy fixtures')
+
 def check_machine():
     # Refuse accidental installation on the main VPS or an unrelated Linux host.
     rows=json.loads(call(['ip','-j','address','show']))
@@ -49,6 +55,7 @@ def check_machine():
 def job(base):
     started=time.time()
     approval=validate_approval(base);check_machine()
+    require_live_fixture(json.loads((base/'compose.json').read_text()))
     if (base/'supervisor.json').exists() or (base/'cleanup.complete').exists():raise ValueError('refuse duplicate/closed execution')
     from stage_host import validate_networks
     from image_identity import identities,resolve
@@ -56,6 +63,7 @@ def job(base):
     if call(['docker','info','--format','{{.CgroupDriver}}/{{.CgroupVersion}}']).decode().strip()!='systemd/2':raise ValueError('systemd cgroup v2 required')
     stale=call(['docker','ps','-aq','--filter','label=atlxpres.cohost.run']).decode().split()
     if stale:raise ValueError('existing test containers remain; cleanup first')
+    if active_imports():raise ValueError('existing Docker import CLI active; do not start another')
     production=call(['docker','ps','-q','--no-trunc']).decode().split()
     if not production:raise ValueError('production inventory empty')
     networks=call(['docker','network','ls','-q']).decode().split()
@@ -64,8 +72,6 @@ def job(base):
     subprocess.run(['python3',str(Path(__file__).parents[1]/'cohost-lab/baseline.py'),str(base/'baseline.json')],check=True,timeout=420)
     doc=json.loads((base/'compose.json').read_text())
     required={service['image'] for service in doc['services'].values()}
-    aliases=identities(base/'images.tar.gz',approval['image_archive_sha256'],required)
-    resolved={image:resolve(aliases[image]) for image in sorted(required)}
     # Inventory needs the reviewed runtime document even while it contains zero services.
     write_json(base/'compose.runtime.json',doc)
     write_json(base/'supervisor.json',dict(run=base.name,production_container_ids=production,deadline_unix=started+7200,phase='image-preparation'))
@@ -75,6 +81,10 @@ def job(base):
         while not (base/'local.lease').exists():
             if monitor.poll() is not None or time.monotonic()>deadline:raise RuntimeError('local watchdog failed to start')
             time.sleep(.2)
+        guard_ready(base)
+        # Observe the archive scan itself, not just the later Docker import.
+        aliases=identities(base/'images.tar.gz',approval['image_archive_sha256'],required)
+        resolved={image:resolve(aliases[image]) for image in sorted(required)}
         guard_ready(base)
         if any(value is None for value in resolved.values()):
             with (base/'image-import.log').open('w') as log:load_archive(base/'images.tar.gz',log,lambda:guard_ready(base))

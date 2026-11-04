@@ -6,9 +6,31 @@ from trial_runner import Runner,execute_sequence
 from trial_policy import STAGES,client_hashes
 
 class SingleHostRunner(Runner):
+    def progress(self,label,operation):
+        began=time.monotonic();done=threading.Event()
+        def report():
+            while not done.wait(30):print(json.dumps(dict(phase=label,elapsed_seconds=int(time.monotonic()-began),state='in progress; not a passing result')),flush=True)
+        heartbeat=threading.Thread(target=report,daemon=True);heartbeat.start()
+        print(json.dumps(dict(phase=label,state='started')),flush=True)
+        try:return operation()
+        finally:done.set();heartbeat.join(timeout=1)
+
+    def measure(self,stage):
+        self.progress('stage '+stage[0]+' (planned '+str(stage[2])+' sessions)',lambda:super(SingleHostRunner,self).measure(stage))
+        summary=json.loads((self.output/stage[0]/'summary.json').read_text());metrics=summary['metrics']
+        values=lambda name:metrics.get(name,{}).get('values',{})
+        print(json.dumps(dict(stage=stage[0],all_original_stage_gates_passed=True,planned_sessions=stage[2],
+            observed_peak_vus=values('vus').get('max'),session_starts=values('session_starts').get('count'),
+            k6_http_requests_per_second=values('http_reqs').get('rate'),unexpected_error_rate=values('unexpected_failure').get('rate'),
+            successful_latency_ms=values('successful_latency'))),flush=True)
+
+    def notifications(self):
+        self.progress('durable notification drain and delayed receipt verification',lambda:super(SingleHostRunner,self).notifications())
+
     def prepare(self):
         for name in ('seed','exporter','verifier','lifecycle','queue-check'):self.service(name)
-        self.lab('seed','seed',self.output/'seed.log')
+        self.progress('synthetic500-pair seed; no application load yet',lambda:self.lab('seed','seed',self.output/'seed.log'))
+        print('Seed completed; preparing private session fixtures (tokens withheld).',flush=True)
         self.lab('prepare-sessions')
         self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
         self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
@@ -28,7 +50,9 @@ class SingleHostRunner(Runner):
                 if time.monotonic()>deadline:raise
                 time.sleep(1)
         self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
-        self.lab('queue-check','queue-check',self.output/'queue-check.jsonl')
+        from queue_probe import exercise as queue_probe
+        queue_probe(self.sql,lambda:self.lab('queue-check','queue-check',self.output/'queue-check.jsonl'))
+        print('API readiness, lifecycle and isolated queue-recovery preflight passed. Starting staged application traffic.',flush=True)
 
     def start(self):
         status=json.loads(self.ssh('main','status',timeout=15))
@@ -82,7 +106,8 @@ def main():
     root=Path(__file__).resolve().parents[2]
     commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
     if commit!=approval['source_commit'] or approval.get('client_hashes')!=client_hashes(root):raise ValueError('approved source/workload mismatch')
-    subprocess.run(['git','diff','--exit-code','13d316c62ce8bdd35c1c2fe72bf3d4d357581914','HEAD','--','internal/','migrations/','cmd/api/','cmd/capacity-lab/'],check=True)
+    from provenance import verify
+    verify(root)
     subprocess.run(['python3',str(root/'deploy/cohost-lab/check_generator.py'),str(root/'deploy/cohost-lab/proofs/generator-40866958782')],check=True)
     if not a.ssh_config or not a.ssh_config.is_file():raise ValueError('pinned restricted SSH configuration required')
     if int(next(x.split()[1] for x in Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:')))*1024<6*2**30:raise ValueError('generator memory reserve insufficient')

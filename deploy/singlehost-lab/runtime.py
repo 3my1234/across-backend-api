@@ -8,6 +8,15 @@ from safety import validate_inventory
 LABEL='atlxpres.cohost.run'
 ROOT=Path('/root/atlxpres-singlehost')
 
+def active_imports(proc=Path('/proc')):
+    found=[]
+    for path in proc.glob('[0-9]*/cmdline'):
+        try:
+            args=path.read_bytes().split(b'\0')
+            if args and args[0].split(b'/')[-1]==b'docker' and (args[1:2]==[b'load'] or args[1:3]==[b'image',b'load']):found.append(int(path.parent.name))
+        except (OSError,ValueError):pass
+    return found
+
 def call(args,timeout=30,**kwargs):
     return subprocess.check_output(args,timeout=timeout,**kwargs)
 
@@ -58,6 +67,12 @@ def verify_limits(base):
         service=row['Config']['Labels']['com.docker.compose.service'];expected=identity(manifest['run'])+('-db.slice' if service=='postgres' else '-app.slice')
         if row['HostConfig']['CgroupParent']!=expected:raise ValueError('wrong parent cgroup')
         if row['HostConfig']['Memory']<=0 or row['HostConfig']['NanoCpus']<=0:raise ValueError('missing container resource limits')
+        pid=row['State'].get('Pid',0)
+        if pid:
+            records=(Path('/proc')/str(pid)/'cgroup').read_text().splitlines()
+            unified=[line[3:] for line in records if line.startswith('0::')]
+            if len(unified)!=1 or expected not in Path(unified[0]).parts or identity(manifest['run'])+'.slice' not in Path(unified[0]).parts:
+                raise ValueError('running container is outside the effective parent slice')
     result={}
     for name,(cpu,memory) in slices(manifest['run']).items():
         # systemd slice nesting follows hyphens in the slice name.

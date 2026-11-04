@@ -4,17 +4,18 @@ from pathlib import Path,PurePosixPath
 
 def extract(package,base):
     total=0
-    with tarfile.open(package,'r') as archive:
+    with tarfile.open(package,'r:*') as archive:
         members=archive.getmembers()
         if len(members)>150:raise ValueError('package file count exceeded')
         for row in members:
             path=PurePosixPath(row.name)
             if path.is_absolute() or '..' in path.parts or '\\' in row.name or ':' in row.name or row.issym() or row.islnk() or not row.isfile():raise ValueError('only explicit regular relative files allowed')
             total+=row.size
-            if total>8*2**20 or row.size>2*2**20:raise ValueError('small-package bounds exceeded')
+            limit=32*2**20 if row.name=='verifier.bin' else 2*2**20
+            if total>40*2**20 or row.size>limit:raise ValueError('reviewed package bounds exceeded')
             target=base/path;target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             with target.open('xb') as out:out.write(archive.extractfile(row).read())
-            target.chmod(0o600)
+            target.chmod(0o500 if row.name=='verifier.bin' else 0o600)
 
 def key_line(base,public,expiry):
     parts=public.split()
@@ -30,7 +31,7 @@ def main():
     if os.geteuid()!=0 or not re.fullmatch('cohost-[a-f0-9]{16}',a.run):raise ValueError('Linux root and reviewed nonce required')
     rows=json.loads(subprocess.check_output(['ip','-j','address','show'],text=True))
     if not any(addr['local']=='79.143.176.173' for row in rows for addr in row.get('addr_info',[])):raise ValueError('database VPS only')
-    if a.package!=Path('/root')/(a.run+'-singlehost.tar') or a.package.is_symlink():raise ValueError('fixed uploaded package required')
+    if a.package!=Path('/root')/(a.run+'-singlehost.tar.gz') or a.package.is_symlink():raise ValueError('fixed uploaded package required')
     if hashlib.sha256(a.package.read_bytes()).hexdigest()!=a.sha256:raise ValueError('uploaded package checksum mismatch')
     base=Path('/root/atlxpres-singlehost')/a.run
     base.mkdir(parents=True,mode=0o700,exist_ok=False)

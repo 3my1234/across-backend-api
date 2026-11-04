@@ -13,103 +13,148 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Post-run completeness check, distinct from in-workload delivery latency.
-// Every generated marketplace message must be readable by its intended peer.
-// This does not assert device display, phone push or Town Hall fanout.
+type recipientRecord struct{ id, body, conversation, user, role string }
+type recipientShard struct {
+	user, conversation, role string
+	expected                 map[string]string
+}
+
+// Every generated marketplace message is checked. The former10,000-message
+// global admission bound is now the in-memory shard bound, not a sample size.
+// A1,000,000-row total bound and the unchanged12-minute context remain fail-closed.
 func verifyRecipientVisibility(ctx context.Context, db *pgxpool.Pool, prefix string, out io.Writer) error {
-	type recipient struct {
-		user, conversation, role string
-		expected                 map[string]string
-	}
-	groups := map[string]*recipient{}
 	rows, err := db.Query(ctx, `SELECT m.id::text,m.body,a.conversation::text,
  CASE WHEN m.sender_type='buyer' THEN a.provider_user ELSE a.buyer END::text,
  CASE WHEN m.sender_type='buyer' THEN 'provider' ELSE 'buyer' END
- FROM provider_conversation_messages m JOIN capacity_lab_actors a ON a.conversation=m.conversation_id WHERE m.body LIKE $1`, prefix)
+ FROM provider_conversation_messages m JOIN capacity_lab_actors a ON a.conversation=m.conversation_id
+ WHERE m.body LIKE $1 ORDER BY 3,4,m.id`, prefix)
 	if err != nil {
 		return err
 	}
-	total := 0
-	for rows.Next() {
-		var id, body, conversation, user, role string
-		if err = rows.Scan(&id, &body, &conversation, &user, &role); err != nil {
-			rows.Close()
-			return err
+	defer rows.Close()
+	next := func() (recipientRecord, bool, error) {
+		var r recipientRecord
+		if !rows.Next() {
+			return r, false, rows.Err()
 		}
-		key := user + ":" + conversation
-		if groups[key] == nil {
-			groups[key] = &recipient{user, conversation, role, map[string]string{}}
-		}
-		groups[key].expected[id] = body
-		total++
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	if total == 0 || total > 10000 {
-		return fmt.Errorf("post-run recipient check requires 1..10000 messages; larger runs need reviewed sharded verification")
+		err := rows.Scan(&r.id, &r.body, &r.conversation, &r.user, &r.role)
+		return r, err == nil, err
 	}
 	c := client()
 	defer c.CloseIdleConnections()
-	observed, pages := 0, 0
-	for _, group := range groups {
-		token, _, err := auth.Sign(group.user, secret, time.Hour)
+	return verifyRecipientStream(ctx, next, c, origin, out)
+}
+
+func verifyRecipientStream(ctx context.Context, next func() (recipientRecord, bool, error), c *http.Client, baseOrigin string, out io.Writer) error {
+	var current *recipientShard
+	var previous recipientRecord
+	hasPrevious := false
+	total, observed, pages, shards := 0, 0, 0, 0
+	flush := func() error {
+		if current == nil || len(current.expected) == 0 {
+			return nil
+		}
+		count, read, err := readRecipientShard(ctx, c, baseOrigin, current)
 		if err != nil {
 			return err
 		}
-		base := "/api/v1/marketplace/conversations/"
-		if group.role == "provider" {
-			base = "/api/v1/providers/me/conversations/"
+		observed += count
+		pages += read
+		shards++
+		current.expected = map[string]string{}
+		return nil
+	}
+	for {
+		row, ok, err := next()
+		if err != nil {
+			return err
 		}
-		cursor := ""
-		seen := map[string]bool{}
-		for page := 0; page < 1000; page++ {
-			req, err := http.NewRequestWithContext(ctx, "GET", origin+base+group.conversation+"/messages?limit=100&mark_read=false&cursor="+url.QueryEscape(cursor), nil)
-			if err != nil {
+		if !ok {
+			break
+		}
+		if total >= 1000000 {
+			return fmt.Errorf("recipient inventory exceeds1,000,000-message reviewed bound")
+		}
+		// SQL orders IDs within recipient/conversation; this also catches a
+		// duplicate exactly at a shard boundary without retaining a global map.
+		if hasPrevious && previous.user == row.user && previous.conversation == row.conversation && previous.id == row.id {
+			return fmt.Errorf("duplicate recipient inventory ID across shard boundary")
+		}
+		previous, hasPrevious = row, true
+		if current == nil || current.user != row.user || current.conversation != row.conversation || len(current.expected) >= 10000 {
+			if err = flush(); err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+token)
-			res, err := c.Do(req)
-			if err != nil {
-				return fmt.Errorf("recipient history transport failed")
-			}
-			var data struct {
-				Items []struct {
-					ID   string `json:"id"`
-					Body string `json:"body"`
-				} `json:"items"`
-				Next string `json:"next_cursor"`
-			}
-			err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&data)
-			res.Body.Close()
-			pages++
-			if res.StatusCode != 200 || err != nil {
-				return fmt.Errorf("recipient history status=%d or invalid JSON", res.StatusCode)
-			}
-			for _, message := range data.Items {
-				if body, ok := group.expected[message.ID]; ok {
-					if message.Body != body {
-						return fmt.Errorf("recipient message body differs from stored acknowledgement")
-					}
-					if !seen[message.ID] {
-						seen[message.ID] = true
-						observed++
-					}
-				}
-			}
-			if len(seen) == len(group.expected) {
-				break
-			}
-			if data.Next == "" || data.Next == cursor {
-				return fmt.Errorf("recipient history is missing confirmed messages")
-			}
-			cursor = data.Next
+			current = &recipientShard{row.user, row.conversation, row.role, map[string]string{}}
 		}
-		if len(seen) != len(group.expected) {
-			return fmt.Errorf("recipient paging bound reached before completeness")
+		if _, duplicate := current.expected[row.id]; duplicate {
+			return fmt.Errorf("duplicate recipient inventory ID")
 		}
+		current.expected[row.id] = row.body
+		total++
 	}
-	return json.NewEncoder(out).Encode(map[string]any{"post_run_recipient_visibility_passed": observed == total, "expected_marketplace_messages": total, "visible_to_intended_peer": observed, "history_pages": pages, "in_workload_latency_check": false, "device_or_push_delivery_tested": false})
+	if total == 0 {
+		return fmt.Errorf("recipient inventory is empty")
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	if observed != total {
+		return fmt.Errorf("recipient visibility count mismatch")
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"post_run_recipient_visibility_passed": true, "expected_marketplace_messages": total, "visible_to_intended_peer": observed, "history_pages": pages, "recipient_shards": shards, "max_messages_per_shard": 10000, "in_workload_latency_check": false, "device_or_push_delivery_tested": false})
+}
+
+func readRecipientShard(ctx context.Context, c *http.Client, baseOrigin string, group *recipientShard) (int, int, error) {
+	token, _, err := auth.Sign(group.user, secret, time.Hour)
+	if err != nil {
+		return 0, 0, err
+	}
+	base := "/api/v1/marketplace/conversations/"
+	if group.role == "provider" {
+		base = "/api/v1/providers/me/conversations/"
+	}
+	cursor := ""
+	seen := map[string]bool{}
+	pages := 0
+	for page := 0; page < 1000; page++ {
+		req, err := http.NewRequestWithContext(ctx, "GET", baseOrigin+base+group.conversation+"/messages?limit=100&mark_read=false&cursor="+url.QueryEscape(cursor), nil)
+		if err != nil {
+			return 0, pages, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := c.Do(req)
+		if err != nil {
+			return 0, pages, fmt.Errorf("recipient history transport failed")
+		}
+		var data struct {
+			Items []struct {
+				ID   string `json:"id"`
+				Body string `json:"body"`
+			} `json:"items"`
+			Next string `json:"next_cursor"`
+		}
+		err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&data)
+		res.Body.Close()
+		pages++
+		if res.StatusCode != 200 || err != nil {
+			return 0, pages, fmt.Errorf("recipient history status=%d or invalid JSON", res.StatusCode)
+		}
+		for _, message := range data.Items {
+			if body, ok := group.expected[message.ID]; ok {
+				if message.Body != body {
+					return 0, pages, fmt.Errorf("recipient message body differs from stored acknowledgement")
+				}
+				seen[message.ID] = true
+			}
+		}
+		if len(seen) == len(group.expected) {
+			return len(seen), pages, nil
+		}
+		if data.Next == "" || data.Next == cursor {
+			return 0, pages, fmt.Errorf("recipient history is missing confirmed messages")
+		}
+		cursor = data.Next
+	}
+	return 0, pages, fmt.Errorf("recipient paging bound reached before completeness")
 }

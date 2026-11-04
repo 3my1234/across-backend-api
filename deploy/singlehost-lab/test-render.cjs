@@ -25,4 +25,7 @@ assert(doc.services.api1.environment.DATABASE_URL.includes('@postgres:5432/capac
 assert(!JSON.stringify(doc).includes('UNIX-CONNECT'));
 assert.throws(()=>render({run:'production',images}));
 assert.throws(()=>render({run,images:{...images,app:'app:latest'}}));
+const overridden=render({run,images,verifier_override:true});
+assert(overridden.services.verifier.volumes.includes('/root/atlxpres-singlehost/'+run+'/verifier.bin:/app/lab:ro'));
+for(const name of Object.keys(doc.services)) if(name!=='verifier') assert.deepEqual(overridden.services[name],doc.services[name]);
 console.log('single-host renderer isolation/caps/identity checks passed');

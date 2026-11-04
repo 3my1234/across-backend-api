@@ -12,7 +12,7 @@ def exercise(root,base,output,sentinel):
         spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=2,application_memory=2684354560,
         database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
-        compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64)
+        compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64,verifier_sha256=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest())
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
     (base/'supervisor.json').write_text(json.dumps(dict(run=run,production_container_ids=[sentinel],deadline_unix=time.time()+7200)))
     (base/'setup.ready').touch()
@@ -33,6 +33,17 @@ def exercise(root,base,output,sentinel):
         while not (base/'local.lease').exists():
             if guard.poll() is not None or time.monotonic()>deadline:raise RuntimeError('real local monitor did not start')
             time.sleep(.1)
+        # Exercise the native archive loader while the NEW independent guard is
+        # actually inspecting running Docker containers. No Python stdin pipe.
+        m,rows=inventory(base)
+        images=sorted({row['Image'] for row in rows})
+        archive=base/'import-replay.tar'
+        subprocess.run(['docker','save','--output',str(archive),*images],check=True,timeout=60)
+        subprocess.run(['gzip','-1',str(archive)],check=True,timeout=60)
+        from import_process import load_archive
+        from supervise import guard_ready
+        with (output/'native-import-replay.log').open('w') as log:load_archive(archive.with_suffix('.tar.gz'),log,lambda:guard_ready(base))
+        result['native_import_with_running_local_guard_passed']=True
         for name in ('host','client'):subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(base/name)],check=True)
         from install_host import key_line
         # Point forced-command at the reviewed source; the live package uses an

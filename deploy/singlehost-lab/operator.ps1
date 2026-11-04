@@ -12,8 +12,10 @@ $run=$a.run
 if ($run -notmatch '^cohost-[a-f0-9]{16}$' -or $a.authorized -ne $false) { throw 'Fresh unauthorized review required' }
 $head=& git -C $source rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $head -ne $a.source_commit) { throw 'Source changed since review' }
-$proof=& gh run view "$($a.rehearsal_run)" --repo $repo --json status,conclusion,headSha | ConvertFrom-Json
+$proof=& gh run view "$($a.rehearsal_run)" --repo $repo --json status,conclusion,headSha,jobs | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $proof.status -ne 'completed' -or $proof.conclusion -ne 'success' -or $proof.headSha -ne $head) { throw 'Exact-source disposable rehearsal has not passed' }
+$fullReplay=@($proof.jobs | Where-Object { $_.name -eq 'rehearsal' -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+if ($fullReplay.Count -ne 1) { throw 'A network-only or policy-only result is not a full rehearsal' }
 if ($a.execution_ref -ne "experiment/approved-singlehost-$($head.Substring(0,7))") { throw 'Frozen execution reference mismatch' }
 $published=& gh api "repos/$repo/git/ref/heads/$($a.execution_ref)" --jq '.object.sha'
 if ($LASTEXITCODE -ne 0 -or $published -ne $head) { throw 'Frozen execution source is not published' }
@@ -44,7 +46,7 @@ $known=(& ssh-keygen -F '79.143.176.173' -f (Join-Path $env:USERPROFILE '.ssh/kn
 if ($LASTEXITCODE -ne 0 -or -not $known) { throw 'Previously trusted database host key missing' }
 $knownPath=Join-Path $private 'known_hosts'
 [IO.File]::WriteAllText($knownPath,$known+"`n",(New-Object Text.UTF8Encoding($false)))
-$remotePackage="/root/$run-singlehost.tar"
+$remotePackage="/root/$run-singlehost.tar.gz"
 Write-Host 'Uploading small reviewed tools only. Existing image archive is reused. Enter the database-host password locally.'
 Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"

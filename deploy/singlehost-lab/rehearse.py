@@ -12,19 +12,56 @@ def wait_ready(base):
         time.sleep(1)
     raise RuntimeError('test PostgreSQL not ready')
 
+def small_queue_preflight(root,images,output):
+    """Catch queue fixture/lifecycle errors before the expensive500-pair seed."""
+    run='cohost-'+uuid.uuid4().hex[:16];base=ROOT/run;base.mkdir(parents=True,mode=0o700)
+    (base/'render.json').write_text(json.dumps(dict(run=run,images=images)))
+    doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
+    doc['services']={key:value for key,value in doc['services'].items() if key in ('postgres','redis','seed','exporter','queue-check')}
+    for service in doc['services'].values():
+        env=service.get('environment',{})
+        if 'LAB_SCENARIO' in env:env['LAB_SCENARIO']='busy'
+        if 'LAB_ACTOR_PAIRS' in env:env['LAB_ACTOR_PAIRS']='10'
+    (base/'exchange').mkdir();(base/'compose.runtime.json').write_text(json.dumps(doc))
+    try:
+        install_limits(run);compose(base,'create','--no-build','--pull','never')
+        compose(base,'start',*doc['services'])
+        wait_ready(base);verify_host_bridge(base)
+        exec_lab(base,'seed','seed',output/'small-seed.log',timeout=120)
+        exec_lab(base,'exporter','prepare-sessions')
+        from queue_probe import exercise as queue_probe
+        queue_probe(lambda text:sql(base,text),lambda:exec_lab(base,'queue-check','queue-check',output/'small-queue-check.jsonl'))
+        print('Small real queue fixture/retry/recovery/cleanup preflight passed',flush=True)
+    finally:cleanup(base)
+
 def main():
     if os.environ.get('GITHUB_ACTIONS')!='true' or os.geteuid()!=0:raise ValueError('disposable CI root only')
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');args=parser.parse_args()
+    pairs=10 if args.foundation else 500
     root=Path(__file__).resolve().parents[2]
-    subprocess.run(['git','-c','safe.directory='+str(root),'diff','--exit-code','13d316c62ce8bdd35c1c2fe72bf3d4d357581914','HEAD','--','internal/','migrations/','cmd/api/','cmd/capacity-lab/'],check=True)
+    from provenance import verify
+    verify(root)
+    from check_seed import check
+    retained=check()
     run='cohost-'+uuid.uuid4().hex[:16];base=ROOT/run;base.mkdir(parents=True,mode=0o700)
     output=root/'singlehost-rehearsal-evidence';output.mkdir(exist_ok=False)
-    result=dict(run=run,topology='singlehost',actor_pairs=500,scenario='large-busy',database_cpu=1,passed=False,capacity_qualified=False)
+    result=dict(run=run,topology='singlehost',actor_pairs=pairs,scenario='large-busy',database_cpu=1,passed=False,capacity_qualified=False,retained_full_seed=retained)
     sentinel=None;created=False
     try:
         tags=dict(app='atlxpres-singlehost-rehearsal:local',postgres='postgres:16-alpine',redis='redis:7.2-alpine',gateway='haproxy:3.0-alpine')
         images={k:call(['docker','image','inspect','--format','{{.Id}}',tag]).decode().strip() for k,tag in tags.items()}
-        (base/'render.json').write_text(json.dumps(dict(run=run,images=images)))
+        if not args.foundation:
+            small_queue_preflight(root,images,output)
+            result['small_queue_preflight_passed']=True
+        (base/'render.json').write_text(json.dumps(dict(run=run,images=images,verifier_override=True)))
+        with (base/'verifier.bin').open('wb') as binary:subprocess.run(['docker','run','--rm','--network','none','--entrypoint','/bin/cat',images['app'],'/app/lab'],stdout=binary,check=True,timeout=30)
+        (base/'verifier.bin').chmod(0o500)
+        result['verifier_sha256']=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
+        if args.foundation:
+            for service in doc['services'].values():
+                if 'LAB_ACTOR_PAIRS' in service.get('environment',{}):service['environment']['LAB_ACTOR_PAIRS']='10'
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
         (base/'compose.json').write_text(json.dumps(doc,indent=2))
         (output/'compose.json').write_text(json.dumps(doc,indent=2))
@@ -39,11 +76,11 @@ def main():
         compose(base,'start','postgres','redis','seed','exporter','verifier','lifecycle','queue-check')
         wait_ready(base)
         result.update(verify_host_bridge(base))
-        print('Actual TCP PostgreSQL ready; starting unchanged500-pair seed',flush=True)
+        print('Actual TCP PostgreSQL ready; starting '+str(pairs)+'-pair disposable rehearsal seed',flush=True)
         started=time.monotonic();exec_lab(base,'seed','seed',output/'seed.log',timeout=900)
         result['seed_seconds']=time.monotonic()-started
         counts=json.loads(sql(base,"SELECT json_build_object('actors',(SELECT count(*) FROM capacity_lab_actors),'migration108',(SELECT count(*) FROM schema_migrations WHERE name='108_push_receipt_claims.sql'),'identity',(SELECT marker FROM capacity_lab_identity))"))
-        if counts!={'actors':500,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
+        if counts!={'actors':pairs,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
         print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
         # This command emits bearer fixtures. Capture privately, never in public evidence.
@@ -63,7 +100,8 @@ def main():
                 if time.monotonic()>deadline:raise
                 time.sleep(1)
         exec_lab(base,'lifecycle','lifecycle',output/'lifecycle.jsonl')
-        exec_lab(base,'queue-check','queue-check',output/'queue-check.jsonl')
+        from queue_probe import exercise as queue_probe
+        queue_probe(lambda text:sql(base,text),lambda:exec_lab(base,'queue-check','queue-check',output/'queue-check.jsonl'))
         raw=exec_lab(base,'exporter','export');fixtures=json.loads(raw)
         if fixtures.get('origin')!='http://gateway:8080' or fixtures.get('marker')!='disposable-compose-only':raise ValueError('fixture origin/identity mismatch')
         exchange=base/'exchange';(exchange/'fixtures.json').write_bytes(raw)

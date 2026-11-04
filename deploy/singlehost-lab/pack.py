@@ -16,8 +16,8 @@ def main():
     from policy import validate
     validate(approval)
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
-    package=private/(review.name+'-singlehost.tar')
-    with tarfile.open(package,'w') as archive:
+    package=private/(review.name+'-singlehost.tar.gz')
+    with tarfile.open(package,'w:gz',compresslevel=1) as archive:
         for file in sorted(review.rglob('*')):
             if file.is_file() and file.name not in ('render.json','review-hashes.json'):
                 archive.add(file,arcname=file.relative_to(review).as_posix(),recursive=False)

@@ -1,5 +1,5 @@
 """Create an UNAUTHORIZED review directory; no SSH, keys or live resources."""
-import argparse,hashlib,json,shutil,subprocess,sys,uuid
+import argparse,hashlib,json,os,shutil,subprocess,sys,uuid
 from pathlib import Path
 from policy import STAGES
 
@@ -11,14 +11,19 @@ def main():
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
-    subprocess.run(['git','diff','--exit-code','HEAD','--','deploy/singlehost-lab','deploy/cohost-lab','.github/workflows/singlehost-rehearsal.yml'],cwd=root,check=True)
-    subprocess.run(['git','diff','--exit-code',APP_SOURCE,'HEAD','--','internal/','migrations/','cmd/api/','cmd/capacity-lab/'],cwd=root,check=True)
+    scope=['deploy/singlehost-lab','deploy/cohost-lab','.github/workflows/singlehost-rehearsal.yml','internal/','migrations/','cmd/api/','cmd/capacity-lab/']
+    subprocess.run(['git','diff','--exit-code','HEAD','--',*scope],cwd=root,check=True)
+    if subprocess.check_output(['git','ls-files','--others','--exclude-standard','--',*scope],cwd=root,text=True).strip():raise ValueError('uncommitted execution source files present')
+    from provenance import verify
+    verify(root)
     metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
     if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
     run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
-    input_file=review/'render.json';input_file.write_text(json.dumps(dict(run=run,images=metadata['images'])))
+    input_file=review/'render.json';input_file.write_text(json.dumps(dict(run=run,images=metadata['images'],verifier_override=True)))
     compose=subprocess.check_output(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(input_file)])
     (review/'compose.json').write_bytes(compose)
+    build_env={**os.environ,'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'}
+    subprocess.run(['go','build','-trimpath','-ldflags=-s -w','-o',str(review/'verifier.bin'),'./cmd/capacity-lab'],cwd=root,env=build_env,check=True)
     sys.path.insert(0,str(root/'deploy/cohost-lab'))
     from trial_policy import client_hashes
     approval=dict(run=run,topology='singlehost-database-vps',host='79.143.176.173',authorized=False,approved_unix=0,
@@ -26,7 +31,7 @@ def main():
         database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
-        client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run)
+        client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest())
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')

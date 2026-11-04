@@ -44,20 +44,22 @@ jobs:
           NODE_PATH=/tmp/singlehost-tools/node_modules node deploy/singlehost-lab/test-render.cjs
           python3 -m py_compile deploy/singlehost-lab/*.py
           python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
-          git diff --exit-code 13d316c62ce8bdd35c1c2fe72bf3d4d357581914 HEAD -- internal/ migrations/ cmd/api/ cmd/capacity-lab/
+          python3 deploy/singlehost-lab/provenance.py
+          python3 deploy/singlehost-lab/check_seed.py
       - name: Build actual unchanged API and seed tools on free CI
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq openssh-server
           docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-singlehost-rehearsal:local .
+          docker run --rm -v "$PWD:/src:ro" -w /src golang:1.27.3-alpine3.23 sh -c 'go test -buildvcs=false ./cmd/capacity-lab -run TestRecipientShards -count=1'
           docker pull postgres:16-alpine
           docker pull redis:7.2-alpine
           docker pull haproxy:3.0-alpine
           docker pull grafana/k6:2.3.0
-      - name: Rehearse single-host500-pair preparation and actual20-session workload
+      - name: Rehearse actual20-session foundation using retained500-pair seed proof
         env:
           NODE_PATH: /tmp/singlehost-tools/node_modules
-        run: sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py
+        run: sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --foundation
       - name: Retain result in logs without depending on artifact downloads
         if: always()
         run: |
@@ -114,8 +116,9 @@ jobs:
           assert a['run']==os.environ['EXPECTED_NONCE']
           assert a['source_commit']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert str(a['rehearsal_run']).isdigit()
-          evidence=json.loads(subprocess.check_output(['gh','run','view',str(a['rehearsal_run']),'--json','status,conclusion,headSha']))
-          assert evidence==dict(status='completed',conclusion='success',headSha=a['source_commit'])
+          evidence=json.loads(subprocess.check_output(['gh','run','view',str(a['rehearsal_run']),'--json','status,conclusion,headSha,jobs']))
+          assert evidence['status']=='completed' and evidence['conclusion']=='success' and evidence['headSha']==a['source_commit']
+          assert len([j for j in evidence['jobs'] if j['name']=='rehearsal' and j['status']=='completed' and j['conclusion']=='success'])==1
           PY
           python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-40866958782
           docker pull grafana/k6:2.3.0
