@@ -11,6 +11,9 @@ function render(input) {
   const db=cohost({...input,role:'database',images:{...input.images,socat:input.images.postgres}}).services.postgres;
   delete doc.services['db-probe'];
   doc.services.postgres=db;
+  // The image's temporary initialization server listens on Unix sockets only.
+  // Remote seed/API clients require the final TCP listener, not pg_isready's default socket.
+  doc.services.postgres.healthcheck.test=['CMD-SHELL','pg_isready -h 127.0.0.1 -U lab -d capacity_lab'];
   doc.name=run+'-singlehost';
   doc.volumes={'synthetic-pg':{labels:{'atlxpres.cohost.run':run}}};
   for (const [name,s] of Object.entries(doc.services)) {

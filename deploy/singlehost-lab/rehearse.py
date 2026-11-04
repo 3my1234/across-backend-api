@@ -7,8 +7,8 @@ def wait_ready(base):
     deadline=time.monotonic()+90
     while time.monotonic()<deadline:
         m,_=inventory(base)
-        probe=subprocess.run(['docker','exec',m['services']['postgres'],'pg_isready','-U','lab','-d','capacity_lab'],capture_output=True,timeout=5)
-        if probe.returncode==0:return
+        probe=subprocess.run(['docker','exec',m['services']['postgres'],'psql','-h','127.0.0.1','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1','-c','SELECT 1'],capture_output=True,timeout=5)
+        if probe.returncode==0 and probe.stdout.strip()==b'1':return
         time.sleep(1)
     raise RuntimeError('test PostgreSQL not ready')
 
@@ -97,7 +97,7 @@ def main():
             try:
                 m,_=inventory(base)
                 for name,ident in m['services'].items():
-                    with (output/(name+'.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','100',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
+                    with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','100',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
             finally:cleanup(base)
             result['cleanup_completed']=(base/'cleanup.complete').exists()
         if sentinel:

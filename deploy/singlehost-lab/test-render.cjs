@@ -6,6 +6,7 @@ assert.equal(doc.name,run+'-singlehost');
 assert.equal(doc.services.postgres.image,images.postgres);
 assert.equal(doc.services.postgres.cpus,1);
 assert.equal(doc.services.postgres.mem_limit,'3g');
+assert(doc.services.postgres.healthcheck.test[1].includes('-h 127.0.0.1'));
 assert.equal(doc.services['db-probe'],undefined);
 assert.deepEqual(doc.services.gateway.ports,['127.0.0.1:58080:8080']);
 assert.equal(doc.networks.lab.internal,true);
