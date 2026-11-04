@@ -11,6 +11,7 @@ def main():
         while True:
             try:
                 with socket.create_connection(('172.29.248.10',8080),timeout=2) as connection:
+                    host_source=connection.getsockname()[0]
                     connection.sendall(b'*1\r\n$4\r\nPING\r\n')
                     if connection.recv(64)!=b'+PONG\r\n':raise ValueError('private TCP response mismatch')
                 break
@@ -19,7 +20,8 @@ def main():
                 time.sleep(.1)
         state=json.loads(call(['docker','inspect',container]))[0]
         if state['HostConfig']['PortBindings']:raise ValueError('unexpected published port')
-        print(json.dumps(dict(private_host_gateway_reachability=True,published_ports=False,seed_started=False,live_hosts_contacted=False)))
+        network_state=json.loads(call(['docker','network','inspect',network]))[0]
+        print(json.dumps(dict(private_host_gateway_reachability=True,host_source=host_source,ipam=network_state['IPAM'],published_ports=False,seed_started=False,live_hosts_contacted=False)))
     finally:
         if container:
             if call(['docker','inspect','--format','{{index .Config.Labels "atlxpres.network-replay"}}',container])!=run:raise ValueError('container ownership mismatch')

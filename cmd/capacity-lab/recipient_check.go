@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"across/backend/internal/auth"
@@ -17,6 +18,41 @@ type recipientRecord struct{ id, body, conversation, user, role string }
 type recipientShard struct {
 	user, conversation, role string
 	expected                 map[string]string
+}
+
+// Audit traffic is not user load. Keep it below the unchanged600/minute
+// API limit instead of making a large successful run fail its own audit.
+type recipientPacedTransport struct {
+	base     http.RoundTripper
+	interval time.Duration
+	mu       sync.Mutex
+	next     time.Time
+}
+
+func (p *recipientPacedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	start := time.Now()
+	if p.next.After(start) {
+		start = p.next
+	}
+	p.next = start.Add(p.interval)
+	p.mu.Unlock()
+	if wait := time.Until(start); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		case <-timer.C:
+		}
+	}
+	return p.base.RoundTrip(r)
+}
+
+func (p *recipientPacedTransport) CloseIdleConnections() {
+	if closer, ok := p.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 // Every generated marketplace message is checked. The former10,000-message
@@ -41,6 +77,7 @@ func verifyRecipientVisibility(ctx context.Context, db *pgxpool.Pool, prefix str
 		return r, err == nil, err
 	}
 	c := client()
+	c.Transport = &recipientPacedTransport{base: c.Transport, interval: 125 * time.Millisecond}
 	defer c.CloseIdleConnections()
 	return verifyRecipientStream(ctx, next, c, origin, out)
 }

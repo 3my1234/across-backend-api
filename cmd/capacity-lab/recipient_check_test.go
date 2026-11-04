@@ -11,9 +11,48 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"across/backend/internal/auth"
 )
+
+type recipientRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f recipientRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRecipientShardsAuditRequestsArePaced(t *testing.T) {
+	var started []time.Time
+	base := recipientRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		started = append(started, time.Now())
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	})
+	transport := &recipientPacedTransport{base: base, interval: 2 * time.Millisecond}
+	req, _ := http.NewRequest("GET", "http://gateway:8080", nil)
+	for range 3 {
+		if _, err := transport.RoundTrip(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started[2].Sub(started[0]) < 4*time.Millisecond {
+		t.Fatal("audit requests exceeded configured rate")
+	}
+}
+
+func TestRecipientShardsAuditPacingRespectsContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer server.Close()
+	transport := &recipientPacedTransport{base: http.DefaultTransport, interval: time.Second, next: time.Now().Add(time.Second)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
+	start := time.Now()
+	if _, err := transport.RoundTrip(req); err == nil {
+		t.Fatal("canceled audit request passed")
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("canceled audit waited for pacing deadline")
+	}
+}
 
 func TestRecipientShardsCheckEveryMessageBeyondFormerGlobalBound(t *testing.T) {
 	const count = 10001
