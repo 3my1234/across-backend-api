@@ -19,7 +19,7 @@ def identities(archive,expected_sha,expected_configs):
                 blobs['sha256:'+item.name.rsplit('/',1)[1]]=data
     if not index:raise ValueError('reviewed OCI index missing')
     result={config:[config] for config in expected_configs}
-    visited=set()
+    visited=set();leaves={config:0 for config in expected_configs}
     def visit(entry,depth=0):
         if depth>4 or len(visited)>256:raise ValueError('archive descriptor bound exceeded')
         platform=entry.get('platform')
@@ -32,15 +32,19 @@ def identities(archive,expected_sha,expected_configs):
         # OCI image indexes may contain another index before platform manifests.
         # Every traversed blob was independently content-hash checked above.
         if 'manifests' in manifest:
+            before={config:len(values) for config,values in result.items()}
             for child in manifest['manifests']:visit(child,depth+1)
+            matched=[config for config,values in result.items() if len(values)>before[config]]
+            if len(matched)==1:result[matched[0]].append(manifest_digest)
             return
         config=manifest.get('config',{}).get('digest')
         if config not in result:return
         settings=json.loads(blobs[config])
         if settings.get('os')!='linux' or settings.get('architecture')!='amd64':raise ValueError('unexpected image platform')
         result[config].append(manifest_digest)
+        leaves[config]+=1
     for entry in index['manifests']:visit(entry)
-    if any(len(candidates)!=2 for candidates in result.values()):raise ValueError('reviewed image missing or ambiguous')
+    if any(count!=1 for count in leaves.values()):raise ValueError('reviewed image missing or ambiguous')
     return result
 
 def resolve(candidates):

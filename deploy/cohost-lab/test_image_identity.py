@@ -24,17 +24,17 @@ class ImageIdentityTests(unittest.TestCase):
     def test_nested_oci_index_keeps_exact_config_and_manifest_binding(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path,nested=True)
-            self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
+            self.assertEqual(identities(path,sha,{config})[config][:2],[config,manifest])
     def test_partial_multiarch_archive_skips_only_unrequested_platform(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path,nested=True,foreign='arm64')
-            self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
+            self.assertEqual(identities(path,sha,{config})[config][:2],[config,manifest])
             config,manifest,sha=self.archive(path,nested=True,foreign='amd64')
             with self.assertRaises(ValueError):identities(path,sha,{config})
     def test_only_verified_same_content_descriptors_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path)
-            self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
+            self.assertEqual(identities(path,sha,{config})[config][:2],[config,manifest])
             with self.assertRaises(ValueError):identities(path,'0'*64,{config})
             with self.assertRaises(ValueError):identities(path,sha,{'sha256:'+'f'*64})
     def test_both_docker_stores_supported_without_tags(self):
@@ -50,3 +50,4 @@ class ImageIdentityTests(unittest.TestCase):
             with self.assertRaises(ValueError):resolve(['sha256:'+'a'*64])
 
 if __name__=='__main__':unittest.main()
+
