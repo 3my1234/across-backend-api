@@ -20,9 +20,9 @@ def main():
             print('Docker save root index:',stream.extractfile('index.json').read().decode(),flush=True)
         with raw.open('rb') as source,gzip.open(archive,'wb',compresslevel=1) as target:shutil.copyfileobj(source,target)
         aliases=identities(archive,hashlib.sha256(archive.read_bytes()).hexdigest(),{expected})
-        before=resolve(aliases[expected]);assert before in aliases[expected]
         subprocess.run(['docker','load','-i',str(archive)],check=True,timeout=30)
-        after=resolve(aliases[expected]);assert before==after
+        after=resolve(aliases[expected]);assert after in aliases[expected]
+        assert resolve(aliases[expected])==after
         print(json.dumps(dict(archive_round_trip='passed',verified_same_content_ids=aliases[expected],resolved=after)))
 
 if __name__=='__main__':main()
