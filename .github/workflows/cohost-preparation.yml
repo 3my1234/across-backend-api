@@ -48,11 +48,15 @@ jobs:
                   base=pathlib.Path(temp);manifest=base/'manifest.json';sample=base/'sample.json'
                   sample.write_text('{}')
                   def invoke(ids):
-                      manifest.write_text(json.dumps(dict(run=run,role='main',container_ids=ids)))
+                      payload=dict(run=run,role='main',container_ids=ids)
+                      if not ids:payload.update(services={},load_authorized=False)
+                      manifest.write_text(json.dumps(payload))
                       call('sudo','chown','root:root',str(manifest))
                       result=subprocess.run(['sudo','python3','deploy/cohost-lab/safety.py',str(manifest),str(sample),'--stop-test'])
                       call('sudo','chown',str(__import__('os').getuid()),str(manifest))
                       return result.returncode
+                  assert invoke([]) == 2
+                  assert call('docker','inspect','-f','{{.State.Running}}',sentinel)=='true'
                   assert invoke([sentinel]) != 0
                   assert call('docker','inspect','-f','{{.State.Running}}',sentinel)=='true'
                   assert invoke([owned]) == 2

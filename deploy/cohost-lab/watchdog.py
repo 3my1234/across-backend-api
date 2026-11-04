@@ -175,11 +175,19 @@ def main():
                 subprocess.run(command,check=False,timeout=120)
                 raise SystemExit(2)
             (base/"local.lease").touch()
-    except BaseException:
+    except SystemExit:
+        # The normal abort branch already stopped its owned resources.
+        (base/"local.lease").unlink(missing_ok=True)
+        raise
+    except BaseException as error:
         # Peer must treat cessation of this lease as failure and stop its own test.
         (base/"local.lease").unlink(missing_ok=True)
         if a.stop_test:
-            (base/"sample.json").write_text("{}")
+            # Retain the last completed sample and the actual sensor exception.
+            prior=base/'sample.json'
+            last=json.loads(prior.read_text()) if prior.is_file() else None
+            (base/'watchdog-error.json').write_text(json.dumps(dict(utc=time.time(),error_class=type(error).__name__,error=str(error)[:2000],last_completed_sample=last)))
+            (base/"sample.json").write_text(json.dumps(dict(monitoring_error=type(error).__name__)))
             subprocess.run([sys.executable,str(Path(__file__).with_name("safety.py")),str(a.manifest),str(base/"sample.json"),"--stop-test"],check=False,timeout=120)
         raise
 

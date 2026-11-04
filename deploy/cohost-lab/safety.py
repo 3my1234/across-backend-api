@@ -13,6 +13,11 @@ import subprocess
 
 LABEL = "atlxpres.cohost.run"
 
+def empty_setup(manifest):
+    return (manifest.get('container_ids')==[] and manifest.get('load_authorized') is False
+            and manifest.get('services')=={} and manifest.get('role') in ('main','database')
+            and re.fullmatch('cohost-[a-f0-9]{16}',manifest.get('run','')) is not None)
+
 
 def reasons(sample, role):
     if role not in ("main", "database"):
@@ -80,6 +85,9 @@ def main():
         raise ValueError("unsafe manifest ownership/mode")
     # Validate syntax before even invoking Docker; then inspect all before stopping any.
     ids = manifest.get("container_ids", [])
+    if empty_setup(manifest):
+        print(json.dumps(dict(stop_test='no test containers created',run=manifest['run'])))
+        raise SystemExit(2)
     if not ids or any(not re.fullmatch(r"[a-f0-9]{64}", x) for x in ids):
         raise ValueError("immutable IDs required")
     inspected = subprocess.run(["docker", "inspect", *ids], check=True,

@@ -9,8 +9,10 @@ def retain_diagnostics(base,request):
     report={};prefix=request['run'].replace('-','');role=request['role']
     for suffix in (role+'guard.service',role+'relay.service','dbtunnel.service'):
         try:
-            result=subprocess.run(['journalctl','--no-pager','--output=cat','-n','60','-u',prefix+suffix],capture_output=True,text=True,timeout=10)
+            result=subprocess.run(['journalctl','--no-pager','--output=short-iso','-n','60','-u',prefix+suffix],capture_output=True,text=True,timeout=10)
             report[suffix]=dict(exit_code=result.returncode,lines=result.stdout.splitlines()[-60:])
+            usage=subprocess.run(['systemctl','show',prefix+suffix,'--property=CPUUsageNSec,CPUQuotaPerSecUSec,MemoryPeak,Result,ExecMainStatus,ActiveEnterTimestampMonotonic,ActiveExitTimestampMonotonic,ControlGroup'],capture_output=True,text=True,timeout=10)
+            report[suffix]['unit_usage']=usage.stdout.splitlines()
         except Exception as error:report[suffix]=dict(error_class=type(error).__name__)
     (base/'transport-diagnostics.json').write_text(json.dumps(report,indent=2))
 

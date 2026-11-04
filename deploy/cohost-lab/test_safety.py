@@ -1,5 +1,5 @@
 import unittest
-from safety import reasons, validate_inventory, LABEL
+from safety import reasons, validate_inventory, LABEL,empty_setup
 from watchdog import delta
 from relay import validate as validate_peers
 from access import handle as access_handle
@@ -14,6 +14,11 @@ from pathlib import Path
 import tempfile
 
 class SafetyTests(unittest.TestCase):
+    def test_only_explicit_empty_setup_can_have_no_stop_targets(self):
+        good=dict(run='cohost-'+'a'*16,role='main',container_ids=[],services={},load_authorized=False)
+        self.assertTrue(empty_setup(good))
+        for key,bad in dict(run='production',role='unknown',container_ids=['b'*64],services={'api':'b'*64},load_authorized=True).items():
+            with self.subTest(key=key):self.assertFalse(empty_setup(dict(good,**{key:bad})))
     def sample(self):
         return dict(available_bytes=4*2**30,disk_free_bytes=40*2**30,oom=False,
             production_healthy=True,cpu_high_seconds=0,iowait_high_seconds=0,

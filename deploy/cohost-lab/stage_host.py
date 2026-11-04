@@ -108,8 +108,7 @@ def main():
     aliases=identities(archive,request.get('image_archive_sha256'),set(s['image'] for s in compose['services'].values()))
     resolved={}
     missing=[]
-    for service in compose['services'].values():
-        image=service['image']
+    for image in sorted({service['image'] for service in compose['services'].values()}):
         resolved[image]=resolve(aliases[image])
         if resolved[image] is None:missing.append(image)
     if missing:
@@ -120,20 +119,13 @@ def main():
             for chunk in iter(lambda:stream.read(1024*1024),b''):hasher.update(chunk)
         checksum=hasher.hexdigest()
         if checksum!=request.get('image_archive_sha256'):raise ValueError('image archive hash mismatch')
-        import gzip
-        import_log=(base/'image-import.log').open('w')
-        importer=subprocess.Popen(['docker','load'],stdin=subprocess.PIPE,stdout=import_log,stderr=import_log)
-        try:
-            with gzip.open(archive,'rb') as source:
-                while chunk:=source.read(1024*1024):
-                    if not (base/'local.lease').exists() or time.time()-(base/'local.lease').stat().st_mtime>5:
-                        raise ValueError('setup safety guard lost during image import')
-                    importer.stdin.write(chunk)
-            importer.stdin.close()
-            if importer.wait(timeout=60)!=0:raise ValueError('image import failed')
-        finally:
-            if importer.poll() is None:importer.terminate();importer.wait(timeout=10)
-            import_log.close()
+        from import_process import load_archive
+        def require_guard():
+            if not (base/'local.lease').exists() or time.time()-(base/'local.lease').stat().st_mtime>5:
+                raise ValueError('setup safety guard lost during image import')
+        with (base/'image-import.log').open('w') as import_log:
+            import_log.write(json.dumps(dict(reviewed_missing_images=missing,already_resolved=resolved))+'\n');import_log.flush()
+            load_archive(archive,import_log,require_guard)
         for image in resolved:
             resolved[image]=resolve(aliases[image])
             if resolved[image] is None:raise ValueError('exact archived image unavailable after load; inspect image-import.log')

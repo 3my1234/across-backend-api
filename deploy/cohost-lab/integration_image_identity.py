@@ -2,6 +2,7 @@
 import gzip,hashlib,json,os,shutil,subprocess,tarfile,tempfile
 from pathlib import Path
 from image_identity import identities,resolve
+from import_process import load_archive
 
 def main():
     assert os.environ.get('GITHUB_ACTIONS')=='true','CI only'
@@ -20,7 +21,10 @@ def main():
             print('Docker save root index:',stream.extractfile('index.json').read().decode(),flush=True)
         with raw.open('rb') as source,gzip.open(archive,'wb',compresslevel=1) as target:shutil.copyfileobj(source,target)
         aliases=identities(archive,hashlib.sha256(archive.read_bytes()).hexdigest(),{expected})
-        subprocess.run(['docker','load','-i',str(archive)],check=True,timeout=30)
+        checks=[]
+        with (base/'import.log').open('w') as log:
+            load_archive(archive,log,lambda:checks.append(True),timeout=30)
+        assert len(checks)>=2,'import must check guard before and after load'
         after=resolve(aliases[expected]);assert after in aliases[expected]
         assert resolve(aliases[expected])==after
         print(json.dumps(dict(archive_round_trip='passed',verified_same_content_ids=aliases[expected],resolved=after)))
