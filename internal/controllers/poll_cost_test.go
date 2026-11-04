@@ -104,7 +104,7 @@ func TestPollingCostActualHandlers(t *testing.T) {
 	t.Run("marketplace_list", func(t *testing.T) {
 		db := communityTestDB(t)
 		ctx := context.Background()
-		actor, owner, provider := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		actor := uuid.NewString()
 		for _, sql := range []string{"ALTER TABLE provider_conversation_messages ADD COLUMN body text DEFAULT 'Synthetic poll message'", "CREATE INDEX poll_list_history ON provider_conversation_messages(conversation_id,created_at DESC,id)"} {
 			if _, err := db.Exec(ctx, sql); err != nil {
 				t.Fatal(err)
@@ -114,10 +114,11 @@ func TestPollingCostActualHandlers(t *testing.T) {
 			sql  string
 			args []any
 		}{
-			{"INSERT INTO users(id,full_name) VALUES($1,'Synthetic buyer'),($2,'Synthetic provider')", []any{actor, owner}},
-			{"INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status) VALUES($1,$2,'Synthetic provider','approved')", []any{provider, owner}},
-			{"INSERT INTO provider_listings(id,provider_id,title,status,published_at) SELECT md5('poll-listing-'||i)::uuid,$1,'Synthetic listing','approved',now() FROM generate_series(1,50)i", []any{provider}},
-			{"INSERT INTO provider_conversations(id,provider_id,user_id,listing_id,status,last_message_at) SELECT gen_random_uuid(),$1,$2,id,'open',now() FROM provider_listings", []any{provider, actor}},
+			{"INSERT INTO users(id,full_name) VALUES($1,'Synthetic buyer')", []any{actor}},
+			{"INSERT INTO users(id,full_name) SELECT md5('poll-owner-'||i)::uuid,'Synthetic provider owner' FROM generate_series(1,50)i", nil},
+			{"INSERT INTO provider_organizations(id,owner_user_id,business_name,verification_status) SELECT md5('poll-provider-'||i)::uuid,md5('poll-owner-'||i)::uuid,'Synthetic provider','approved' FROM generate_series(1,50)i", nil},
+			{"INSERT INTO provider_listings(id,provider_id,title,status,published_at) SELECT md5('poll-listing-'||i)::uuid,md5('poll-provider-'||i)::uuid,'Synthetic listing','approved',now() FROM generate_series(1,50)i", nil},
+			{"INSERT INTO provider_conversations(id,provider_id,user_id,listing_id,status,last_message_at) SELECT gen_random_uuid(),provider_id,$1,id,'open',now() FROM provider_listings", []any{actor}},
 			{"INSERT INTO provider_conversation_messages(id,conversation_id,sender_type,created_at) SELECT gen_random_uuid(),c.id,'provider',now()-j*interval '1 second' FROM provider_conversations c CROSS JOIN generate_series(1,100)j", nil},
 		}
 		for _, s := range statements {
