@@ -68,6 +68,20 @@ def verify_limits(base):
         result[name]={f:(path/f).read_text() for f in ('cpu.max','memory.max','memory.swap.max','cpu.stat','memory.current','memory.events')}
     return result
 
+def verify_host_bridge(base):
+    """Prove host-to-owned-private-network access BEFORE expensive seeding."""
+    import ipaddress,socket
+    manifest,rows=inventory(base)
+    redis=next(row for row in rows if row['Id']==manifest['services']['redis'])
+    networks=redis['NetworkSettings']['Networks']
+    if len(networks)!=1:raise ValueError('unexpected Redis networks')
+    address=next(iter(networks.values()))['IPAddress']
+    if ipaddress.ip_address(address) not in ipaddress.ip_network('172.29.248.0/24'):raise ValueError('unexpected private bridge address')
+    with socket.create_connection((address,6379),timeout=2) as connection:
+        connection.sendall(b'*1\r\n$4\r\nPING\r\n')
+        if connection.recv(64)!=b'+PONG\r\n':raise ValueError('owned Redis bridge check failed')
+    return dict(private_host_bridge_verified=True,redis_address=address,published_ports=False)
+
 def cleanup(base):
     # Inspect and validate immutable IDs before deleting any object. No broad prune.
     manifest,_=inventory(base);run=manifest['run'];errors=[]

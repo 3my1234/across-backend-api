@@ -1,16 +1,36 @@
 name: Single-host disposable rehearsal
+run-name: ${{ inputs.execute && format('Single-host trial {0}', inputs.run_nonce) || 'Single-host disposable rehearsal' }}
 on:
   push:
     branches: [experiment/single-host-qualification]
     paths: [deploy/singlehost-lab/**, .github/workflows/singlehost-rehearsal.yml]
   workflow_dispatch:
+    inputs:
+      execute:
+        description: 'Live single-host placement requires separate explicit approval. Default is disposable only.'
+        type: boolean
+        default: false
+      run_nonce:
+        description: 'Exact separately reviewed live nonce'
+        type: string
+        default: ''
+      plan_only:
+        description: 'Offline authorization/workload checks only; no Docker or SSH'
+        type: boolean
+        default: false
+      network_only:
+        description: 'Disposable private bridge connectivity only; no seed or live hosts'
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: singlehost-disposable-rehearsal
   cancel-in-progress: false
 jobs:
   rehearsal:
+    if: ${{ !inputs.execute && !inputs.plan_only && !inputs.network_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -27,6 +47,8 @@ jobs:
           git diff --exit-code 13d316c62ce8bdd35c1c2fe72bf3d4d357581914 HEAD -- internal/ migrations/ cmd/api/ cmd/capacity-lab/
       - name: Build actual unchanged API and seed tools on free CI
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
           docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-singlehost-rehearsal:local .
           docker pull postgres:16-alpine
           docker pull redis:7.2-alpine
@@ -50,3 +72,78 @@ jobs:
           path: singlehost-rehearsal-evidence/
           retention-days: 7
           if-no-files-found: warn
+  plan:
+    if: ${{ inputs.plan_only && !inputs.execute }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
+          python3 deploy/singlehost-lab/runner.py
+          pwsh -NoProfile -Command '$errors=$null; $tokens=$null; [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "deploy/singlehost-lab/operator.ps1"),[ref]$tokens,[ref]$errors) | Out-Null; if ($errors.Count) { $errors; exit 1 }'
+  network:
+    if: ${{ inputs.network_only && !inputs.execute }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker pull redis:7.2-alpine
+          python3 deploy/singlehost-lab/rehearse_network.py
+  qualification:
+    if: ${{ inputs.execute }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify explicit placement approval and exact passed rehearsal before SSH
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINGLEHOST_TRIAL_BUNDLE: ${{ secrets.SINGLEHOST_TRIAL_BUNDLE }}
+          EXPECTED_NONCE: ${{ inputs.run_nonce }}
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess,sys
+          sys.path.insert(0,'deploy/singlehost-lab')
+          from policy import validate
+          a=validate(json.loads(os.environ['SINGLEHOST_TRIAL_BUNDLE'])['approval'])
+          assert a['run']==os.environ['EXPECTED_NONCE']
+          assert a['source_commit']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert str(a['rehearsal_run']).isdigit()
+          evidence=json.loads(subprocess.check_output(['gh','run','view',str(a['rehearsal_run']),'--json','status,conclusion,headSha']))
+          assert evidence==dict(status='completed',conclusion='success',headSha=a['source_commit'])
+          PY
+          python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-40866958782
+          docker pull grafana/k6:2.3.0
+          python3 deploy/singlehost-lab/install_ci.py .singlehost-private
+      - name: Execute only the approved original staged workload
+        run: python3 deploy/singlehost-lab/runner.py --execute --approval .singlehost-private/approval.json --ssh-config .singlehost-private/ssh_config --output singlehost-evidence
+      - name: Attempt test-only cleanup even if the coordinator was interrupted
+        if: always()
+        run: |
+          if [ -f .singlehost-private/ssh_config ]; then
+            timeout 180s ssh -F .singlehost-private/ssh_config cohost-main cleanup
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: singlehost-trial-${{ github.run_id }}
+          path: singlehost-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Remove runner-local restricted credentials and bearer fixtures
+        if: always()
+        run: |
+          python3 deploy/singlehost-lab/install_ci.py --cleanup .singlehost-private
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          root=Path.cwd().resolve()
+          for path in [root/'.singlehost-private',*root.glob('private-cohost-*')]:
+            assert path.parent==root
+            if path.exists():shutil.rmtree(path)
+          PY

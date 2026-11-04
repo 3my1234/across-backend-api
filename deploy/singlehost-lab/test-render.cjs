@@ -8,7 +8,7 @@ assert.equal(doc.services.postgres.cpus,1);
 assert.equal(doc.services.postgres.mem_limit,'3g');
 assert(doc.services.postgres.healthcheck.test[1].includes('-h 127.0.0.1'));
 assert.equal(doc.services['db-probe'],undefined);
-assert.deepEqual(doc.services.gateway.ports,['127.0.0.1:58080:8080']);
+assert.equal(doc.services.gateway.ports,undefined);
 assert.equal(doc.networks.lab.internal,true);
 assert.equal(doc.networks.lab.ipam.config[0].ip_range,'172.29.248.128/25');
 for(const [name,s] of Object.entries(doc.services)) {

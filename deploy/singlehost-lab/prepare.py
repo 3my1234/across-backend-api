@@ -1,0 +1,42 @@
+"""Create an UNAUTHORIZED review directory; no SSH, keys or live resources."""
+import argparse,hashlib,json,shutil,subprocess,sys,uuid
+from pathlib import Path
+from policy import STAGES
+
+ARCHIVE_SHA='020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366'
+APP_SOURCE='13d316c62ce8bdd35c1c2fe72bf3d4d357581914'
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);a=p.parse_args()
+    if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
+    root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
+    source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+    subprocess.run(['git','diff','--exit-code','HEAD','--','deploy/singlehost-lab','deploy/cohost-lab','.github/workflows/singlehost-rehearsal.yml'],cwd=root,check=True)
+    subprocess.run(['git','diff','--exit-code',APP_SOURCE,'HEAD','--','internal/','migrations/','cmd/api/','cmd/capacity-lab/'],cwd=root,check=True)
+    metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
+    if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
+    run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
+    input_file=review/'render.json';input_file.write_text(json.dumps(dict(run=run,images=metadata['images'])))
+    compose=subprocess.check_output(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(input_file)])
+    (review/'compose.json').write_bytes(compose)
+    sys.path.insert(0,str(root/'deploy/cohost-lab'))
+    from trial_policy import client_hashes
+    approval=dict(run=run,topology='singlehost-database-vps',host='79.143.176.173',authorized=False,approved_unix=0,
+        spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=2,application_memory=2684354560,
+        database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
+        timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
+        compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
+        client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run)
+    approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
+    (review/'approval.json').write_text(json.dumps(approval,indent=2))
+    shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
+    cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')
+    for folder,names in (('cohost-lab',cohost),('singlehost-lab',('runtime.py','supervise.py','monitor.py','rehearse.py','policy.py'))):
+        destination=review/'src/deploy'/folder;destination.mkdir(parents=True)
+        for name in names:shutil.copyfile(root/'deploy'/folder/name,destination/name)
+    shutil.copyfile(root/'deploy/singlehost-lab/install_host.py',review/'install_host.py')
+    hashes={str(path.relative_to(review)).replace('\\','/'):hashlib.sha256(path.read_bytes()).hexdigest() for path in review.rglob('*') if path.is_file()}
+    (review/'review-hashes.json').write_text(json.dumps(hashes,indent=2))
+    print(json.dumps(dict(review=str(review),run=run,source=source,authorized=False,resources_created=False)))
+
+if __name__=='__main__':main()

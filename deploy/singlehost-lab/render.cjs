@@ -23,7 +23,9 @@ function render(input) {
     if (s.volumes) s.volumes=s.volumes.map(v=>v.replace('/root/atlxpres-cohost/'+run,base));
     if (s.environment && Object.hasOwn(s.environment,'LAB_DB_CPUS')) s.environment.LAB_DB_CPUS='1';
   }
-  doc.services.gateway.ports=['127.0.0.1:58080:8080'];
+  // The host can reach its own private bridge. SSH forwards ONLY this exact
+  // gateway address; no Docker published-port/NAT or host relay is needed.
+  delete doc.services.gateway.ports;
   // Docker may assign a stopped static endpoint's address to a dynamic service
   // started first. Keep all dynamic allocations outside the reserved low addresses.
   doc.networks.lab.ipam.config[0].ip_range='172.29.248.128/25';

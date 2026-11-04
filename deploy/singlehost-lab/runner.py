@@ -6,6 +6,30 @@ from trial_runner import Runner,execute_sequence
 from trial_policy import STAGES,client_hashes
 
 class SingleHostRunner(Runner):
+    def prepare(self):
+        for name in ('seed','exporter','verifier','lifecycle','queue-check'):self.service(name)
+        self.lab('seed','seed',self.output/'seed.log')
+        self.lab('prepare-sessions')
+        self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
+        self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
+        for name in ('api1','api2','gateway'):self.service(name)
+        # One HTTP-only forward into this host's own private Docker network.
+        # No database tunnel, host port mapping or gateway relay process.
+        tunnel=subprocess.Popen(['ssh','-F',str(self.config),'-N','-L','127.0.0.1:8080:172.29.248.10:8080','cohost-main'],start_new_session=True)
+        self.children.append(tunnel);deadline=time.monotonic()+60
+        import urllib.request
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        while True:
+            self.check()
+            try:
+                with opener.open('http://127.0.0.1:8080/api/v1/ready',timeout=3) as response:
+                    if json.load(response).get('ok') is True:break
+            except Exception:
+                if time.monotonic()>deadline:raise
+                time.sleep(1)
+        self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
+        self.lab('queue-check','queue-check',self.output/'queue-check.jsonl')
+
     def start(self):
         status=json.loads(self.ssh('main','status',timeout=15))
         self.validate_status(status)

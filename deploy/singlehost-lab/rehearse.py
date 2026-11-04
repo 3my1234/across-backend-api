@@ -1,7 +1,7 @@
 """Actual Docker/Compose rehearsal on a disposable GitHub runner only."""
 import hashlib,json,os,shutil,signal,subprocess,sys,time,uuid
 from pathlib import Path
-from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,cleanup
+from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,verify_host_bridge,cleanup
 
 def wait_ready(base):
     deadline=time.monotonic()+90
@@ -26,6 +26,7 @@ def main():
         (base/'render.json').write_text(json.dumps(dict(run=run,images=images)))
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
+        (base/'compose.json').write_text(json.dumps(doc,indent=2))
         (output/'compose.json').write_text(json.dumps(doc,indent=2))
         shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',base/'haproxy.cfg')
         (base/'exchange').mkdir(mode=0o700)
@@ -37,6 +38,7 @@ def main():
         result['effective_cgroups']=verify_limits(base)
         compose(base,'start','postgres','redis','seed','exporter','verifier','lifecycle','queue-check')
         wait_ready(base)
+        result.update(verify_host_bridge(base))
         print('Actual TCP PostgreSQL ready; starting unchanged500-pair seed',flush=True)
         started=time.monotonic();exec_lab(base,'seed','seed',output/'seed.log',timeout=900)
         result['seed_seconds']=time.monotonic()-started
@@ -51,9 +53,10 @@ def main():
         compose(base,'start','api1','api2','gateway')
         deadline=time.monotonic()+90
         import urllib.request
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
         while True:
             try:
-                with urllib.request.urlopen('http://127.0.0.1:58080/api/v1/ready',timeout=3) as response:
+                with opener.open('http://172.29.248.10:8080/api/v1/ready',timeout=3) as response:
                     if json.load(response).get('ok') is not True:raise ValueError('unhealthy API')
                 break
             except Exception:
@@ -73,7 +76,7 @@ def main():
         if recover(generated)!=original or hashlib.sha256(generated.encode()).hexdigest()!='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49':raise ValueError('qualified generator source mismatch')
         (suite/'sessions.js').write_text(generated)
         # Rehearse the unchanged first20-session stage, not500 capacity.
-        generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:127.0.0.1','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',
+        generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:172.29.248.10','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',
             '-v',str(suite)+':/suite:ro','-v',str(exchange)+':/exchange',
             '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE=smoke','-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
             'grafana/k6:2.3.0','run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
@@ -87,15 +90,13 @@ def main():
         subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),'smoke','20'],check=True)
         result['smoke_sessions']=20;result['smoke_seconds']=45;result['write_reconciliation_passed']=True
         result['effective_cgroups_after_seed']=verify_limits(base)
-        # Real safety.py invocation must stop owned services and leave the unrelated sentinel running.
-        m,_=inventory(base);(base/'manifest.json').write_text(json.dumps(m));(base/'manifest.json').chmod(0o600)
-        (base/'abort.json').write_text('{}')
-        stopped=subprocess.run(['python3',str(root/'deploy/cohost-lab/safety.py'),str(base/'manifest.json'),str(base/'abort.json'),'--stop-test'],timeout=180)
-        if stopped.returncode!=2:raise RuntimeError('safety fault did not fail closed')
-        _,rows=inventory(base)
-        if any(row['State']['Running'] for row in rows):raise RuntimeError('test services survived safety abort')
-        if call(['docker','inspect','--format','{{.State.Running}}',sentinel]).decode().strip()!='true':raise RuntimeError('sentinel affected')
-        result['owned_stop_and_sentinel_passed']=True;result['passed']=True
+        # Preserve logs before the actual hard-stop integration destroys the lab.
+        m,_=inventory(base)
+        for name,ident in m['services'].items():
+            with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','100',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
+        from rehearse_transport import exercise
+        result.update(exercise(root,base,output,sentinel))
+        result['passed']=True
     finally:
         if created:
             try:

@@ -21,7 +21,7 @@ class InstallSafetyTests(unittest.TestCase):
     def test_key_is_forced_expiring_and_only_gateway_forward_is_allowed(self):
         run='cohost-'+'a'*16;base=Path('/root/atlxpres-singlehost')/run
         line=key_line(base,'ssh-ed25519 AAAA synthetic-only','20261104235959Z')
-        self.assertIn('restrict,port-forwarding,permitopen="127.0.0.1:58080"',line)
+        self.assertIn('restrict,port-forwarding,permitopen="172.29.248.10:8080"',line)
         self.assertIn('expiry-time="20261104235959Z"',line)
         self.assertIn('supervise.py access',line)
         self.assertNotIn('5432',line)

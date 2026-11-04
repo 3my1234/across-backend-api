@@ -22,7 +22,7 @@ def key_line(base,public,expiry):
     helper=base/'src/deploy/singlehost-lab/supervise.py'
     forced=f'/usr/bin/python3 {helper} access {base}'
     # Same reviewed OpenSSH restrictions as the previous narrow gateway key.
-    return f'restrict,port-forwarding,permitopen="127.0.0.1:58080",expiry-time="{expiry}",command="{forced}" '+parts[0]+' '+parts[1]+' '+base.name+'-singlehost-ci'
+    return f'restrict,port-forwarding,permitopen="172.29.248.10:8080",expiry-time="{expiry}",command="{forced}" '+parts[0]+' '+parts[1]+' '+base.name+'-singlehost-ci'
 
 def main():
     import fcntl

@@ -1,7 +1,7 @@
 """Reviewed single-host job. No live execution without explicit topology approval."""
 import argparse,base64,json,os,re,signal,subprocess,sys,time
 from pathlib import Path
-from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,cleanup,call
+from runtime import ROOT,identity,inventory,compose,install_limits,verify_limits,verify_host_bridge,cleanup,call
 
 def remove_key(base):
     path=base/'installed-key.json'
@@ -60,10 +60,6 @@ def job(base):
     if not production:raise ValueError('production inventory empty')
     networks=call(['docker','network','ls','-q']).decode().split()
     validate_networks(json.loads(call(['docker','network','inspect',*networks])) if networks else [])
-    import socket
-    with socket.socket() as sock:
-        sock.settimeout(1)
-        if sock.connect_ex(('127.0.0.1',58080))==0:raise ValueError('loopback gateway port occupied')
     # Single five-minute baseline, before imports/container creation.
     subprocess.run(['python3',str(Path(__file__).parents[1]/'cohost-lab/baseline.py'),str(base/'baseline.json')],check=True,timeout=420)
     doc=json.loads((base/'compose.json').read_text())
@@ -93,7 +89,7 @@ def job(base):
         write_json(base/'effective-limits.json',verify_limits(base))
         compose(base,'start','postgres','redis')
         from rehearse import wait_ready
-        wait_ready(base);guard_ready(base)
+        wait_ready(base);write_json(base/'private-bridge.json',verify_host_bridge(base));guard_ready(base)
         metadata=json.loads((base/'supervisor.json').read_text());metadata['phase']='waiting-for-generator';write_json(base/'supervisor.json',metadata)
         (base/'setup.ready').write_text(str(time.time()))
         print(json.dumps(dict(singlehost_setup='ready',run=base.name,load_started=False)),flush=True)
@@ -146,8 +142,8 @@ def access(base,command):
     m.update(role='main',load_authorized=True)
     write_json(base/'exchange-manifest.json',m)
     if command=='gateway-relay':
-        # Gateway is already loopback-published. There is no relay to create.
-        print('loopback gateway ready; no relay');return
+        # Gateway is reached by SSH through the host's own private bridge.
+        print('private gateway ready; no relay or published port');return
     if command=='publish-fixture':
         from runtime import exec_lab
         raw=exec_lab(base,'exporter','export');data=json.loads(raw)
