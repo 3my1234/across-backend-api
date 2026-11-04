@@ -24,6 +24,9 @@ function render(input) {
     if (s.environment && Object.hasOwn(s.environment,'LAB_DB_CPUS')) s.environment.LAB_DB_CPUS='1';
   }
   doc.services.gateway.ports=['127.0.0.1:58080:8080'];
+  // Docker may assign a stopped static endpoint's address to a dynamic service
+  // started first. Keep all dynamic allocations outside the reserved low addresses.
+  doc.networks.lab.ipam.config[0].ip_range='172.29.248.128/25';
   return doc;
 }
 if (require.main===module) console.log(JSON.stringify(render(JSON.parse(fs.readFileSync(process.argv[2],'utf8'))),null,2));

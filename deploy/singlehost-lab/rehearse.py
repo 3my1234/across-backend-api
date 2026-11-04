@@ -37,12 +37,15 @@ def main():
         result['effective_cgroups']=verify_limits(base)
         compose(base,'start','postgres','redis','seed','exporter','verifier','lifecycle','queue-check')
         wait_ready(base)
+        print('Actual TCP PostgreSQL ready; starting unchanged500-pair seed',flush=True)
         started=time.monotonic();exec_lab(base,'seed','seed',output/'seed.log',timeout=900)
         result['seed_seconds']=time.monotonic()-started
         counts=json.loads(sql(base,"SELECT json_build_object('actors',(SELECT count(*) FROM capacity_lab_actors),'migration108',(SELECT count(*) FROM schema_migrations WHERE name='108_push_receipt_claims.sql'),'identity',(SELECT marker FROM capacity_lab_identity))"))
         if counts!={'actors':500,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
-        exec_lab(base,'exporter','prepare-sessions',output/'session-preparation.log')
+        print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
+        # This command emits bearer fixtures. Capture privately, never in public evidence.
+        exec_lab(base,'exporter','prepare-sessions')
         exec_lab(base,'exporter','notification-prepare',output/'notification-preparation.log')
         sql(base,'CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
         compose(base,'start','api1','api2','gateway')
@@ -74,6 +77,7 @@ def main():
             '-v',str(suite)+':/suite:ro','-v',str(exchange)+':/exchange',
             '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE=smoke','-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
             'grafana/k6:2.3.0','run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
+        print('Starting actual unchanged20-session smoke',flush=True)
         with (output/'k6.log').open('wb') as log:code=subprocess.run(generator,stdout=log,stderr=subprocess.STDOUT,timeout=330).returncode
         (exchange/'k6-exit-code.txt').write_text(str(code));shutil.copyfile(output/'k6.log',exchange/'k6.log')
         if (exchange/'summary.json').exists():shutil.copyfile(exchange/'summary.json',output/'summary.json')

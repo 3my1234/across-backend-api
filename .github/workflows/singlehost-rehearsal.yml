@@ -23,6 +23,7 @@ jobs:
           npm install --prefix /tmp/singlehost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
           NODE_PATH=/tmp/singlehost-tools/node_modules node deploy/singlehost-lab/test-render.cjs
           python3 -m py_compile deploy/singlehost-lab/*.py
+          python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
           git diff --exit-code 13d316c62ce8bdd35c1c2fe72bf3d4d357581914 HEAD -- internal/ migrations/ cmd/api/ cmd/capacity-lab/
       - name: Build actual unchanged API and seed tools on free CI
         run: |
