@@ -1,0 +1,51 @@
+name: Single-host disposable rehearsal
+on:
+  push:
+    branches: [experiment/single-host-qualification]
+    paths: [deploy/singlehost-lab/**, .github/workflows/singlehost-rehearsal.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: singlehost-disposable-rehearsal
+  cancel-in-progress: false
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate renderer and unchanged application source
+        run: |
+          npm install --prefix /tmp/singlehost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
+          NODE_PATH=/tmp/singlehost-tools/node_modules node deploy/singlehost-lab/test-render.cjs
+          python3 -m py_compile deploy/singlehost-lab/*.py
+          git diff --exit-code 13d316c62ce8bdd35c1c2fe72bf3d4d357581914 HEAD -- internal/ migrations/ cmd/api/ cmd/capacity-lab/
+      - name: Build actual unchanged API and seed tools on free CI
+        run: |
+          docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-singlehost-rehearsal:local .
+          docker pull postgres:16-alpine
+          docker pull redis:7.2-alpine
+          docker pull haproxy:3.0-alpine
+          docker pull grafana/k6:2.3.0
+      - name: Rehearse single-host500-pair preparation and actual20-session workload
+        env:
+          NODE_PATH: /tmp/singlehost-tools/node_modules
+        run: sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py
+      - name: Retain result in logs without depending on artifact downloads
+        if: always()
+        run: |
+          if [ -f singlehost-rehearsal-evidence/result.json ]; then cat singlehost-rehearsal-evidence/result.json; fi
+          if [ -f singlehost-rehearsal-evidence/seed.log ]; then tail -n 12 singlehost-rehearsal-evidence/seed.log; fi
+          if [ -f singlehost-rehearsal-evidence/k6.log ]; then tail -n 15 singlehost-rehearsal-evidence/k6.log; fi
+          if [ -f singlehost-rehearsal-evidence/reconciliation.jsonl ]; then tail -n 5 singlehost-rehearsal-evidence/reconciliation.jsonl; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: singlehost-rehearsal-${{ github.run_id }}
+          path: singlehost-rehearsal-evidence/
+          retention-days: 7
+          if-no-files-found: warn
