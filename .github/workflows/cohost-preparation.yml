@@ -105,6 +105,25 @@ jobs:
             cohost-bundle/images.json
             cohost-bundle/SHA256SUMS
           retention-days: 3
+  disposable-seed-replay:
+    if: ${{ !inputs.execute }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Build unchanged application and actual seed tool on free CI
+        run: docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-seed-replay:local .
+      - name: Install local disposable SSH test server
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
+      - name: Reproduce exact500-pair seed without live hosts or relay
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/cohost-lab/integration_seed.py
+      - name: Retain public preparation result in job log
+        if: always()
+        run: |
+          if [ -f seed-replay-evidence/result.json ]; then cat seed-replay-evidence/result.json; fi
+          if [ -f seed-replay-evidence/seed.log ]; then tail -n 25 seed-replay-evidence/seed.log; fi
+          if [ -f seed-replay-evidence/peer-replay.json ]; then cat seed-replay-evidence/peer-replay.json; fi
   qualification:
     if: ${{ inputs.execute }}
     concurrency:

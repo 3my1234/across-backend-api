@@ -19,6 +19,10 @@ class CadenceTests(unittest.TestCase):
             def __init__(self,**kwargs):pass
             def __enter__(self):return self
             def __exit__(self,*args):pass
+            def submit(self,fn,*args):
+                class Immediate:
+                    def result(self):return fn(*args)
+                return Immediate()
             def map(self,fn,urls):
                 # Three HTTP probes run concurrently, each within the approved
                 # HTTP/observer deadlines; the complete batch costs2.4seconds.

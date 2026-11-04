@@ -93,6 +93,16 @@ def state(ids):
     return [json.loads(x) for x in rows]
 
 
+def collect_checks(ids,diagnostics):
+    # Docker inspection and public HTTP are independent checks. Serializing a
+    # valid2.5s HTTP observation behind up to3s of inspection can make a healthy
+    # completed scan older than the unchanged3s peer freshness limit.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        inspection=pool.submit(state,ids)
+        results=list(pool.map(lambda url:probe(url,diagnostics),URLS))
+        return results,inspection.result()
+
+
 def approved_trial_transition(base,current):
     """Keep the existing independent observer alive across an explicitly approved arm."""
     from trial_policy import validate
@@ -134,8 +144,7 @@ def main():
             high_io=high_io+elapsed if wait>10 else 0
             mem={k:int(v.split()[0])*1024 for k,v in (x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines())}
             probe_details={}
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                results=list(pool.map(lambda url:probe(url,probe_details),URLS))
+            results,states=collect_checks(ids+m.get("container_ids",[]),probe_details)
             for url,ok,latency in results:
                 failures[url]=0 if ok else failures[url]+1
                 slow[url]=slow[url]+1 if latency>max(2,3*baseline[url]) else 0
@@ -146,7 +155,6 @@ def main():
                 approved_trial_transition(base,current)
                 a.setup_only=False
             m=current
-            states=state(ids+m.get("container_ids",[]))
             prod=states[:len(ids)]
             oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
             peer=base/"peer.lease"
