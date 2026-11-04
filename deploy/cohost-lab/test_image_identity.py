@@ -4,12 +4,14 @@ from unittest.mock import patch
 from image_identity import identities,resolve
 
 class ImageIdentityTests(unittest.TestCase):
-    def archive(self,path,nested=False):
+    def archive(self,path,nested=False,foreign=None):
         config=json.dumps(dict(os='linux',architecture='amd64')).encode()
         config_id='sha256:'+hashlib.sha256(config).hexdigest()
         manifest=json.dumps(dict(config=dict(digest=config_id))).encode()
         manifest_id='sha256:'+hashlib.sha256(manifest).hexdigest()
-        index=json.dumps(dict(manifests=[dict(digest=manifest_id)])).encode()
+        entries=[dict(digest=manifest_id)]
+        if foreign:entries.append(dict(digest='sha256:'+'f'*64,platform=dict(os='linux',architecture=foreign)))
+        index=json.dumps(dict(manifests=entries)).encode()
         extra=[]
         if nested:
             digest=hashlib.sha256(index).hexdigest()
@@ -23,6 +25,12 @@ class ImageIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path,nested=True)
             self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
+    def test_partial_multiarch_archive_skips_only_unrequested_platform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path,nested=True,foreign='arm64')
+            self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
+            config,manifest,sha=self.archive(path,nested=True,foreign='amd64')
+            with self.assertRaises(ValueError):identities(path,sha,{config})
     def test_only_verified_same_content_descriptors_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path)

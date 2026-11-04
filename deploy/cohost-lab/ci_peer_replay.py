@@ -34,7 +34,10 @@ class PeerReplay:
             renamed=base.with_name(self.run);base.rename(renamed);base=renamed
             helper=self.root/'deploy/cohost-lab/access.py'
             auth.append(f'restrict,command="/usr/bin/python3 {helper} {base}" '+(self.base/(role+'-key.pub')).read_text().strip())
-            config.extend(['Host cohost-'+role,' HostName 127.0.0.1',' Port '+str(port),' User root',' BatchMode yes',' IdentitiesOnly yes',' StrictHostKeyChecking yes',' UserKnownHostsFile '+str(self.base/'known_hosts'),' IdentityFile '+str(self.base/(role+'-key')),' ControlMaster auto',' ControlPersist 10',' ControlPath '+control_path(self.base),' ConnectTimeout 5'])
+            (self.base/role).chmod(0o700)
+            # %C hashes endpoint/user, not the key: both loopback roles share
+            # an endpoint but have distinct forced commands and identities.
+            config.extend(['Host cohost-'+role,' HostName 127.0.0.1',' Port '+str(port),' User root',' BatchMode yes',' IdentitiesOnly yes',' StrictHostKeyChecking yes',' UserKnownHostsFile '+str(self.base/'known_hosts'),' IdentityFile '+str(self.base/(role+'-key')),' ControlMaster auto',' ControlPersist 10',' ControlPath '+control_path(self.base/role),' ConnectTimeout 5'])
             thread=threading.Thread(target=self.observe,args=(role,base,ident),daemon=True);thread.start();self.threads.append(thread)
         (self.base/'authorized_keys').write_text('\n'.join(auth)+'\n');(self.base/'authorized_keys').chmod(0o600)
         (self.base/'known_hosts').write_text(f'[127.0.0.1]:{port} '+(self.base/'host.pub').read_text())

@@ -22,9 +22,12 @@ def identities(archive,expected_sha,expected_configs):
     visited=set()
     def visit(entry,depth=0):
         if depth>4 or len(visited)>256:raise ValueError('archive descriptor bound exceeded')
+        platform=entry.get('platform')
+        if platform and (platform.get('os')!='linux' or platform.get('architecture')!='amd64'):return
         manifest_digest=entry['digest']
         if manifest_digest in visited:return
         visited.add(manifest_digest)
+        if manifest_digest not in blobs:raise ValueError('reviewed platform descriptor missing')
         manifest=json.loads(blobs[manifest_digest])
         # OCI image indexes may contain another index before platform manifests.
         # Every traversed blob was independently content-hash checked above.
