@@ -4,7 +4,7 @@ import watchdog
 
 class ParallelChecksTests(unittest.TestCase):
     def test_inspection_and_all_http_checks_start_before_any_can_finish(self):
-        rendezvous=threading.Barrier(4)
+        rendezvous=threading.Barrier(len(watchdog.URLS)+1)
         def inspect(ids):
             rendezvous.wait(timeout=2)
             return [{'Running':True}]
@@ -15,9 +15,9 @@ class ParallelChecksTests(unittest.TestCase):
         details={}
         with patch.object(watchdog,'state',side_effect=inspect),patch.object(watchdog,'probe',side_effect=probe):
             results,states=watchdog.collect_checks(['recorded-id'],details)
-        self.assertEqual(len(results),3)
+        self.assertEqual(len(results),len(watchdog.URLS))
         self.assertEqual(states,[{'Running':True}])
-        self.assertEqual(len(details),3)
+        self.assertEqual(len(details),len(watchdog.URLS))
 
     def test_inspection_failure_is_never_replaced_by_successful_http(self):
         with patch.object(watchdog,'state',side_effect=OSError('inspection unavailable')),patch.object(watchdog,'probe',side_effect=lambda url,details:(url,True,1)):

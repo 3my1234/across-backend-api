@@ -14,8 +14,8 @@ import sys
 import time
 from safety import reasons
 
-URLS = ("https://api.atlxpres.com/api/v1/ready",
-        "https://unlimitedenergysystems.com/", "https://atlxpres.com/")
+# User-approved scope: ATL Xpress endpoints only. No unrelated website probes.
+URLS = ("https://api.atlxpres.com/api/v1/ready", "https://atlxpres.com/")
 
 
 def cpu():
