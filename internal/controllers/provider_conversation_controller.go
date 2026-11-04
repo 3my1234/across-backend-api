@@ -305,9 +305,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 	if changed >= 0 && !c.QueryBool("mark_read", true) && c.Get("If-None-Match") == etag {
 		return c.SendStatus(fiber.StatusNotModified)
 	}
-	rows, err := m.db.Query(ctx, `SELECT msg.id::text,msg.sender_type,msg.body,msg.created_at,msg.media_keys,to_jsonb(msg)->'location',COALESCE(to_jsonb(msg)->'context','{}'::jsonb)
-	FROM provider_conversation_messages msg
-	WHERE msg.conversation_id IN (`+businessThreadMembers("$1::uuid")+`) AND ($2::timestamptz IS NULL OR (msg.created_at,msg.id)<($2,$3::uuid)) ORDER BY msg.created_at DESC,msg.id DESC LIMIT $4`, c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
+	rows, err := m.db.Query(ctx, businessHistoryPageSQL(), c.Params("conversation_id"), page.CursorTime, cursorID, page.Limit+1)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}

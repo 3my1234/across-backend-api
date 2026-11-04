@@ -1,0 +1,49 @@
+name: Isolated release reconciliation
+on:
+  push:
+    branches: [experiment/release-reconciliation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regressions-and-poll-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_USER: lab, POSTGRES_PASSWORD: lab-disposable-only, POSTGRES_DB: capacity_lab}
+        ports: ['5432:5432']
+        options: >-
+          --cpus 2 --memory 1g --memory-swap 1g
+          --health-cmd "pg_isready -U lab -d capacity_lab"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      DATABASE_URL: postgres://lab:lab-disposable-only@127.0.0.1:5432/capacity_lab?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+      RECEIPT_TEST_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Verify release regressions against real disposable PostgreSQL
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db | tee reconciliation-tests.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('reconciliation-tests.log').read_text()
+          for name in ('TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests'):
+              assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
+          PY
+      - name: Measure actual conditional polling handler and SQL cost
+        env: {POLL_COST_LOCAL: 'true'}
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers -run '^TestPollingCostActualHandlers$' | tee polling-cost.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('polling-cost.log').read_text()
+          assert s.count('POLL_COST_RESULT ')==12, 'Incomplete polling measurement'
+          assert '--- PASS: TestPollingCostActualHandlers ' in s
+          PY

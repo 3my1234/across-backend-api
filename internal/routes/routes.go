@@ -193,7 +193,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 			httpMetrics = runtimeSnapshots[0]()
 		}
 		pool := db.Stat()
-		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds(), "acquire_count": pool.AcquireCount(), "empty_acquire_wait_ms_total": pool.EmptyAcquireWaitTime().Milliseconds()}})
 	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id", superOnly, admin.UpdateAdminAccess)
