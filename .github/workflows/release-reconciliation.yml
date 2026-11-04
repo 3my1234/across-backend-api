@@ -44,6 +44,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('polling-cost.log').read_text()
-          assert s.count('POLL_COST_RESULT ')==12, 'Incomplete polling measurement'
+          assert s.count('POLL_COST_RESULT ')==16, 'Incomplete polling measurement'
           assert '--- PASS: TestPollingCostActualHandlers ' in s
           PY
