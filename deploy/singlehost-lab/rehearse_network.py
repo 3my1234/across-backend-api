@@ -5,7 +5,7 @@ def main():
     if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('disposable CI only')
     run='singlehost-network-'+uuid.uuid4().hex[:12];network=container=None
     try:
-        network=call(['docker','network','create','--internal','--subnet','172.29.248.0/24','--ip-range','172.29.248.128/25','--label','atlxpres.network-replay='+run,run])
+        network=call(['docker','network','create','--internal','--subnet','172.29.248.0/24','--ip-range','172.29.248.128/25','--gateway','172.29.248.1','--label','atlxpres.network-replay='+run,run])
         container=call(['docker','run','-d','--network',network,'--ip','172.29.248.10','--label','atlxpres.network-replay='+run,'--cpus','.25','--memory','64m','redis:7.2-alpine','redis-server','--port','8080','--save','','--appendonly','no'])
         deadline=time.monotonic()+10
         while True:
@@ -21,6 +21,7 @@ def main():
         state=json.loads(call(['docker','inspect',container]))[0]
         if state['HostConfig']['PortBindings']:raise ValueError('unexpected published port')
         network_state=json.loads(call(['docker','network','inspect',network]))[0]
+        if host_source!='172.29.248.1' or network_state['IPAM']['Config'][0]['Gateway']!=host_source:raise ValueError('synthetic trusted edge identity mismatch')
         print(json.dumps(dict(private_host_gateway_reachability=True,host_source=host_source,ipam=network_state['IPAM'],published_ports=False,seed_started=False,live_hosts_contacted=False)))
     finally:
         if container:

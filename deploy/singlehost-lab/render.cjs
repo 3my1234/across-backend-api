@@ -30,6 +30,10 @@ function render(input) {
   // Docker may assign a stopped static endpoint's address to a dynamic service
   // started first. Keep all dynamic allocations outside the reserved low addresses.
   doc.networks.lab.ipam.config[0].ip_range='172.29.248.128/25';
+  // Pin the actual host-to-bridge peer to the exact trusted synthetic edge.
+  // Docker otherwise chooses .128 from ip_range, collapsing all forwarded users
+  // onto one untrusted source and consuming a shared community-write quota.
+  doc.networks.lab.ipam.config[0].gateway='172.29.248.1';
   return doc;
 }
 if (require.main===module) console.log(JSON.stringify(render(JSON.parse(fs.readFileSync(process.argv[2],'utf8'))),null,2));
