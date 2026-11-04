@@ -4,16 +4,25 @@ from unittest.mock import patch
 from image_identity import identities,resolve
 
 class ImageIdentityTests(unittest.TestCase):
-    def archive(self,path):
+    def archive(self,path,nested=False):
         config=json.dumps(dict(os='linux',architecture='amd64')).encode()
         config_id='sha256:'+hashlib.sha256(config).hexdigest()
         manifest=json.dumps(dict(config=dict(digest=config_id))).encode()
         manifest_id='sha256:'+hashlib.sha256(manifest).hexdigest()
         index=json.dumps(dict(manifests=[dict(digest=manifest_id)])).encode()
+        extra=[]
+        if nested:
+            digest=hashlib.sha256(index).hexdigest()
+            extra=[('blobs/sha256/'+digest,index)]
+            index=json.dumps(dict(manifests=[dict(digest='sha256:'+digest)])).encode()
         with tarfile.open(path,'w:gz') as stream:
-            for name,data in [('index.json',index),('blobs/sha256/'+config_id[7:],config),('blobs/sha256/'+manifest_id[7:],manifest)]:
+            for name,data in [('index.json',index),('blobs/sha256/'+config_id[7:],config),('blobs/sha256/'+manifest_id[7:],manifest)]+extra:
                 item=tarfile.TarInfo(name);item.size=len(data);stream.addfile(item,io.BytesIO(data))
         return config_id,manifest_id,hashlib.sha256(path.read_bytes()).hexdigest()
+    def test_nested_oci_index_keeps_exact_config_and_manifest_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path,nested=True)
+            self.assertEqual(identities(path,sha,{config}),{config:[config,manifest]})
     def test_only_verified_same_content_descriptors_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'images.tar.gz';config,manifest,sha=self.archive(path)

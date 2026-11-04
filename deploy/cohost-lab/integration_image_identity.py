@@ -16,6 +16,8 @@ def main():
             row=json.load(stream.extractfile('manifest.json'))[0]
             config=stream.extractfile(row['Config']).read()
         expected='sha256:'+hashlib.sha256(config).hexdigest()
+        with tarfile.open(raw) as stream:
+            print('Docker save root index:',stream.extractfile('index.json').read().decode(),flush=True)
         with raw.open('rb') as source,gzip.open(archive,'wb',compresslevel=1) as target:shutil.copyfileobj(source,target)
         aliases=identities(archive,hashlib.sha256(archive.read_bytes()).hexdigest(),{expected})
         before=resolve(aliases[expected]);assert before in aliases[expected]

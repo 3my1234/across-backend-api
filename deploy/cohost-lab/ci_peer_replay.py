@@ -12,12 +12,15 @@ class PeerReplay:
         self.root=root;self.run=run;self.pg=pg;self.seed=seed;self.output=output
         self.stop=threading.Event();self.drop=threading.Event();self.events=[];self.threads=[];self.daemon=None;self.runner=None
     def __enter__(self):
-        self.temp=tempfile.TemporaryDirectory(prefix='axpeer-',dir='/tmp');self.base=Path(self.temp.name);self.base.chmod(0o700)
+        # sshd StrictModes rejects authorized_keys below world-writable/tmp.
+        # A private CI-only directory under/root also fits the socket limit.
+        self.temp=tempfile.TemporaryDirectory(prefix='axpeer-',dir='/root');self.base=Path(self.temp.name);self.base.chmod(0o700)
         try:
             self.setup()
             return self
         except BaseException:
             self.__exit__(None,None,None)
+            if (self.output/'replay-sshd.log').exists():print((self.output/'replay-sshd.log').read_text()[-5000:],flush=True)
             raise
     def setup(self):
         def call(*args):return subprocess.check_output(args,text=True,timeout=15).strip()
