@@ -1,9 +1,23 @@
-import struct,tempfile,unittest
+import json,struct,tempfile,unittest
+from unittest.mock import patch
 from pathlib import Path
 from runner import SingleHostRunner
 from verifier_build import validate_binary,INTERPRETER
+from runtime import inventory
 
 class PackagedRuntimeTests(unittest.TestCase):
+    def test_application_inventory_scopes_nonce_and_exact_compose_project(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder);run='cohost-'+'a'*16;project=run+'-singlehost';ident='b'*64
+            (base/'compose.runtime.json').write_text(json.dumps(dict(name=project,services={'api1':{}})))
+            row={'Id':ident,'Config':{'Labels':{'atlxpres.cohost.run':run,'com.docker.compose.service':'api1','com.docker.compose.project':project}}}
+            with patch('runtime.call',side_effect=[ident.encode(),json.dumps([row]).encode()]) as command:
+                manifest,_=inventory(base)
+            query=command.call_args_list[0].args[0]
+            self.assertIn('label=atlxpres.cohost.run='+run,query)
+            self.assertIn('label=com.docker.compose.project='+project,query)
+            self.assertEqual(manifest['container_ids'],[ident])
+
     def test_relative_coordinator_paths_are_absolute_for_docker_and_ssh(self):
         runner=SingleHostRunner(Path('.'),Path('relative-config'),{},Path('relative-evidence'))
         self.assertTrue(runner.root.is_absolute())

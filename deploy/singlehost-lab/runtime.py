@@ -40,7 +40,11 @@ def compose(base,*args,timeout=120):
 
 def inventory(base,timeout=30):
     doc=json.loads((base/'compose.runtime.json').read_text());run=doc['name'].removesuffix('-singlehost');identity(run)
-    ids=call(['docker','ps','-aq','--no-trunc','--filter','label='+LABEL+'='+run],timeout=timeout).decode().split()
+    # The generator has the same evidence nonce but belongs to a separate
+    # workload (and normally a separate host). Inventory only this immutable
+    # Compose project as well as its run label, never the generator container.
+    ids=call(['docker','ps','-aq','--no-trunc','--filter','label='+LABEL+'='+run,
+        '--filter','label=com.docker.compose.project='+doc['name']],timeout=timeout).decode().split()
     rows=json.loads(call(['docker','inspect',*ids],timeout=timeout)) if ids else []
     if ids:validate_inventory(dict(run=run,container_ids=ids),rows)
     names={r['Config']['Labels']['com.docker.compose.service']:r['Id'] for r in rows}
