@@ -807,3 +807,23 @@ Rejected candidate: statement-local MATERIALIZED identity view. Full-population 
 4. Full unchanged 100/500-stage qualification and sustained 500 for 30 minutes remain unpassed.
 
 No production deployment, migration, infrastructure purchase, K3s installation, pool increase or live-host rerun occurred during this work. Mobile/UI and ordinary dirty backend checkout remain untouched.
+
+## Optimized API artifact prepared, not deployed
+
+Local qualification/release-api-3377ead/api.bin built from clean exact release commit 3377ead8a320c848f2c2455fe399d2c77b698f09 after successful regression 42054339381. Linux amd64 ELF and Alpine loader compatibility validated; SHA256/size/source recorded in manifest.json. Existing VPS package still references the older application image; do not rerun it and claim the service fix was tested. Next work is exact-source disposable packaging/rehearsal of the optimized API, then the existing staged isolated VPS qualification. No alternative load-testing framework is required. 500-session qualification remains unpassed; no live test or production deployment occurred.
+
+## 2026-11-05: optimized running API identity integrated ï¿½ rehearsal pending
+
+Orchestration source 1461180 includes a separately pinned API overlay from release 3377ead8a320c848f2c2455fe399d2c77b698f09 (regression 42054339381). Cached base image and fixture sources are unchanged; api_source is recorded separately from image_source. No repeated full image-bundle upload is needed. The package carries api.bin and api-artifact.json; extractor makes the non-secret executable 0555 and mounts it read-only on api1/api2.
+
+Before workload, api-identity checks both owned container states, exact read-only mount sources, command paths and SHA256 of each /proc/1/exe against approved api_sha256. Results retained in api-running.json. Wrong executable hash, source or writable mount fails closed. Cleanup ownership validation does not depend on API binary health.
+
+Offline safety suite: 26 tests run; 24 passed and 2 Unix-specific tests skipped on Windows; Linux rehearsal exercises those paths. Retained snapshot renderer compatibility verified: only approved CPU split and API read-only mount additions changed. Latest operator audits previous actual run b7e67cf0eb6c4047 before creating anything. Full disposable rehearsal 42057731920 pending. Superseded 42057168538 failed on external Go proxy download; 42057451321 cancelled for cleanup-independence correction. No live VPS setup or production change initiated.
+
+## Latest checkpoint: optimized API package validated and frozen — 2026-11-05
+
+Full disposable rehearsal 42057731920 PASSED at orchestration 14611802ef8a653fde1221e7ef41c26d889a3743. Pinned effective API release 3377ead8a320c848f2c2455fe399d2c77b698f09; optimized API SHA256 d7ca5d37a8980fb465971c36fb64387721ff46c95f40802f01c6964e6657d427. Both running /proc/1/exe checksums verified, including over restricted SSH. Actual staged coordinator smoke, public-fault owned-stop, independent systemd deadline cleanup and cleanup_completed all passed. These are disposable preparation results, not 500-session capacity evidence.
+
+Fresh review qualification/singlehost-review/cohost-ad6460f9829d43d5 prepared with unchanged caps and stages. All reviewed hashes verified. Frozen execution reference experiment/approved-singlehost-1461180 published. Uses exact CI-produced api.bin and api-artifact.json, read-only API mounts, cached old base images and cached full synthetic snapshot from b7e67cf0eb6c4047. No repeated full Docker image archive upload/import required while existing reviewed images remain cached. New operator first audits b7 cleanup/current keys/containers; requires fresh baseline, independent watchdog and running optimized executable identity before load. API artifact health checks do not block exact test cleanup.
+
+No live resources created; review authorized=false/unconsumed. Existing operator with this fresh review is the next executable step, requiring local root password entry. Do not rerun consumed older reviews. Target remains 20 -> 100 -> gradual500 -> sustained500 for30minutes, all existing performance/integrity/safety gates unchanged. No production deployment/migration, DNS, Coolify, K3s or purchase authorized. Last actual VPS result remains 20 sessions with latency failures and 100/100 writes exactly once. Catalogue p95 and optimized VPS endpoint latencies remain unverified until execution.
