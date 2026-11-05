@@ -107,6 +107,9 @@ def main():
         exec_lab(base,'exporter','prepare-sessions')
         exec_lab(base,'exporter','notification-prepare',output/'notification-preparation.log')
         sql(base,'CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
+        if os.environ.get('BROWSING_PROFILE')=='true':
+            from profile_browsing import exercise as profile_browsing
+            profile_browsing(root,base,output)
         compose(base,'start','api1','api2','gateway')
         deadline=time.monotonic()+90
         import urllib.request
