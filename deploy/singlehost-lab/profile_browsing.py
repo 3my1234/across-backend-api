@@ -12,6 +12,7 @@ def exercise(root,base,output):
     report={'capacity_qualified':False,'application_modified':False,'comparisons':{}}
     report['population']=json.loads(sql(base,"SELECT json_build_object('providers',(SELECT count(*) FROM provider_organizations),'services',(SELECT count(*) FROM provider_listings),'products',(SELECT count(*) FROM products))"))
     if report['population']!={'providers':500,'services':5000,'products':5000}:raise ValueError('full browsing population required')
+    profile_request_parameters(root,base,output,sql)
     for name,file,function,args in cases:
         source=(root/'internal/controllers'/file).read_text()
         source=source[source.index('func (',source.index('package controllers')):]
@@ -40,3 +41,26 @@ def exercise(root,base,output):
         (output/'browsing-profile.json').write_text(json.dumps(report,indent=2))
     (output/'browsing-profile.json').write_text(json.dumps(report,indent=2))
     print('BROWSING_PROFILE '+json.dumps(report),flush=True)
+
+
+def profile_request_parameters(root,base,output,sql):
+    """Exact workload search values; independent SQL timing, not API capacity."""
+    source=(root/'internal/controllers/provider_marketplace_controller.go').read_text()
+    body=source[source.index('func (m *ProviderMarketplaceController) listListings('):]
+    query=re.search(r'\.db.Query\(c.Context\(\), `(.+?)`',body,re.S)[1].strip()
+    report={'scope':'same SQL, exact workload search parameters, disposable database only','cases':{}}
+    for term in ('','Synthetic','hotel','trousers'):
+        values=["''","'"+term+"'","'public'","''","''",'NULL','NULL','21','true','0','0',"''","''"]
+        args=','.join(values)
+        for mode in ('force_custom_plan','force_generic_plan'):
+            for jit in ('on','off'):
+                name=(term or 'empty')+'-'+mode+'-jit-'+jit
+                samples=[];plans=[]
+                for iteration in range(3):
+                    raw=sql(base,'BEGIN; SET LOCAL plan_cache_mode='+mode+'; SET LOCAL jit='+jit+'; PREPARE request_profile AS '+query+'; EXPLAIN (ANALYZE,BUFFERS,SETTINGS,FORMAT JSON) EXECUTE request_profile('+args+'); ROLLBACK;')
+                    plan=json.JSONDecoder().raw_decode(raw[raw.index('['):])[0][0]
+                    samples.append(plan['Execution Time']);plans.append(plan)
+                report['cases'][name]={'values':values,'execution_ms':samples,'median_ms':statistics.median(samples),'planning_ms':[p['Planning Time'] for p in plans],'jit':[p.get('JIT') for p in plans]}
+                (output/('request-'+name+'.json')).write_text(json.dumps(plans,indent=2))
+                print('REQUEST_PROFILE '+name+' '+json.dumps(report['cases'][name]),flush=True)
+                (output/'request-parameter-profile.json').write_text(json.dumps(report,indent=2))
