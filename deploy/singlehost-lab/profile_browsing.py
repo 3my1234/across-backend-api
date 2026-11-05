@@ -11,6 +11,7 @@ def exercise(root,base,output):
            ('catalogue-generic','catalog_controller.go','ListProducts',"false,0,0,true,'NG','','','all'"))
     report={'capacity_qualified':False,'application_modified':False,'comparisons':{}}
     report['population']=json.loads(sql(base,"SELECT json_build_object('providers',(SELECT count(*) FROM provider_organizations),'services',(SELECT count(*) FROM provider_listings),'products',(SELECT count(*) FROM products))"))
+    if report['population']!={'providers':500,'services':5000,'products':5000}:raise ValueError('full browsing population required')
     for name,file,function,args in cases:
         source=(root/'internal/controllers'/file).read_text()
         source=source[source.index('func (',source.index('package controllers')):]

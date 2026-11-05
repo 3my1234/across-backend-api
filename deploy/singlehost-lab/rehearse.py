@@ -110,6 +110,11 @@ def main():
                 fragments=[s for s in re.findall(r' INSERT INTO '+table+r'\(provider_id,[^;]+;',source) if 'generate_series(1,%d)' in s]
                 if len(fragments)!=1:raise ValueError('unique original browsing expansion required')
                 sql(base,fragments[0].replace('%d','9'))
+            sql(base,'ANALYZE;')
+            from profile_browsing import exercise as profile_browsing
+            profile_browsing(root,base,output)
+            result['browsing_profile_completed']=True
+            return  # SQL-only profile: no sessions or load; finally cleans up.
         if args.snapshot_build:
             from rehearse_snapshot import exercise as snapshot_replay
             result['snapshot']=snapshot_replay(root,base,output,sentinel)
@@ -118,11 +123,6 @@ def main():
         exec_lab(base,'exporter','prepare-sessions')
         exec_lab(base,'exporter','notification-prepare',output/'notification-preparation.log')
         sql(base,'CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
-        if os.environ.get('BROWSING_PROFILE')=='true':
-            from profile_browsing import exercise as profile_browsing
-            profile_browsing(root,base,output)
-            result['browsing_profile_completed']=True
-            return  # Profiling only; finally still performs exact test cleanup.
         compose(base,'start','api1','api2','gateway')
         deadline=time.monotonic()+90
         import urllib.request
