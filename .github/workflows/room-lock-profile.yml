@@ -1,5 +1,9 @@
 name: Disposable room-lock SQL profile
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/room-lock-profile]
+    paths: [deploy/singlehost-lab/profile_room_lock.py, .github/workflows/room-lock-profile.yml]
 permissions:
   contents: read
 jobs:
