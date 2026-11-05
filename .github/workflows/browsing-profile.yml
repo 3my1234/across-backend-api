@@ -17,6 +17,7 @@ jobs:
       - name: Build disposable tools and profile unchanged browsing queries
         env:
           BROWSING_PROFILE: 'true'
+          CATALOGUE_PROFILE: 'true'
         run: |
           npm install --prefix /tmp/singlehost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
           sudo apt-get update -qq
@@ -27,7 +28,7 @@ jobs:
           docker pull haproxy:3.0-alpine
           docker pull grafana/k6:2.3.0
           export NODE_PATH=/tmp/singlehost-tools/node_modules
-          sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH,BROWSING_PROFILE python3 deploy/singlehost-lab/rehearse.py --foundation
+          sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH,BROWSING_PROFILE,CATALOGUE_PROFILE python3 deploy/singlehost-lab/rehearse.py --foundation
       - uses: actions/upload-artifact@v4
         if: always()
         with:

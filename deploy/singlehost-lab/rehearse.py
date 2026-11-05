@@ -122,6 +122,11 @@ def main():
                 if len(fragments)!=1:raise ValueError('unique original browsing expansion required')
                 sql(base,fragments[0].replace('%d','9'))
             sql(base,'ANALYZE;')
+            if os.environ.get('CATALOGUE_PROFILE')=='true':
+                from profile_catalogue import exercise as catalogue_profile
+                catalogue_profile(root,base,output)
+                result['catalogue_profile_completed']=True
+                return
             from profile_browsing import exercise as profile_browsing
             profile_browsing(root,base,output)
             result['browsing_profile_completed']=True
