@@ -7,7 +7,7 @@ ARCHIVE_SHA='020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366'
 APP_SOURCE='13d316c62ce8bdd35c1c2fe72bf3d4d357581914'
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
@@ -16,6 +16,12 @@ def main():
     if subprocess.check_output(['git','ls-files','--others','--exclude-standard','--',*scope],cwd=root,text=True).strip():raise ValueError('uncommitted execution source files present')
     from provenance import verify
     verify(root)
+    from api_artifact import validate_files
+    artifact=json.loads((a.api_directory/'api-artifact.json').read_text())
+    validate_files(a.api_directory,artifact)
+    replay=json.loads((a.api_directory/'result.json').read_text())
+    running=json.loads((a.api_directory/'api-running.json').read_text())
+    if replay.get('passed') is not True or replay.get('cleanup_completed') is not True or replay.get('actual_staged_coordinator_smoke_passed') is not True or running.get('both_running_apis_verified') is not True or any(replay.get(k)!=artifact[k] or running.get(k)!=artifact[k] for k in ('api_source','api_sha256','api_regression_run')):raise ValueError('optimized API running/cleanup rehearsal proof required')
     from snapshot import validate
     fixture=validate(a.snapshot_directory/'fixture.dump',json.loads((a.snapshot_directory/'fixture.json').read_text()))
     proof=json.loads((a.snapshot_directory/'snapshot-proof.json').read_text())
@@ -28,14 +34,16 @@ def main():
     # newly approved 1->2 database CPU resource change in its original renderer.
     original_renderer=subprocess.check_output(['git','show',proof['source']+':deploy/singlehost-lab/render.cjs'],cwd=root,text=True)
     approved_renderer=original_renderer.replace('doc.services.postgres=db;','doc.services.postgres=db;\n  doc.services.postgres.cpus=2;').replace("s.environment.LAB_DB_CPUS='1'","s.environment.LAB_DB_CPUS='2'")
+    approved_renderer=approved_renderer.replace('  delete doc.services.gateway.ports;','  delete doc.services.gateway.ports;\n  if (input.api_override===true) for (const name of [\'api1\',\'api2\']) (doc.services[name].volumes??=[]).push(base+\'/api.bin:/app/api:ro\');')
     if (root/'deploy/singlehost-lab/render.cjs').read_text()!=approved_renderer:raise ValueError('renderer change exceeds approved CPU reallocation; retained snapshot proof cannot be reused')
     metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
     if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
     run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
-    input_file=review/'render.json';input_file.write_text(json.dumps(dict(run=run,images=metadata['images'],verifier_override=True)))
+    input_file=review/'render.json';input_file.write_text(json.dumps(dict(run=run,images=metadata['images'],verifier_override=True,api_override=True)))
     compose=subprocess.check_output(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(input_file)])
     (review/'compose.json').write_bytes(compose)
     for name in ('fixture.dump','fixture.json','snapshot-proof.json'):shutil.copyfile(a.snapshot_directory/name,review/name)
+    for name in ('api.bin','api-artifact.json'):shutil.copyfile(a.api_directory/name,review/name)
     build_env={**os.environ,'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'}
     from verifier_build import build_args,validate_binary
     subprocess.run(build_args(review/'verifier.bin'),cwd=root,env=build_env,check=True)
@@ -49,6 +57,7 @@ def main():
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
+    approval.update(artifact)
     approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
     if a.reuse_server_snapshot_from:
         if not re.fullmatch('cohost-[a-f0-9]{16}',a.reuse_server_snapshot_from):raise ValueError('fixed cached-snapshot nonce required')
@@ -56,7 +65,7 @@ def main():
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')
-    for folder,names in (('cohost-lab',cohost),('singlehost-lab',('runtime.py','supervise.py','monitor.py','rehearse.py','policy.py','snapshot.py'))):
+    for folder,names in (('cohost-lab',cohost),('singlehost-lab',('runtime.py','supervise.py','monitor.py','rehearse.py','policy.py','snapshot.py','api_artifact.py','verifier_build.py'))):
         destination=review/'src/deploy'/folder;destination.mkdir(parents=True)
         for name in names:shutil.copyfile(root/'deploy'/folder/name,destination/name)
     shutil.copyfile(root/'deploy/singlehost-lab/install_host.py',review/'install_host.py')

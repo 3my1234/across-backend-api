@@ -32,6 +32,9 @@ def validate_approval(base):
     if hashlib.sha256((base/'compose.json').read_bytes()).hexdigest()!=approval.get('compose_sha256'):raise ValueError('reviewed Compose changed')
     if hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()!=approval['verifier_sha256']:raise ValueError('reviewed verifier binary changed')
     if not re.fullmatch('[a-f0-9]{40}',approval.get('source_commit','')):raise ValueError('immutable source required')
+    if 'api_sha256' in approval:
+        from api_artifact import validate_files
+        validate_files(base,approval)
     return approval
 
 def guard_ready(base):
@@ -147,6 +150,9 @@ def access(base,command):
         with (base/'trial-started').open('x') as out:out.write(str(time.time()))
         print('single-host trial activated');return
     if not (base/'trial-started').exists():raise ValueError('trial not activated')
+    if command=='api-identity':
+        from api_artifact import verify_running
+        print(json.dumps(verify_running(base,approval)));return
     if command.startswith('control '):
         encoded=command[8:]
         if len(encoded)>100000:raise ValueError('oversized control request')

@@ -55,7 +55,7 @@ def main():
         if not args.foundation:
             small_queue_preflight(root,images,output)
             result['small_queue_preflight_passed']=True
-        (base/'render.json').write_text(json.dumps(dict(run=run,images=images,verifier_override=True)))
+        (base/'render.json').write_text(json.dumps(dict(run=run,images=images,verifier_override=True,api_override=True)))
         # Build with the exact flags used by the Windows review packager.
         from verifier_build import build_args,validate_binary
         call(['docker','build','--target','build','-f','deploy/capacity-lab/Dockerfile','-t','singlehost-verifier-builder:local','.'],timeout=600)
@@ -64,6 +64,17 @@ def main():
         validate_binary(base/'verifier.bin')
         (base/'verifier.bin').chmod(0o500)
         result['verifier_sha256']=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()
+        from api_artifact import SOURCE,build_args as api_build_args,manifest as api_manifest
+        release=Path('/tmp/atlxpres-optimized-api-source')
+        call(['git','-c','safe.directory='+str(root),'worktree','add','--detach',str(release),SOURCE])
+        try:
+            call(['docker','run','--rm','--network','none','-e','CGO_ENABLED=0','-e','GOOS=linux','-e','GOARCH=amd64',
+                '-v',str(release)+':/release:ro','-v',str(base)+':/out','-w','/release','singlehost-verifier-builder:local',*api_build_args('/out/api.bin')],timeout=180)
+        finally:call(['git','-c','safe.directory='+str(root),'worktree','remove','--force',str(release)])
+        (base/'api.bin').chmod(0o555)
+        artifact=api_manifest(base/'api.bin');(base/'api-artifact.json').write_text(json.dumps(artifact,indent=2))
+        result.update(artifact)
+        shutil.copyfile(base/'api.bin',output/'api.bin');shutil.copyfile(base/'api-artifact.json',output/'api-artifact.json')
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
         if os.environ.get('BROWSING_PROFILE')=='true':
             for service in doc['services'].values():
@@ -136,6 +147,9 @@ def main():
                 if time.monotonic()>deadline:raise
                 time.sleep(1)
         exec_lab(base,'lifecycle','lifecycle',output/'lifecycle.jsonl')
+        from api_artifact import verify_running
+        running=verify_running(base,artifact)
+        (output/'api-running.json').write_text(json.dumps(running,indent=2))
         from queue_probe import exercise as queue_probe
         queue_probe(lambda text:sql(base,text),lambda:exec_lab(base,'queue-check','queue-check',output/'queue-check.jsonl'))
         raw=exec_lab(base,'exporter','export');fixtures=json.loads(raw)

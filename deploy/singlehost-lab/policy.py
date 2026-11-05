@@ -15,6 +15,9 @@ def validate(approval,now=None):
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')
     if approval.get('stages')!=[list(stage) for stage in STAGES]:raise ValueError('original stage sequence required')
+    if 'api_sha256' in approval:
+        from api_artifact import SOURCE,REGRESSION_RUN
+        if approval.get('api_source')!=SOURCE or approval.get('api_regression_run')!=REGRESSION_RUN or not re.fullmatch('[a-f0-9]{64}',approval['api_sha256']):raise ValueError('unreviewed optimized API source/hash')
     for key,size in (('source_commit',40),('compose_sha256',64),('image_archive_sha256',64),('verifier_sha256',64),('snapshot_sha256',64)):
         if not re.fullmatch('[a-f0-9]{'+str(size)+'}',approval.get(key,'')):raise ValueError('immutable identity required: '+key)
     return approval

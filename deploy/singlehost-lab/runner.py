@@ -57,6 +57,11 @@ class SingleHostRunner(Runner):
             except Exception:
                 if time.monotonic()>deadline:raise
                 time.sleep(1)
+        if 'api_sha256' in self.approval:
+            running=json.loads(self.ssh('main','api-identity',timeout=40))
+            if running.get('both_running_apis_verified') is not True or any(running.get(k)!=self.approval[k] for k in ('api_source','api_sha256','api_regression_run')):raise ValueError('optimized running API identity unverified')
+            (self.output/'api-running.json').write_text(json.dumps(running,indent=2))
+            print('Both running API executable checksums match the approved optimized release.',flush=True)
         self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
         from queue_probe import exercise as queue_probe
         queue_probe(self.sql,lambda:self.lab('queue-check','queue-check',self.output/'queue-check.jsonl'))

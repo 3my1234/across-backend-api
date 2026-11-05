@@ -31,3 +31,9 @@ const overridden=render({run,images,verifier_override:true});
 assert(overridden.services.verifier.volumes.includes('/root/atlxpres-singlehost/'+run+'/verifier.bin:/app/lab:ro'));
 for(const name of Object.keys(doc.services)) if(name!=='verifier') assert.deepEqual(overridden.services[name],doc.services[name]);
 console.log('single-host renderer isolation/caps/identity checks passed');
+const api=render({run,images,api_override:true});
+for(const name of ['api1','api2']) {
+  assert(api.services[name].volumes.includes('/root/atlxpres-singlehost/'+run+'/api.bin:/app/api:ro'));
+  assert.equal(api.services[name].image,doc.services[name].image);
+}
+for(const name of Object.keys(doc.services)) if(!['api1','api2'].includes(name)) assert.deepEqual(api.services[name],doc.services[name]);

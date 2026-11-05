@@ -13,6 +13,7 @@ def exercise(root,base,output,sentinel):
         database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64,verifier_sha256=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=json.loads((output/'fixture.json').read_text())['sha256'] if (output/'fixture.json').exists() else 'f'*64)
+    approval.update(json.loads((base/'api-artifact.json').read_text()))
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
     (base/'supervisor.json').write_text(json.dumps(dict(run=run,production_container_ids=[sentinel],deadline_unix=time.time()+7200)))
     (base/'setup.ready').touch()
@@ -72,6 +73,10 @@ def exercise(root,base,output,sentinel):
         from runner import SingleHostRunner
         runner=SingleHostRunner(root,config,approval,output)
         runner.start()
+        api_identity=json.loads(ssh('api-identity'))
+        if api_identity.get('both_running_apis_verified') is not True or api_identity.get('api_sha256')!=approval['api_sha256']:raise ValueError('SSH running-API verification failed')
+        (output/'api-running.json').write_text(json.dumps(api_identity,indent=2))
+        result['running_api_identity_over_restricted_ssh_passed']=True
         def control(op,input=None):return ssh('control '+base64.b64encode(json.dumps(op).encode()).decode(),input=input)
         value=control(dict(action='exec',service='postgres',args=['psql','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1']),input=b'SELECT 1;')
         if value.strip()!=b'1':raise ValueError('synthetic PostgreSQL control failed')
