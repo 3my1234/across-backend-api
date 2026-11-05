@@ -52,6 +52,17 @@ def profile_request_parameters(root,base,output,sql):
     for term in ('','Synthetic','hotel','trousers'):
         values=["''","'"+term+"'","'public'","''","''",'NULL','NULL','21','true','0','0',"''","''"]
         args=','.join(values)
+        candidate="WITH discovery_identity AS MATERIALIZED (SELECT provider_id,paid_active,listing_limit,badge_tier FROM provider_public_identity) "+query.replace('FROM provider_public_identity','FROM discovery_identity')
+        literal=lambda statement:re.sub(r'\$(\d+)',lambda match:values[int(match[1])-1],statement)
+        equal=sql(base,"BEGIN; SELECT (SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(query)+") q)=(SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(candidate)+") q); ROLLBACK;")
+        candidate_samples=[]
+        for iteration in range(3):
+            raw=sql(base,'BEGIN; SET LOCAL plan_cache_mode=force_custom_plan; PREPARE request_profile AS '+candidate+'; EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE request_profile('+args+'); ROLLBACK;')
+            plan=json.JSONDecoder().raw_decode(raw[raw.index('['):])[0][0]
+            candidate_samples.append(plan['Execution Time'])
+            (output/('candidate-'+(term or 'empty')+'-plan.json')).write_text(json.dumps(plan,indent=2))
+        report['cases'][(term or 'empty')+'-materialized-custom']={'values':values,'median_ms':statistics.median(candidate_samples),'execution_ms':candidate_samples,'ordered_full_rows_equal':'t' in equal.splitlines(),'adopted':False}
+        print('REQUEST_CANDIDATE '+(term or 'empty')+' '+json.dumps(report['cases'][(term or 'empty')+'-materialized-custom']),flush=True)
         for mode in ('force_custom_plan','force_generic_plan'):
             for jit in ('on','off'):
                 name=(term or 'empty')+'-'+mode+'-jit-'+jit
