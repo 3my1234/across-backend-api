@@ -62,6 +62,12 @@ try {
     $deadline=[DateTime]::UtcNow.AddMinutes(20)
     while ($true) {
         $status=Trial 'setup-status' | ConvertFrom-Json
+        if ([DateTime]::UtcNow -gt $deadline) { throw 'Bounded setup wait expired' }
+        if ($status.observation_available -eq $false) {
+            Write-Host 'Setup status unavailable over SSH; retrying the SAME job within the original setup deadline. No workload dispatched.'
+            Start-Sleep -Seconds 15
+            continue
+        }
         Write-Host "Single-host setup: phase=$($status.phase), ready=$($status.ready), closed=$($status.closed)"
         if ($status.closed -or $status.guard_error) { throw 'Single-host setup aborted; no workload dispatch' }
         if ($status.ready) { break }

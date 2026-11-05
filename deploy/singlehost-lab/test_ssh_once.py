@@ -1,9 +1,22 @@
-import subprocess,unittest
+import json,subprocess,unittest
 from pathlib import Path
 from unittest.mock import patch,Mock
-from ssh_once import execute
+from ssh_once import execute,observe
 
 class LocalSshTests(unittest.TestCase):
+    def test_two_setup_timeouts_are_unknown_then_fresh_ready_can_resume(self):
+        with patch('ssh_once.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',45),subprocess.TimeoutExpired('ssh',45),Mock(stdout=b'{"ready":true}')]) as call:
+            status=json.loads(observe(Path('private'),'setup-status'))
+            self.assertFalse(status['observation_available']);self.assertFalse(status['ready'])
+            self.assertIsNone(status['closed']);self.assertIsNone(status['guard_error'])
+            self.assertEqual(observe(Path('private'),'setup-status'),b'{"ready":true}')
+            self.assertTrue(all(args[0][-1]=='setup-status' for args,kw in call.call_args_list))
+    def test_authentication_failure_is_not_hidden(self):
+        with patch('ssh_once.subprocess.run',side_effect=subprocess.CalledProcessError(255,'ssh',stderr=b'Permission denied')):
+            with self.assertRaises(subprocess.CalledProcessError):observe(Path('private'),'setup-status')
+    def test_active_trial_status_timeout_remains_fatal(self):
+        with patch('ssh_once.subprocess.run',side_effect=subprocess.TimeoutExpired('ssh',45)):
+            with self.assertRaises(subprocess.TimeoutExpired):observe(Path('private'),'status')
     def test_stalled_read_only_status_reconnects_once_without_setup(self):
         with patch('ssh_once.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',45),Mock(stdout=b'{"ready":true}')]) as call:
             self.assertEqual(execute(Path('private'),'setup-status'),b'{"ready":true}')

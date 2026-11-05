@@ -1,5 +1,5 @@
 """Bounded local SSH status/cleanup calls; retry only a read-only status timeout."""
-import argparse,subprocess,sys
+import argparse,json,subprocess,sys
 from pathlib import Path
 
 def execute(private,command):
@@ -13,6 +13,14 @@ def execute(private,command):
             if command=='cleanup' or attempt:raise
             print('Read-only SSH status timed out; reconnecting once to the SAME server job.',file=sys.stderr,flush=True)
 
+def observe(private,command):
+    """A missing pre-load observation is unknown, never permission to load."""
+    try:
+        return execute(private,command)
+    except subprocess.TimeoutExpired:
+        if command!='setup-status':raise
+        return json.dumps(dict(observation_available=False,phase='status-unavailable',ready=False,closed=None,guard_error=None)).encode()
+
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--private',type=Path,required=True);p.add_argument('--command',required=True);a=p.parse_args()
-    sys.stdout.buffer.write(execute(a.private,a.command))
+    sys.stdout.buffer.write(observe(a.private,a.command))
