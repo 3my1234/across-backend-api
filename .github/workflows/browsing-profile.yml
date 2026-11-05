@@ -1,5 +1,8 @@
 name: Disposable browsing query comparison
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/browsing-profile]
 permissions:
   contents: read
 jobs:
