@@ -34,7 +34,7 @@ def main():
     finally:
         subprocess.run(['docker','rm','-f',proxy],check=False);server.shutdown();server.server_close()
     def sql(text):
-        return subprocess.check_output(['docker','exec','-i',name,'psql','-U','postgres','-XAtq','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=90).decode().strip()
+        return subprocess.check_output(['docker','exec','-i',name,'psql','-h','127.0.0.1','-U','postgres','-XAtq','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=90).decode().strip()
     subprocess.run(['docker','run','--name',name,'-d','--network','none','--cpus','1','--memory','3g','--memory-swap','3g','-e','POSTGRES_HOST_AUTH_METHOD=trust','postgres:16-alpine'],check=True)
     try:
         for _ in range(60):
