@@ -189,6 +189,11 @@ class Runner:
             (public/'sql-statements.json').write_text(self.sql("SELECT coalesce(json_agg(s),'[]') FROM (SELECT queryid::text,calls,total_exec_time,mean_exec_time,max_exec_time,rows,query FROM pg_stat_statements WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY total_exec_time DESC LIMIT 100)s;"))
         except Exception as error:(public/'sql-collection-error.txt').write_text(str(error))
         failures=([aborted] if aborted else [])
+        # Retain proxy-side queue/connect/backend/total timings before cleanup.
+        # These are a different observation from the client's WAN/SSH latency;
+        # never subtract percentile values as if they described one request.
+        try:self.control('main','logs','gateway',destination=public/'gateway-http.log')
+        except Exception as error:failures.append('gateway timing collection: '+str(error))
         try:
             inspect=json.loads(subprocess.check_output(['docker','inspect','cohost-generator'],text=True,timeout=10))[0]
             if inspect['Config']['Labels'].get('atlxpres.cohost.run')!=self.approval['run']:raise RuntimeError('wrong generator owner')

@@ -1,5 +1,6 @@
 """Disposable PostgreSQL-only comparison; never accepts a remote database."""
 import json,statistics,subprocess,os,time
+import threading,urllib.request,http.server
 from pathlib import Path
 
 OLD="SELECT kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=chat_rooms.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE state END FROM chat_rooms WHERE id=$1::uuid FOR UPDATE"
@@ -8,6 +9,30 @@ NEW="SELECT r.kind,CASE WHEN h.engagement_deadline<=clock_timestamp() THEN 'clos
 def main():
     if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('disposable GitHub runner only')
     name='atlxpres-room-lock-profile';out=Path('room-lock-evidence');out.mkdir()
+    # Validate actual non-root HAProxy config and emitted timing logs on CI.
+    cfg=(Path(__file__).resolve().parents[1]/'capacity-lab/haproxy.cfg').read_text()
+    cfg=cfg.replace('bind :8080','bind :18080').replace('api1:8080','api1:18081').replace('api2:8080','api2:18081')
+    config=(out/'haproxy.cfg').resolve();config.write_text(cfg);config.chmod(0o644)
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200);self.end_headers();self.wfile.write(b'ok')
+        def log_message(self,*unused):pass
+    server=http.server.ThreadingHTTPServer(('127.0.0.1',18081),Handler)
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    proxy='atlxpres-gateway-timing-profile'
+    try:
+        subprocess.run(['docker','run','-d','--name',proxy,'--network','host','--add-host','api1:127.0.0.1','--add-host','api2:127.0.0.1',
+            '-v',str(config)+':/usr/local/etc/haproxy/haproxy.cfg:ro','haproxy:3.0-alpine'],check=True)
+        for _ in range(30):
+            try:
+                with urllib.request.urlopen('http://127.0.0.1:18080/timing-proof',timeout=2) as response:
+                    if response.status==200:break
+            except OSError:time.sleep(.2)
+        log=subprocess.check_output(['docker','logs',proxy],text=True,stderr=subprocess.STDOUT)
+        if 'GET /timing-proof HTTP/1.1' not in log:raise ValueError('gateway timing log absent')
+        (out/'gateway-http.log').write_text(log)
+    finally:
+        subprocess.run(['docker','rm','-f',proxy],check=False);server.shutdown();server.server_close()
     def sql(text):
         return subprocess.check_output(['docker','exec','-i',name,'psql','-U','postgres','-XAtq','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=90).decode().strip()
     subprocess.run(['docker','run','--name',name,'-d','--network','none','--cpus','1','--memory','3g','--memory-swap','3g','-e','POSTGRES_HOST_AUTH_METHOD=trust','postgres:16-alpine'],check=True)
