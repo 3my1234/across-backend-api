@@ -744,3 +744,66 @@ CI41885958823 SUCCESS exact30126317f1fb35c584d4cea5b3370906b64c70ee: bothLinuxsa
 ## 95e94d53 image-import failure; no new trial authorized
 Readattachment2e7b1f4e. BothATL-onlyfive-minutebaselinesPASS; DBstage/relayPASS. Maininitialguardstarted, imagealiasesmissingtriggereddockerload, then localleasefailed5sgate andPythonraisedsetupguardlost. Finallyterminate/wait10timedoutandmaskedinitialcause. No measuredsessionload/CItrialdispatch. TranscriptendsMAINcleanup/evidencepasswordprompts; runtimefoldercurrentlyempty, so cannotassertcleanuporrootguardcause. ExactDBrestricted-keycleanupattempt(BatchMode) rejectedPermissionDenied; no newresourcesorotherSSHcommands. Rejectionmaymeanreaperremovedkey,butnotcleanupverification. AskedonlywhetherexistingwindowreturnedPS; finishexistingcleanupprompts, no newcommand.
 Disablednewoperatorrunsbeforemutations; do notrerun/repackage/dispatch. Offlinequalificationworktreeonly: import_process.stop_importer nowboundedTERM3s->KILL3s withPID/resultlogandoriginalguarderrorpreserved.3focusedmocktestsPASS(.004s), NOTrealDocker/VPSlifecyclequalification. Notcommitted/pushed/deployed; originalfrozen301sourceandhosttoolsunchanged. Thisdoesnotestablishwhyguardfailedorwhetherdaemonimportworkended. Needactualmainwatchdog/transport-diagnostics/image-import/samplelogs plusbothcleanupmarkersbeforeanyfurtherexecutiondecision. Userreportsrepeatedfrustration; doNOTclaimfulltestreadyfromunit/disposableproof, doNOTstartanothertrialwithoutfreshauthorizationafterreview. Existingunrelatedsiteexclusionmustremain; noDNS/production/K3s/purchaseschanges.
+
+## 2026-11-05: rebalanced attempt 8389 stopped by local observation failure
+
+Saved evidence: qualification/rebalanced-stop-8389f31aa1d04d37.json. Server journal shows baseline passed at 12:06:42 +01:00, setup ready at 12:07:47, and clean unit exit at 12:07:52. Snapshot restore passed all table fingerprints and triggers in 50.654 seconds. Final retained health sample: production_healthy=true, no OOM, no health/latency failures. Both cleanup.complete and cleanup.finalized exist. This report confirms completed cleanup records, not an independent current container/key inventory.
+
+Windows operator received two setup-status SSH timeouts and entered finally cleanup before dispatching GitHub. No application load or CPU comparison completed. Narrow correction: pre-load observation timeouts return explicitly unknown/non-ready status and retry only within original 20-minute setup deadline. Authentication failures and active-trial status failures remain fatal; watchdog and 120-minute hard stop unchanged. Five focused tests passed, including two timeouts followed by fresh readiness, no hidden authentication failure, strict active-trial timeout and no automatic cleanup retry. Full exact-source disposable validation still pending. Do not rerun consumed review 8389.
+
+## 2026-11-05: corrected operator full disposable rehearsal passed
+
+Commit 472bdfdd99a41828a7bd76f044ba8601efcbe850; GitHub 42017750067 succeeded in 7m23s. Actual staged coordinator smoke, write reconciliation (102 confirmed writes), intended recipient visibility, guard fault shutdown, deadline cleanup and cleanup_completed passed. This is disposable evidence, not a 500-session capacity result.
+
+Fresh locally prepared review: qualification/singlehost-review/cohost-b7e67cf0eb6c4047, exact source 472bdfd, frozen execution ref experiment/approved-singlehost-472bdfd. Reuses checksum-verified server snapshot from 8389; no live resources created by preparation. Existing authorization remains 1 CPU application group / 2 CPU isolated database, total 3 CPU / 5.5 GiB. User local SSH password entry required to execute existing operator. Original stages and acceptance thresholds unchanged.
+
+## 2026-11-05: actual server workload result 42020809121
+
+Run cohost-b7e67cf0eb6c4047, source 472bdfd. Evidence downloaded to qualification/live-42020809121. This attempt reached and completed all 20 sessions for 45 seconds (140 complete iterations including initialization, zero interrupted). k6 exit 99 was caused by per-operation p95 failures: services 1093.021 ms and catalogue 539.194 ms, against unchanged 500 ms threshold. Overall HTTP p95 354.007 ms / p99 906.423 ms; unexpected_failure rate zero. No 100/500 stage ran.
+
+Per-key reconciliation: 100 offered, 100 acknowledged, 100 stored, zero missing acknowledged/duplicate/unknown/unconfirmed committed keys. All acknowledged keys stored exactly once and intended-peer visibility passed. Composite reconciliation is false because load_process_completed=false when k6 exits nonzero on thresholds; this must not be reported as missing writes. Do not turn failed performance into a qualification pass.
+
+Gateway backend response field Tr: marketplace/listings 35 requests, nearest-rank p95 1009 ms, maximum 1059 ms; products 35 requests, p95 294 ms, maximum 307 ms. These gateway populations include preparation requests and are not directly subtractable from client quantiles. Service latency includes material backend time; replacing the load launcher cannot alone fix it.
+
+GitHub host-cleanup.log states Single-host cleanup confirmed. Final retained sample production_healthy=true, no OOM, zero health/latency failures. Local redundant cleanup SSH255 occurred after GitHub cleanup; no independent fresh root inventory performed. Do not rerun consumed package. User requests simpler execution approach; no new live trial started. Existing load client already uses k6. Next engineering work should target observed listings latency and separate integrity reporting from k6 completion status, while preserving all acceptance gates and isolation.
+
+## 2026-11-05: focused browsing investigation and independent integrity reporting
+
+Retained run 42020809121 SQL: service-list query 19 calls / 9029.728 ms total / 475.249 ms mean / 1025.741 ms maximum; catalogue query 18 calls / 3309.764 ms total / 183.876 ms mean. Both consume provider_public_identity, whose retained-publication quota and paid subscription checks are evaluated through lateral/correlated subqueries. This identifies a candidate for measured comparison, not a proven query-plan root cause.
+
+Disposable matched comparison 42022624570 at ce044f6 profiles unchanged controller SQL versus a statement-local MATERIALIZED identity CTE. It alternates original/candidate execution, retains EXPLAIN ANALYZE BUFFERS plans, and requires full ordered-row equality. No application SQL, filters, ordering, authorization, response shape or production infrastructure changed. Results pending.
+
+Reporting correction b663b4d adds stage-outcome.json with failed threshold names and offered_write_inventory_reconciled independently of the existing completion marker. Original gates unchanged. Two focused tests pass, covering performance failure with intact writes, missing writes and missing journal evidence. Retrospective report for 42020809121 shows inventory true, services/catalogue threshold failures, qualification false. Latest 20-session measurements came from the isolated stack on the actual Contabo database VPS, not disposable CI; no 500-session qualification exists.
+
+Browsing comparison update: first disposable run 42022624570 used only 10 providers / 100 services and products. It rejected the catalogue candidate on ordered full-row inequality and showed no useful services gain at that size (last retained plans ~1.1 ms each). No application query change adopted. Full-population profile 42023175628 at 8eeeec6 now seeds 500 providers / 5000 services and products, compares alternating original/candidate queries, and retains rejection outcomes instead of losing measurements. Profiling stops before application load and executes cleanup in finally. No live-host rerun initiated.
+# Browsing optimization checkpoint � 2026-11-05
+
+Actual Contabo result: run 42020809121 completed 20 active sessions for 45 seconds. Overall HTTP p95 354.007 ms, zero unexpected HTTP errors. Services p95 1093.021 ms and catalogue p95 539.194 ms failed the unchanged 500 ms per-operation target. All 100 offered/acknowledged writes were stored exactly once; no missing/duplicate/unknown writes. This is not a 500-session qualification.
+
+## Implemented
+
+- Release candidate 3377ead: internal/controllers/provider_marketplace_controller.go uses pgx.QueryExecModeCacheDescribe only for listListings. SQL literals, parameters, filtering, ordering, response shape, pool limits and transaction behavior remain unchanged. Cached type descriptions retain binary protocol while avoiding reusable named statement generic plans.
+- internal/controllers/service_discovery_plan_test.go: repeated actual endpoint calls, eligibility, search, exclusion, ordered cursors, and same-backend pg_prepared_statements inspection. Required in release workflow. Local compile passed; local DB integration skipped because opt-in database was unavailable. Real PostgreSQL suite 42054339381 PASSED at 3377ead8a320c848f2c2455fe399d2c77b698f09, including the required new endpoint regression and existing correctness/poll-cost checks.
+- Qualification commit b663b4d: stage-outcome.json independently reports failed latency thresholds and complete offered-write inventory. Two focused regressions passed. Original stage gates remain strict.
+
+## Matched SQL evidence
+
+Disposable run 42052994799 passed, with 500 providers / 5000 services / 5000 products and database 2 CPUs / 3 GiB. Eight samples per query and plan mode, same data and resource allocation:
+
+| Unchanged query | Custom plan median | Generic plan median |
+|---|---:|---:|
+| Services | 29.572 ms | 155.846 ms |
+| Catalogue | 49.559 ms | 43.145 ms |
+
+Service custom-plan SQL execution was approximately 81% lower. Generic plan estimated total cost 875.91 versus custom 52695.27 despite slower measured execution. This supports avoiding that plan reuse for the specific service-list query; it does not measure the optimized endpoint p95 on Contabo. No catalogue execution-mode change is justified by these measurements.
+
+Rejected candidate: statement-local MATERIALIZED identity view. Full-population run 42023175628 services median 36.165 -> 33.199 ms, catalogue 94.047 -> 82.864 ms; catalogue ordered results differed. No CTE rewrite adopted. Earlier 10-provider run was insufficiently representative and rejected, not treated as qualification.
+
+## Remaining blockers
+
+1. Actual PostgreSQL release regressions for 3377ead PASSED (42054339381).
+2. Build and verify an isolated qualification image containing the new candidate; retained image remains pinned to the older source. Do not silently relabel it.
+3. Matched end-to-end comparison on the isolated VPS stack is still needed to confirm service p95 improvement and reassess catalogue's 539 ms p95. No evidence yet proves catalogue needs a separate code change or that relieving service SQL contention will solve it.
+4. Full unchanged 100/500-stage qualification and sustained 500 for 30 minutes remain unpassed.
+
+No production deployment, migration, infrastructure purchase, K3s installation, pool increase or live-host rerun occurred during this work. Mobile/UI and ordinary dirty backend checkout remain untouched.
