@@ -4,6 +4,10 @@ from unittest.mock import patch
 import snapshot
 
 class SnapshotTests(unittest.TestCase):
+    def test_complete_multiline_postgres_json_inventory_is_parsed(self):
+        expected={'tables':{'one':{'rows':2}},'triggers':[{'tgname':'first'},{'tgname':'second'}]}
+        with patch('snapshot.sql',return_value=json.dumps(expected,indent=2)):
+            self.assertEqual(snapshot.database_state(Path('unused')),expected)
     def fixture(self,root):
         p=root/'fixture.dump';p.write_bytes(b'PGDMPsynthetic-test-only')
         rows={'capacity_lab_actors':500,'users':1000,'products':5000,'provider_listings':5000,'chat_rooms':100050,'chat_messages':1025000,'provider_conversation_messages':500000,'schema_migrations':108}

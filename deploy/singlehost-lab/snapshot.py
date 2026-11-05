@@ -31,7 +31,7 @@ def postgres(base):
 
 def sql(base,text,timeout=180):
     _,ident=postgres(base)
-    return call(['docker','exec','-i',ident,'psql','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=timeout).decode().strip()
+    return call(['docker','exec','-i',ident,'psql','-U','lab','-d','capacity_lab','-XAtq','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=timeout).decode().strip()
 
 def database_state(base):
     # All rows, not a sample: unordered sum of per-row hashes plus exact counts.
@@ -44,15 +44,16 @@ DO $$ DECLARE r record; n bigint; h text; BEGIN
  END LOOP; END $$;
 SELECT json_build_object('tables',(SELECT json_object_agg(name,json_build_object('rows',rows,'fingerprint',fingerprint)) FROM snapshot_inventory),
 'triggers',(SELECT json_agg(s) FROM (SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND NOT t.tgisinternal ORDER BY c.relname,t.tgname)s));""",timeout=300)
-    return json.loads(raw.splitlines()[-1])
+    return json.loads(raw)
 
 def build(base,output):
     if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('build synthetic snapshot only in disposable CI')
     if sql(base,"SELECT marker||':'||scenario FROM capacity_lab_identity")!='disposable-compose-only:large-busy':raise ValueError('synthetic identity required')
     if sql(base,"SELECT count(*) FROM users WHERE email NOT LIKE '%@example.invalid' OR password_hash<>'unusable'")!='0':raise ValueError('only pre-session synthetic accounts allowed')
     if sql(base,"SELECT to_regclass('public.capacity_lab_session_run') IS NULL")!='t':raise ValueError('snapshot must precede session tokens/workload')
-    state=database_state(base);_,ident=postgres(base);path=output/'fixture.dump'
+    _,ident=postgres(base);path=output/'fixture.dump'
     with path.open('xb') as stream:subprocess.run(['docker','exec',ident,'pg_dump','-U','lab','-Fc','-Z','6','--no-owner','--no-acl','capacity_lab'],stdout=stream,check=True,timeout=300)
+    state=database_state(base)
     meta=dict(image_source=APP_SOURCE,scenario='large-busy',actor_pairs=500,created_unix=int(time.time()),sha256=digest(path),bytes=path.stat().st_size,database=state)
     validate(path,meta);(output/'fixture.json').write_text(json.dumps(meta,indent=2))
     return meta
