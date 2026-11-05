@@ -40,12 +40,14 @@ class SingleHostRunner(Runner):
         for name in ('api1','api2','gateway'):self.service(name)
         # One HTTP-only forward into this host's own private Docker network.
         # No database tunnel, host port mapping or gateway relay process.
-        tunnel=subprocess.Popen(['ssh','-F',str(self.config),'-N','-L','127.0.0.1:8080:172.29.248.10:8080','cohost-main'],start_new_session=True)
+        from http_forward import start as start_forward
+        tunnel=start_forward(self.config,'cohost-main',8080,self.output/'http-forward.log')
         self.children.append(tunnel);deadline=time.monotonic()+60
         import urllib.request
         opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
         while True:
             self.check()
+            if tunnel.poll() is not None:raise RuntimeError('HTTP SSH forward exited: '+(self.output/'http-forward.log').read_text(errors='replace')[-2000:])
             try:
                 with opener.open('http://127.0.0.1:8080/api/v1/ready',timeout=3) as response:
                     if json.load(response).get('ok') is True:break

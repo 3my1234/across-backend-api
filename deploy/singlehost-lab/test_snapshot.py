@@ -1,4 +1,4 @@
-import copy,json,tempfile,time,unittest
+import copy,json,os,tempfile,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 import snapshot
@@ -28,5 +28,16 @@ class SnapshotTests(unittest.TestCase):
                 with patch('snapshot.postgres',return_value=({'run':'cohost-'+'a'*16},'immutable-id')),patch('snapshot.sql',side_effect=responses),patch('snapshot.subprocess.Popen') as restore:
                     with self.assertRaises(ValueError):snapshot.restore(root,p,m)
                     restore.assert_not_called()
+    @unittest.skipIf(os.name=='nt','Unix cache ownership/modes are exercised in Linux CI')
+    def test_cached_fixture_is_verified_and_linked_without_overwriting(self):
+        from install_host import reuse_fixture
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();cache=root/('cohost-'+'a'*16);cache.mkdir();p,m=self.fixture(cache);p.chmod(0o600);m['created_unix']=time.time()
+            base=root/('cohost-'+'b'*16);base.mkdir();(base/'fixture.json').write_text(json.dumps(m))
+            approval={'snapshot_cache_run':cache.name,'snapshot_sha256':m['sha256']}
+            reuse_fixture(base,approval)
+            self.assertEqual((base/'fixture.dump').read_bytes(),p.read_bytes())
+            with self.assertRaises(FileExistsError):reuse_fixture(base,approval)
+            with self.assertRaises(ValueError):reuse_fixture(base,{**approval,'snapshot_sha256':'0'*64})
 
 if __name__=='__main__':unittest.main()

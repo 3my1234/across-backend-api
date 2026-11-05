@@ -1,5 +1,5 @@
 """Create an UNAUTHORIZED review directory; no SSH, keys or live resources."""
-import argparse,hashlib,json,os,shutil,subprocess,sys,uuid
+import argparse,hashlib,json,os,re,shutil,subprocess,sys,uuid
 from pathlib import Path
 from policy import STAGES
 
@@ -7,7 +7,7 @@ ARCHIVE_SHA='020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366'
 APP_SOURCE='13d316c62ce8bdd35c1c2fe72bf3d4d357581914'
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
@@ -19,7 +19,11 @@ def main():
     from snapshot import validate
     fixture=validate(a.snapshot_directory/'fixture.dump',json.loads((a.snapshot_directory/'fixture.json').read_text()))
     proof=json.loads((a.snapshot_directory/'snapshot-proof.json').read_text())
-    if proof.get('restore_and_original_smoke_passed') is not True or proof.get('source')!=source or str(proof.get('workflow_run'))!=a.rehearsal_run or proof.get('snapshot_sha256')!=fixture['sha256']:raise ValueError('successful exact-source snapshot restore proof required')
+    if proof.get('restore_and_original_smoke_passed') is not True or proof.get('snapshot_sha256')!=fixture['sha256'] or not re.fullmatch('[a-f0-9]{40}',proof.get('source','')) or not str(proof.get('workflow_run','')).isdigit():raise ValueError('successful snapshot restore proof required')
+    # Retain the verified data/restore component when only controller code changes.
+    # No re-download or re-generation; reject any fixture/application/restore drift.
+    subprocess.run(['git','merge-base','--is-ancestor',proof['source'],source],cwd=root,check=True)
+    subprocess.run(['git','diff','--exit-code',proof['source'],source,'--','internal/','migrations/','cmd/api/','cmd/capacity-lab/','go.mod','go.sum','deploy/singlehost-lab/snapshot.py','deploy/singlehost-lab/render.cjs','deploy/cohost-lab/render.cjs','deploy/capacity-lab/compose.yml','deploy/session-lab/compose.yml','deploy/notification-lab/compose.yml'],cwd=root,check=True)
     metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
     if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
     run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
@@ -38,6 +42,10 @@ def main():
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
+    approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
+    if a.reuse_server_snapshot_from:
+        if not re.fullmatch('cohost-[a-f0-9]{16}',a.reuse_server_snapshot_from):raise ValueError('fixed cached-snapshot nonce required')
+        approval['snapshot_cache_run']=a.reuse_server_snapshot_from
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')

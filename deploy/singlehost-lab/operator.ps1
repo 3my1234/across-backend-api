@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0 -or $secretNames -contains 'SINGLEHOST_TRIAL_BUNDLE') { 
 $audit=@'
 import json,subprocess
 from pathlib import Path
-run='cohost-56ee8ed93722432b'
+run='cohost-c6d1dbee1b3e4b1e'
 base=Path('/root/atlxpres-singlehost')/run
 if not (base/'cleanup.finalized').is_file():raise RuntimeError('Previous cleanup marker missing')
 ids=subprocess.check_output(['docker','ps','-aq','--filter','label=atlxpres.cohost.run='+run],text=True,timeout=15).strip()
@@ -47,7 +47,7 @@ if ($LASTEXITCODE -ne 0 -or -not $known) { throw 'Previously trusted database ho
 $knownPath=Join-Path $private 'known_hosts'
 [IO.File]::WriteAllText($knownPath,$known+"`n",(New-Object Text.UTF8Encoding($false)))
 $remotePackage="/root/$run-singlehost.tar.gz"
-Write-Host 'Uploading reviewed tools and reusable synthetic database snapshot. Existing images are reused. Enter the database-host password locally.'
+Write-Host 'Uploading reviewed tools only; checksum-verified server snapshot and images are reused. Enter the database-host password locally.'
 Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"
 if ($LASTEXITCODE -ne 0) { throw 'Single-host installation did not finish; do not rerun. Inspect this exact job and cleanup first.' }

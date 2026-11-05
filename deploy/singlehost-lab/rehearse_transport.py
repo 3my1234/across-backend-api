@@ -25,7 +25,7 @@ def exercise(root,base,output,sentinel):
     (base/'baseline.json').write_text(json.dumps(baseline))
     wrapper=base/'ci-monitor-replay.py'
     wrapper.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(root/'deploy/singlehost-lab'))+')\nimport monitor\nfrom watchdog import state,URLS\nbase=Path('+repr(str(base))+')\ndef sensors(ids,details):\n return [(u,not (base/"inject-public-fault").exists(),.1) for u in URLS],state(ids)\nmonitor.collect_checks=sensors\nsys.argv=["monitor",str(base)]\nmonitor.main()\n')
-    guard=sshd=tunnel=None;config=base/'ssh_config';result={}
+    guard=sshd=tunnel=runner=None;config=base/'ssh_config';result={}
     def ssh(command,input=None,timeout=30):return call(['ssh','-F',str(config),'trial',command],timeout,input=input,stderr=subprocess.PIPE)
     try:
         guard=subprocess.Popen(['python3',str(wrapper)],stdout=(output/'guard-replay.log').open('wb'),stderr=subprocess.STDOUT)
@@ -68,17 +68,21 @@ def exercise(root,base,output,sentinel):
         time.sleep(.3)
         status=json.loads(ssh('status'))
         if status['run']!=run or status['topology']!='singlehost':raise ValueError('wrong restricted endpoint')
-        ssh('activate')
+        # Use the actual coordinator's concurrent status polling and role aliases.
+        from runner import SingleHostRunner
+        runner=SingleHostRunner(root,config,approval,output)
+        runner.start()
         def control(op,input=None):return ssh('control '+base64.b64encode(json.dumps(op).encode()).decode(),input=input)
         value=control(dict(action='exec',service='postgres',args=['psql','-U','lab','-d','capacity_lab','-XAt','-v','ON_ERROR_STOP=1']),input=b'SELECT 1;')
         if value.strip()!=b'1':raise ValueError('synthetic PostgreSQL control failed')
         control(dict(action='exec',service='api1',args=['curl','-fsS','--max-time','3','http://gateway:8080/api/v1/ready']))
         denied=subprocess.run(['ssh','-F',str(config),'trial','control '+base64.b64encode(json.dumps(dict(action='exec',service='api1',args=['sh','-c','echo denied'])).encode()).decode()],capture_output=True,timeout=15)
         if denied.returncode==0:raise RuntimeError('unreviewed shell command allowed')
-        blocked=subprocess.run(['ssh','-F',str(config),'-W','127.0.0.1:5432','trial'],capture_output=True,timeout=15)
+        blocked=subprocess.run(['ssh','-F',str(config),'-o','ControlMaster=no','-o','ControlPath=none','-o','ControlPersist=no','-W','127.0.0.1:5432','trial'],capture_output=True,timeout=15)
         if blocked.returncode==0 or b'administratively prohibited' not in blocked.stderr:raise RuntimeError('non-gateway forwarding not explicitly denied')
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));forward=sock.getsockname()[1]
-        tunnel=subprocess.Popen(['ssh','-F',str(config),'-N','-L',f'127.0.0.1:{forward}:172.29.248.10:8080','trial'],stdout=subprocess.DEVNULL,stderr=(output/'http-forward.log').open('wb'))
+        from http_forward import start as start_forward
+        tunnel=start_forward(config,'cohost-main',forward,output/'http-forward.log')
         deadline=time.monotonic()+15
         while True:
             try:
@@ -89,6 +93,7 @@ def exercise(root,base,output,sentinel):
                 if tunnel.poll() is not None or time.monotonic()>deadline:raise
                 time.sleep(.2)
         result['restricted_control_and_http_only_forward_passed']=True
+        runner.check();runner.stop.set();runner.children_thread.join(timeout=12)
         (base/'inject-public-fault').touch()
         guard.wait(timeout=20)
         _,rows=inventory(base)
@@ -111,6 +116,7 @@ def exercise(root,base,output,sentinel):
         (output/'transport-and-guard.json').write_text(json.dumps(result,indent=2))
         return result
     finally:
+        if runner is not None:runner.stop.set()
         for process in (tunnel,sshd,guard):
             if process is not None and process.poll() is None:
                 process.terminate()

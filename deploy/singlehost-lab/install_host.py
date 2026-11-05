@@ -25,6 +25,17 @@ def key_line(base,public,expiry):
     # Same reviewed OpenSSH restrictions as the previous narrow gateway key.
     return f'restrict,port-forwarding,permitopen="172.29.248.10:8080",expiry-time="{expiry}",command="{forced}" '+parts[0]+' '+parts[1]+' '+base.name+'-singlehost-ci'
 
+def reuse_fixture(base,approval):
+    cached_run=approval['snapshot_cache_run']
+    if not re.fullmatch('cohost-[a-f0-9]{16}',cached_run):raise ValueError('invalid cached snapshot nonce')
+    cached_fixture=base.parent/cached_run/'fixture.dump'
+    if cached_fixture.resolve()!=cached_fixture or cached_fixture.stat().st_uid!=getattr(os,'geteuid',lambda:0)() or cached_fixture.stat().st_mode&0o022:raise ValueError('unsafe cached snapshot ownership/path')
+    from snapshot import validate
+    meta=json.loads((base/'fixture.json').read_text())
+    if meta['sha256']!=approval['snapshot_sha256']:raise ValueError('cached snapshot approval differs')
+    validate(cached_fixture,meta)
+    os.link(cached_fixture,base/'fixture.dump')
+
 def main():
     import fcntl
     p=argparse.ArgumentParser();p.add_argument('--package',type=Path,required=True);p.add_argument('--sha256',required=True);p.add_argument('--run',required=True);a=p.parse_args()
@@ -42,7 +53,9 @@ def main():
     import sys
     sys.path.insert(0,str(base/'src/deploy/singlehost-lab'))
     from supervise import validate_approval
-    validate_approval(base)
+    approval=validate_approval(base)
+    if approval.get('snapshot_cache_run'):
+        reuse_fixture(base,approval)
     cached=Path('/root/atlxpres-cohost/cohost-6d6c5f9220874022/images.tar.gz')
     if cached.is_symlink() or not cached.is_file():raise ValueError('existing reviewed image archive missing')
     os.link(cached,base/'images.tar.gz')
