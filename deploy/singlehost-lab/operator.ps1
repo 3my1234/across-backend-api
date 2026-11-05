@@ -1,6 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$Review,[switch]$ApproveDatabaseHostPlacement)
 if (-not $ApproveDatabaseHostPlacement) { throw 'APPROVAL REQUIRED: database VPS placement capped at3CPU/5.5GiB; no main-VPS test resources. Review the execution package first.' }
 $ErrorActionPreference='Stop'
+Write-Host 'Approved test-only CPU split: API group 1 CPU / PostgreSQL 2 CPUs; total 3 CPUs and 5.5 GiB unchanged. No production deployment.'
 $repo='3my1234/across-backend-api'
 $source=Split-Path (Split-Path $PSScriptRoot)
 function Native([string]$exe,[Parameter(ValueFromRemainingArguments=$true)][string[]]$arguments) {
@@ -25,7 +26,7 @@ if ($LASTEXITCODE -ne 0 -or $secretNames -contains 'SINGLEHOST_TRIAL_BUNDLE') { 
 $audit=@'
 import json,subprocess
 from pathlib import Path
-run='cohost-c6d1dbee1b3e4b1e'
+run='cohost-eca8ba398348467f'
 base=Path('/root/atlxpres-singlehost')/run
 if not (base/'cleanup.finalized').is_file():raise RuntimeError('Previous cleanup marker missing')
 ids=subprocess.check_output(['docker','ps','-aq','--filter','label=atlxpres.cohost.run='+run],text=True,timeout=15).strip()

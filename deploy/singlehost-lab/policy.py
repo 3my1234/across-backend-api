@@ -8,8 +8,8 @@ def validate(approval,now=None):
     now=time.time() if now is None else now
     if not re.fullmatch('cohost-[a-f0-9]{16}',approval.get('run','')):raise ValueError('fixed unique run required')
     expected=dict(topology='singlehost-database-vps',host='79.143.176.173',authorized=True,
-        spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=2,application_memory=2684354560,
-        database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
+        spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=1,application_memory=2684354560,
+        database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         timing_policy='http-2s-observer-2.5s-v1')
     for key,value in expected.items():
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)

@@ -4,7 +4,7 @@ const images=Object.fromEntries(['app','postgres','redis','gateway'].map((n,i)=>
 const run='cohost-'+'a'.repeat(16),doc=render({run,images});
 assert.equal(doc.name,run+'-singlehost');
 assert.equal(doc.services.postgres.image,images.postgres);
-assert.equal(doc.services.postgres.cpus,1);
+assert.equal(doc.services.postgres.cpus,2);
 assert.equal(doc.services.postgres.mem_limit,'3g');
 assert(doc.services.postgres.healthcheck.test[1].includes('-h 127.0.0.1'));
 assert.equal(doc.services['db-probe'],undefined);
@@ -20,7 +20,7 @@ for(const [name,s] of Object.entries(doc.services)) {
   for(const v of s.volumes||[]) assert(!v.includes('/tunnel') && !v.includes('/atlxpres-cohost/'));
   if (name!=='gateway') assert.equal(s.ports,undefined);
 }
-assert.equal(doc.services.seed.environment.LAB_DB_CPUS,'1');
+assert.equal(doc.services.seed.environment.LAB_DB_CPUS,'2');
 assert.equal(doc.services.api1.environment.DB_MAX_CONNS,'8');
 assert.equal(doc.services.api2.environment.HTTP_MAX_IN_FLIGHT,'64');
 assert(doc.services.api1.environment.DATABASE_URL.includes('@postgres:5432/capacity_lab'));

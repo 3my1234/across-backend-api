@@ -47,7 +47,7 @@ def main():
     retained=check()
     run='cohost-'+uuid.uuid4().hex[:16];base=ROOT/run;base.mkdir(parents=True,mode=0o700)
     output=root/'singlehost-rehearsal-evidence';output.mkdir(exist_ok=False)
-    result=dict(run=run,topology='singlehost',actor_pairs=pairs,scenario='large-busy',database_cpu=1,passed=False,capacity_qualified=False,retained_full_seed=retained)
+    result=dict(run=run,topology='singlehost',actor_pairs=pairs,scenario='large-busy',database_cpu=2,passed=False,capacity_qualified=False,retained_full_seed=retained)
     sentinel=None;created=False
     try:
         tags=dict(app='atlxpres-singlehost-rehearsal:local',postgres='postgres:16-alpine',redis='redis:7.2-alpine',gateway='haproxy:3.0-alpine')

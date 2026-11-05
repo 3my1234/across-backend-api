@@ -11,6 +11,7 @@ function render(input) {
   const db=cohost({...input,role:'database',images:{...input.images,socat:input.images.postgres}}).services.postgres;
   delete doc.services['db-probe'];
   doc.services.postgres=db;
+  doc.services.postgres.cpus=2;
   // The image's temporary initialization server listens on Unix sockets only.
   // Remote seed/API clients require the final TCP listener, not pg_isready's default socket.
   doc.services.postgres.healthcheck.test=['CMD-SHELL','pg_isready -h 127.0.0.1 -U lab -d capacity_lab'];
@@ -21,7 +22,7 @@ function render(input) {
     s.networks=name==='gateway'?{lab:{ipv4_address:'172.29.248.10'}}:['lab'];
     s.labels['atlxpres.singlehost']='true';
     if (s.volumes) s.volumes=s.volumes.map(v=>v.replace('/root/atlxpres-cohost/'+run,base));
-    if (s.environment && Object.hasOwn(s.environment,'LAB_DB_CPUS')) s.environment.LAB_DB_CPUS='1';
+    if (s.environment && Object.hasOwn(s.environment,'LAB_DB_CPUS')) s.environment.LAB_DB_CPUS='2';
   }
   // The host can reach its own private bridge. SSH forwards ONLY this exact
   // gateway address; no Docker published-port/NAT or host relay is needed.

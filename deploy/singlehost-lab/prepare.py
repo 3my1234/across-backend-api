@@ -23,7 +23,12 @@ def main():
     # Retain the verified data/restore component when only controller code changes.
     # No re-download or re-generation; reject any fixture/application/restore drift.
     subprocess.run(['git','merge-base','--is-ancestor',proof['source'],source],cwd=root,check=True)
-    subprocess.run(['git','diff','--exit-code',proof['source'],source,'--','internal/','migrations/','cmd/api/','cmd/capacity-lab/','go.mod','go.sum','deploy/singlehost-lab/snapshot.py','deploy/singlehost-lab/render.cjs','deploy/cohost-lab/render.cjs','deploy/capacity-lab/compose.yml','deploy/session-lab/compose.yml','deploy/notification-lab/compose.yml'],cwd=root,check=True)
+    subprocess.run(['git','diff','--exit-code',proof['source'],source,'--','internal/','migrations/','cmd/api/','cmd/capacity-lab/','go.mod','go.sum','deploy/singlehost-lab/snapshot.py','deploy/cohost-lab/render.cjs','deploy/capacity-lab/compose.yml','deploy/session-lab/compose.yml','deploy/notification-lab/compose.yml'],cwd=root,check=True)
+    # Snapshot rows/schema do not depend on CPU limits. Allow ONLY the exact
+    # newly approved 1->2 database CPU resource change in its original renderer.
+    original_renderer=subprocess.check_output(['git','show',proof['source']+':deploy/singlehost-lab/render.cjs'],cwd=root,text=True)
+    approved_renderer=original_renderer.replace('doc.services.postgres=db;','doc.services.postgres=db;\n  doc.services.postgres.cpus=2;').replace("s.environment.LAB_DB_CPUS='1'","s.environment.LAB_DB_CPUS='2'")
+    if (root/'deploy/singlehost-lab/render.cjs').read_text()!=approved_renderer:raise ValueError('renderer change exceeds approved CPU reallocation; retained snapshot proof cannot be reused')
     metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
     if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
     run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
@@ -38,8 +43,8 @@ def main():
     sys.path.insert(0,str(root/'deploy/cohost-lab'))
     from trial_policy import client_hashes
     approval=dict(run=run,topology='singlehost-database-vps',host='79.143.176.173',authorized=False,approved_unix=0,
-        spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=2,application_memory=2684354560,
-        database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
+        spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=1,application_memory=2684354560,
+        database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])

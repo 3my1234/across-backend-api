@@ -26,7 +26,7 @@ def identity(run):
 
 def slices(run):
     stem=identity(run)
-    return {stem+'.slice':(300,5905580032),stem+'-app.slice':(200,2684354560),stem+'-db.slice':(100,3221225472)}
+    return {stem+'.slice':(300,5905580032),stem+'-app.slice':(100,2684354560),stem+'-db.slice':(200,3221225472)}
 
 def install_limits(run):
     # Anchors keep slices alive before Docker creates its first container.
@@ -71,6 +71,7 @@ def verify_limits(base,snapshot=None):
         service=row['Config']['Labels']['com.docker.compose.service'];expected=identity(manifest['run'])+('-db.slice' if service=='postgres' else '-app.slice')
         if row['HostConfig']['CgroupParent']!=expected:raise ValueError('wrong parent cgroup')
         if row['HostConfig']['Memory']<=0 or row['HostConfig']['NanoCpus']<=0:raise ValueError('missing container resource limits')
+        if service=='postgres' and (row['HostConfig']['NanoCpus']!=2000000000 or row['HostConfig']['Memory']!=3221225472):raise ValueError('PostgreSQL container differs from approved 2CPU/3GiB limit')
         pid=row['State'].get('Pid',0)
         if pid:
             records=(Path('/proc')/str(pid)/'cgroup').read_text().splitlines()
