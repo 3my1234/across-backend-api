@@ -37,7 +37,10 @@ class SingleHostRunner(Runner):
         self.lab('prepare-sessions')
         self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
         self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
-        for name in ('api1','api2','gateway'):self.service(name)
+        # The pool observer reads mock-provider statistics in every stage.
+        # Start only the mock now; the delivery worker still starts at the
+        # original sustained stage so notification backlog semantics stay fixed.
+        for name in ('api1','api2','gateway','notification-provider'):self.service(name)
         # One HTTP-only forward into this host's own private Docker network.
         # No database tunnel, host port mapping or gateway relay process.
         from http_forward import start as start_forward

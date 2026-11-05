@@ -99,6 +99,10 @@ def exercise(root,base,output,sentinel):
         staged=Path(os.path.relpath(root/'singlehost-coordinator-replay',Path.cwd()))
         staged.mkdir()
         runner.output=staged.resolve()
+        # The preceding direct smoke is a separate run: old message timestamps
+        # and journal inventory must not be attributed to this staged replay.
+        runner.sql('UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();')
+        runner.service('notification-provider')
         runner.measure(STAGES[0])
         result['actual_staged_coordinator_smoke_passed']=True
         runner.check();runner.stop.set();runner.children_thread.join(timeout=12)

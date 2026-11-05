@@ -148,7 +148,8 @@ class Runner:
             'run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
         observer_command='control '+base64.b64encode(json.dumps(dict(action='exec',service='exporter',args=['/app/lab','observe-sessions'])).encode()).decode()
         observer_out=(public/'pools.jsonl').open('wb')
-        observer=subprocess.Popen(['ssh','-F',str(self.config),'cohost-main',observer_command],stdout=observer_out,stderr=subprocess.DEVNULL,start_new_session=True)
+        observer_error=(public/'pool-observer-error.log').open('wb')
+        observer=subprocess.Popen(['ssh','-F',str(self.config),'cohost-main',observer_command],stdout=observer_out,stderr=observer_error,start_new_session=True)
         self.children.append(observer)
         log=public/'k6.log' 
         with log.open('wb') as out:
@@ -220,6 +221,7 @@ class Runner:
         except subprocess.TimeoutExpired:
             os.killpg(observer.pid,signal.SIGTERM);failures.append('pool observer failed to stop')
         observer_out.close()
+        observer_error.close()
         if failures:raise RuntimeError('; '.join(failures))
         self.sql("UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();")
     def notifications(self):
