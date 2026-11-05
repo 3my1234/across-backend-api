@@ -637,3 +637,6 @@ Artifact downloadedONCE locally qualification/snapshot-evidence-41949650079; noG
 
 Rootstructuredvalidation qualification/SINGLE_HOST_SNAPSHOT_VALIDATION_41949650079.json; operatorrecord SINGLE_HOST_SNAPSHOT_EXECUTION_c6d1dbee1b3e4b1e.json. Lastactualserverrun41945109410 failedseed720s/zeroapplicationsessions, cleanupconfirmed; this newactualrun/resultstillPENDING. FirstsnapshotCI41948387545 failedmultilineJSONreaderafterseed341.640s; narrowfix+regression in745c51f,17focusedchecksPASS. No productiondeployment, migrations, DNS, newservers orK3schanges. Main/backend/mobile/release/K3sbranchesuntouched.
 
+
+
+Latest execution correction: GUIlaunch PID24260 did not persist. Reviewc6d1 remainsunconsumed authorized=false; no newprivatekeydirectory/SSHchild/serverjob. Usermustexecute preparedoperator intheirownPowerShell forlocalpasswordentry. Approvalpersists; noadditionalapproval orduplicateoperator. SnapshotCI41949650079/745c51f success and24reviewhashesremainvalid.
