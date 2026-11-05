@@ -1,0 +1,17 @@
+name: Disposable room-lock SQL profile
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 deploy/singlehost-lab/profile_room_lock.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: room-lock-${{ github.run_id }}
+          path: room-lock-evidence/
+          retention-days: 7
