@@ -227,6 +227,13 @@ class Runner:
             os.killpg(observer.pid,signal.SIGTERM);failures.append('pool observer failed to stop')
         observer_out.close()
         observer_error.close()
+        try:
+            from stage_outcome import summarize
+            outcome=summarize(public,code,failures)
+            (public/'stage-outcome.json').write_text(json.dumps(outcome,indent=2))
+            print('STAGE_OUTCOME '+json.dumps(outcome),flush=True)
+        except Exception as error:
+            failures.append('stage outcome reporting: '+str(error))
         if failures:raise RuntimeError('; '.join(failures))
         self.sql("UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();")
     def notifications(self):
