@@ -182,7 +182,7 @@ def access(base,command):
         temporary=path.with_suffix('.incoming')
         with temporary.open('xb') as out:out.write(raw)
         temporary.replace(path);return
-    raise ValueError('command denied')
+    raise ValueError('empty SSH command denied' if not command else 'command denied')
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=('job','cleanup','access'));p.add_argument('base',type=Path);a=p.parse_args();base=a.base.resolve()

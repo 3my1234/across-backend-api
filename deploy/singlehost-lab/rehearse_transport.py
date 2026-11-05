@@ -57,7 +57,14 @@ def exercise(root,base,output,sentinel):
         Path('/run/sshd').mkdir(exist_ok=True)
         sshd=subprocess.Popen(['/usr/sbin/sshd','-D','-e','-f',str(base/'sshd_config')],stdout=subprocess.DEVNULL,stderr=(output/'sshd-replay.log').open('wb'))
         known=base/'known_hosts';known.write_text(f'[127.0.0.1]:{port} '+(base/'host.pub').read_text())
-        config.write_text(f'Host trial\n HostName 127.0.0.1\n Port {port}\n User root\n IdentityFile {base}/client\n UserKnownHostsFile {known}\n StrictHostKeyChecking yes\n BatchMode yes\n IdentitiesOnly yes\n ConnectTimeout 5\n ExitOnForwardFailure yes\n')
+        # Exercise the actual CI client's multiplexing/control configuration,
+        # not a simpler hand-written SSH configuration which can hide failures.
+        from install_ci import install
+        credentials=base/'replay-credentials'
+        install(dict(approval=approval,key=(base/'client').read_text(),known_hosts=known.read_text()),credentials)
+        config=credentials/'ssh_config'
+        text=config.read_text().replace('Host cohost-main cohost-database','Host trial cohost-main cohost-database').replace('  HostName 79.143.176.173',f'  HostName 127.0.0.1\n  Port {port}')
+        config.write_text(text)
         time.sleep(.3)
         status=json.loads(ssh('status'))
         if status['run']!=run or status['topology']!='singlehost':raise ValueError('wrong restricted endpoint')
