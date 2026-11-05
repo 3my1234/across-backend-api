@@ -6,7 +6,9 @@ def exercise(root,base,output):
     if not str(base).startswith('/root/atlxpres-singlehost/'):
         raise ValueError('disposable stack path required')
     cases=(('services','provider_marketplace_controller.go','listListings',"'','','public','','',NULL,NULL,21,true,0,0,'',''"),
-           ('catalogue','catalog_controller.go','ListProducts',"false,0,0,true,'NG','','','all'"))
+           ('services-generic','provider_marketplace_controller.go','listListings',"'','','public','','',NULL,NULL,21,true,0,0,'',''"),
+           ('catalogue','catalog_controller.go','ListProducts',"false,0,0,true,'NG','','','all'"),
+           ('catalogue-generic','catalog_controller.go','ListProducts',"false,0,0,true,'NG','','','all'"))
     report={'capacity_qualified':False,'application_modified':False,'comparisons':{}}
     report['population']=json.loads(sql(base,"SELECT json_build_object('providers',(SELECT count(*) FROM provider_organizations),'services',(SELECT count(*) FROM provider_listings),'products',(SELECT count(*) FROM products))"))
     for name,file,function,args in cases:
@@ -20,14 +22,14 @@ def exercise(root,base,output):
         # Same transaction timestamp, data, parameters and resource limits.
         for iteration in range(8):
             for label,statement in ((('original',query),('candidate',candidate)) if iteration%2==0 else (('candidate',candidate),('original',query))):
-                prepared='BEGIN; PREPARE browsing AS '+statement+'; '
+                prepared='BEGIN; SET LOCAL plan_cache_mode='+('force_generic_plan' if name.endswith('generic') else 'force_custom_plan')+'; PREPARE browsing AS '+statement+'; '
                 raw=sql(base,prepared+'EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE browsing('+args+'); ROLLBACK;')
                 plan=json.JSONDecoder().raw_decode(raw[raw.index('['):])[0][0]
                 samples[label].append(plan['Execution Time'])
                 (output/(name+'-'+label+'-plan.json')).write_text(json.dumps(plan,indent=2))
         # Compare ordered full result rows, not just counts or selected IDs.
         def literal(statement):
-            values=["''","''","'public'","''","''","NULL","NULL","21","true","0","0","''","''"] if name=='services' else ['false','0','0','true',"'NG'","''","''","'all'"]
+            values=["''","''","'public'","''","''","NULL","NULL","21","true","0","0","''","''"] if name.startswith('services') else ['false','0','0','true',"'NG'","''","''","'all'"]
             return re.sub(r'\$(\d+)',lambda m:values[int(m[1])-1],statement)
         equivalence=sql(base,"BEGIN; SELECT (SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(query)+") q)=(SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(candidate)+") q); ROLLBACK;")
         result['ordered_full_rows_equal']='t' in equivalence.splitlines()

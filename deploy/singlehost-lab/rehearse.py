@@ -65,6 +65,9 @@ def main():
         (base/'verifier.bin').chmod(0o500)
         result['verifier_sha256']=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
+        if os.environ.get('BROWSING_PROFILE')=='true':
+            for service in doc['services'].values():
+                if 'LAB_SCENARIO' in service.get('environment',{}):service['environment']['LAB_SCENARIO']='standard'
         if args.foundation and pairs==10:
             for service in doc['services'].values():
                 if 'LAB_ACTOR_PAIRS' in service.get('environment',{}):service['environment']['LAB_ACTOR_PAIRS']='10'
@@ -99,6 +102,13 @@ def main():
         counts=json.loads(sql(base,"SELECT json_build_object('actors',(SELECT count(*) FROM capacity_lab_actors),'migration108',(SELECT count(*) FROM schema_migrations WHERE name='108_push_receipt_claims.sql'),'identity',(SELECT marker FROM capacity_lab_identity))"))
         if counts!={'actors':pairs,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
+        if os.environ.get('BROWSING_PROFILE')=='true':
+            # Query-only profile: same 500 providers/5000 browsing rows, omit
+            # unrelated million-row message history, which these SQL paths never read.
+            source=(root/'cmd/capacity-lab/main.go').read_text()
+            for table in ('provider_listings','products'):
+                fragment=source.split(' INSERT INTO '+table+'(provider_id,',1)[1].split(';',1)[0]
+                sql(base,'INSERT INTO '+table+'(provider_id,'+fragment.replace('%d','9')+';')
         if args.snapshot_build:
             from rehearse_snapshot import exercise as snapshot_replay
             result['snapshot']=snapshot_replay(root,base,output,sentinel)
