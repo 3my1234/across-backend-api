@@ -13,6 +13,8 @@ $run=$a.run
 if ($run -notmatch '^cohost-[a-f0-9]{16}$' -or $a.authorized -ne $false) { throw 'Fresh unauthorized review required' }
 $head=& git -C $source rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $head -ne $a.source_commit) { throw 'Source changed since review' }
+$sourceChanges=& git -C $source status --porcelain -- deploy/singlehost-lab deploy/cohost-lab .github/workflows/singlehost-rehearsal.yml
+if ($LASTEXITCODE -ne 0 -or $sourceChanges) { throw 'Execution source has uncommitted changes; no preflight or setup started' }
 $proof=& gh run view "$($a.rehearsal_run)" --repo $repo --json status,conclusion,headSha,jobs | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $proof.status -ne 'completed' -or $proof.conclusion -ne 'success' -or $proof.headSha -ne $head) { throw 'Exact-source disposable rehearsal has not passed' }
 $fullReplay=@($proof.jobs | Where-Object { $_.name -eq 'rehearsal' -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
@@ -26,7 +28,7 @@ if ($LASTEXITCODE -ne 0 -or $secretNames -contains 'SINGLEHOST_TRIAL_BUNDLE') { 
 $audit=@'
 import json,subprocess
 from pathlib import Path
-run='cohost-b7e67cf0eb6c4047'
+run='cohost-ad6460f9829d43d5'
 base=Path('/root/atlxpres-singlehost')/run
 if not (base/'cleanup.finalized').is_file():raise RuntimeError('Previous cleanup marker missing')
 ids=subprocess.check_output(['docker','ps','-aq','--filter','label=atlxpres.cohost.run='+run],text=True,timeout=15).strip()
@@ -39,6 +41,17 @@ foreach($address in @('79.143.176.173')) {
     $audit | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "root@$address" 'python3 -'
     if ($LASTEXITCODE -ne 0) { throw 'Previous cleanup not confirmed; no new setup started' }
 }
+if ($a.preflight_cache_run) {
+    if ($a.preflight_cache_run -notmatch '^cohost-[a-f0-9]{16}$') { throw 'Invalid existing preflight cache nonce' }
+    Write-Host 'PRE-UPLOAD baseline: about five minutes, with 30-second progress. No new key, containers or payload upload yet.'
+    $baselineCode=[Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $source 'deploy/cohost-lab/baseline.py')))
+    $observerHash=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'deploy/cohost-lab/watchdog.py')).Hash.ToLowerInvariant()
+    $safetyHash=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'deploy/cohost-lab/safety.py')).Hash.ToLowerInvariant()
+    $preflightCode=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'preflight_host.py'))
+    $invocation="preflight('$run','$($a.preflight_cache_run)','$baselineCode',{'watchdog.py':'$observerHash','safety.py':'$safetyHash'})"
+    ($preflightCode+"`n"+$invocation) | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 root@79.143.176.173 'python3 -B -'
+    if ($LASTEXITCODE -ne 0) { throw 'Pre-upload baseline failed; no new setup, credentials or payload upload started.' }
+}
 $packed=& python (Join-Path $PSScriptRoot 'pack.py') $Review --approve-placement | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Reviewed package could not be frozen' }
 $a=Get-Content -Raw -LiteralPath (Join-Path $Review 'approval.json') | ConvertFrom-Json
@@ -48,16 +61,25 @@ if ($LASTEXITCODE -ne 0 -or -not $known) { throw 'Previously trusted database ho
 $knownPath=Join-Path $private 'known_hosts'
 [IO.File]::WriteAllText($knownPath,$known+"`n",(New-Object Text.UTF8Encoding($false)))
 $remotePackage="/root/$run-singlehost.tar.gz"
-Write-Host 'Uploading reviewed tools only; checksum-verified server snapshot and images are reused. Enter the database-host password locally.'
+if ($a.api_cache_run) { Write-Host 'Uploading updated tools/verifier only; optimized API, snapshot and images are reused. Enter password locally.' }
+else { Write-Host 'Uploading reviewed tools and the new API artifact; snapshot and images are reused. Enter password locally.' }
 Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"
 if ($LASTEXITCODE -ne 0) { throw 'Single-host installation did not finish; do not rerun. Inspect this exact job and cleanup first.' }
 function Trial([string]$command) {
     $output=& python (Join-Path $PSScriptRoot 'ssh_once.py') --private $private --command $command
-    if ($LASTEXITCODE -ne 0) { throw "Restricted test command failed: $command. Server-side hard stop remains armed." }
+    if ($LASTEXITCODE -ne 0) {
+        $errorPath=Join-Path $private 'last-ssh-error.json'
+        if (Test-Path -LiteralPath $errorPath) {
+            $sshFailure=Get-Content -Raw -LiteralPath $errorPath | ConvertFrom-Json
+            if ($sshFailure.command -eq $command -and $sshFailure.kind -eq 'authentication_denied') { $script:RestrictedKeyUnavailable=$true }
+        }
+        throw "Restricted test command failed: $command. Server-side hard stop remains armed."
+    }
     return $output
 }
 $installedSecret=$false
+$script:RestrictedKeyUnavailable=$false
 try {
     $deadline=[DateTime]::UtcNow.AddMinutes(20)
     while ($true) {
@@ -96,5 +118,6 @@ try {
 } finally {
     $bundle=$null;$bundleJson=$null
     if ($installedSecret) { & gh secret delete SINGLEHOST_TRIAL_BUNDLE --repo $repo }
-    try { Trial 'cleanup' | Write-Host } catch { Write-Warning 'Restricted cleanup confirmation unavailable; inspect the exact server-side job. Its watchdog and120-minute hard stop remain independent.' }
+    if ($script:RestrictedKeyUnavailable) { Write-Warning 'Restricted key was rejected; not repeating authentication with that key. Cleanup is unconfirmed until saved server evidence is read; the independent hard stop remains armed.' }
+    else { try { Trial 'cleanup' | Write-Host } catch { Write-Warning 'Restricted cleanup confirmation unavailable; inspect the exact server-side job. Its watchdog and120-minute hard stop remain independent.' } }
 }

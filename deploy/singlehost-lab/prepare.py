@@ -57,11 +57,16 @@ def main():
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
+    approval['dns_retry_policy']='dns-only-3-attempts-12s-v1'
     approval.update(artifact)
     approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
     if a.reuse_server_snapshot_from:
         if not re.fullmatch('cohost-[a-f0-9]{16}',a.reuse_server_snapshot_from):raise ValueError('fixed cached-snapshot nonce required')
         approval['snapshot_cache_run']=a.reuse_server_snapshot_from
+        approval['preflight_cache_run']=a.reuse_server_snapshot_from
+        cached=workspace/'qualification/singlehost-review'/a.reuse_server_snapshot_from/'api-artifact.json'
+        if cached.is_file() and json.loads(cached.read_text()).get('api_sha256')==artifact['api_sha256']:
+            approval['api_cache_run']=a.reuse_server_snapshot_from
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')

@@ -72,7 +72,11 @@ def job(base):
     networks=call(['docker','network','ls','-q']).decode().split()
     validate_networks(json.loads(call(['docker','network','inspect',*networks])) if networks else [])
     # Single five-minute baseline, before imports/container creation.
-    subprocess.run(['python3',str(Path(__file__).parents[1]/'cohost-lab/baseline.py'),str(base/'baseline.json')],check=True,timeout=420)
+    from baseline import validate as validate_baseline
+    try:validate_baseline(json.loads((base/'baseline.json').read_text()),time.time())
+    except (ValueError,OSError):
+        subprocess.run(['python3',str(Path(__file__).parents[1]/'cohost-lab/baseline.py'),str(base/'baseline.json')],check=True,timeout=420)
+    else:print('Fresh pre-upload five-minute baseline validated; original freshness limit retained.',flush=True)
     doc=json.loads((base/'compose.json').read_text())
     required={service['image'] for service in doc['services'].values()}
     # Inventory needs the reviewed runtime document even while it contains zero services.

@@ -15,6 +15,9 @@ def validate(approval,now=None):
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')
     if approval.get('stages')!=[list(stage) for stage in STAGES]:raise ValueError('original stage sequence required')
+    if 'dns_retry_policy' in approval and approval['dns_retry_policy']!='dns-only-3-attempts-12s-v1':raise ValueError('unreviewed DNS retry policy')
+    for key in ('snapshot_cache_run','api_cache_run','preflight_cache_run'):
+        if key in approval and not re.fullmatch('cohost-[a-f0-9]{16}',approval[key]):raise ValueError('invalid cached run: '+key)
     if 'api_sha256' in approval:
         from api_artifact import SOURCE,REGRESSION_RUN
         if approval.get('api_source')!=SOURCE or approval.get('api_regression_run')!=REGRESSION_RUN or not re.fullmatch('[a-f0-9]{64}',approval['api_sha256']):raise ValueError('unreviewed optimized API source/hash')

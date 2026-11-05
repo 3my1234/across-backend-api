@@ -48,6 +48,7 @@ jobs:
           NODE_PATH=/tmp/singlehost-tools/node_modules node deploy/singlehost-lab/test-render.cjs
           python3 -m py_compile deploy/singlehost-lab/*.py
           python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
+          python3 -m unittest discover -s deploy/cohost-lab -p 'test_baseline_dns.py' -v
           python3 deploy/singlehost-lab/provenance.py
           python3 deploy/singlehost-lab/check_seed.py
       - name: Build actual unchanged API and seed tools on free CI

@@ -1,9 +1,15 @@
-import json,subprocess,unittest
+import json,subprocess,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch,Mock
 from ssh_once import execute,observe
 
 class LocalSshTests(unittest.TestCase):
+    def test_rejected_key_reason_is_saved_and_not_retried(self):
+        with tempfile.TemporaryDirectory() as folder,patch('ssh_once.subprocess.run',side_effect=subprocess.CalledProcessError(255,'ssh',stderr=b'Permission denied (publickey,password).')) as call:
+            private=Path(folder)
+            with self.assertRaises(subprocess.CalledProcessError):observe(private,'setup-status')
+            result=json.loads((private/'last-ssh-error.json').read_text())
+            self.assertEqual(result['kind'],'authentication_denied');self.assertEqual(result['command'],'setup-status');self.assertEqual(call.call_count,1)
     def test_two_setup_timeouts_are_unknown_then_fresh_ready_can_resume(self):
         with patch('ssh_once.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',45),subprocess.TimeoutExpired('ssh',45),Mock(stdout=b'{"ready":true}')]) as call:
             status=json.loads(observe(Path('private'),'setup-status'))

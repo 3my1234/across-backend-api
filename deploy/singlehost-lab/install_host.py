@@ -38,6 +38,16 @@ def reuse_fixture(base,approval):
     validate(cached_fixture,meta)
     os.link(cached_fixture,base/'fixture.dump')
 
+def reuse_api(base,approval):
+    run=approval['api_cache_run']
+    if not re.fullmatch('cohost-[a-f0-9]{16}',run):raise ValueError('invalid cached API nonce')
+    source=base.parent/run/'api.bin'
+    if source.resolve()!=source or source.stat().st_uid!=os.geteuid() or source.stat().st_mode&0o022:raise ValueError('unsafe cached API path/ownership')
+    if hashlib.sha256(source.read_bytes()).hexdigest()!=approval['api_sha256']:raise ValueError('cached API checksum mismatch')
+    os.link(source,base/'api.bin')
+    from api_artifact import validate_files
+    validate_files(base,approval)
+
 def main():
     import fcntl
     p=argparse.ArgumentParser();p.add_argument('--package',type=Path,required=True);p.add_argument('--sha256',required=True);p.add_argument('--run',required=True);a=p.parse_args()
@@ -58,6 +68,15 @@ def main():
     approval=validate_approval(base)
     if approval.get('snapshot_cache_run'):
         reuse_fixture(base,approval)
+    if approval.get('api_cache_run'):
+        reuse_api(base,approval)
+    if approval.get('preflight_cache_run'):
+        preflight=base.parent/approval['preflight_cache_run']/('preflight-'+a.run)/'baseline.json'
+        if preflight.is_file():
+            from baseline import validate
+            try:validate(json.loads(preflight.read_text()),time.time())
+            except (ValueError,OSError):pass
+            else:shutil.copyfile(preflight,base/'baseline.json')
     cached=Path('/root/atlxpres-cohost/cohost-6d6c5f9220874022/images.tar.gz')
     if cached.is_symlink() or not cached.is_file():raise ValueError('existing reviewed image archive missing')
     os.link(cached,base/'images.tar.gz')

@@ -1,9 +1,21 @@
-import json,tempfile,unittest
+import json,os,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 from api_artifact import manifest,verify_running,SOURCE
+from install_host import reuse_api
 
 class ApiArtifactTests(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt','Linux cache ownership and hardlinks')
+    def test_cached_api_hash_checked_before_link_and_no_overwrite(self):
+        with tempfile.TemporaryDirectory() as folder,patch('verifier_build.validate_binary'):
+            root=Path(folder);old=root/('cohost-'+'a'*16);old.mkdir();base=root/('cohost-'+'b'*16);base.mkdir()
+            (old/'api.bin').write_bytes(b'approved cached API');(old/'api.bin').chmod(0o555)
+            artifact=manifest(old/'api.bin');(base/'api-artifact.json').write_text(json.dumps(artifact))
+            approval={**artifact,'api_cache_run':old.name}
+            with self.assertRaisesRegex(ValueError,'checksum'):reuse_api(base,{**approval,'api_sha256':'0'*64})
+            self.assertFalse((base/'api.bin').exists())
+            reuse_api(base,approval);self.assertEqual((base/'api.bin').stat().st_ino,(old/'api.bin').stat().st_ino)
+            with self.assertRaises(FileExistsError):reuse_api(base,approval)
     def test_running_executable_must_match_both_read_only_mounts(self):
         with tempfile.TemporaryDirectory() as folder,patch('verifier_build.validate_binary'):
             base=Path(folder);(base/'api.bin').write_bytes(b'approved synthetic executable')

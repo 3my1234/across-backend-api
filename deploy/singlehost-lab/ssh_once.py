@@ -12,6 +12,11 @@ def execute(private,command):
         except subprocess.TimeoutExpired:
             if command=='cleanup' or attempt:raise
             print('Read-only SSH status timed out; reconnecting once to the SAME server job.',file=sys.stderr,flush=True)
+        except subprocess.CalledProcessError as error:
+            message=(error.stderr or b'').decode(errors='replace')
+            try:(private/'last-ssh-error.json').write_text(json.dumps(dict(command=command,exit_code=error.returncode,kind='authentication_denied' if 'Permission denied' in message else 'transport_or_remote_failure',stderr=message[-2000:])))
+            except OSError:pass  # Diagnostics must never replace the original SSH failure.
+            raise
 
 def observe(private,command):
     """A missing pre-load observation is unknown, never permission to load."""
@@ -23,4 +28,7 @@ def observe(private,command):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--private',type=Path,required=True);p.add_argument('--command',required=True);a=p.parse_args()
-    sys.stdout.buffer.write(observe(a.private,a.command))
+    try:sys.stdout.buffer.write(observe(a.private,a.command))
+    except subprocess.CalledProcessError as error:
+        sys.stderr.write((error.stderr or b'').decode(errors='replace'))
+        raise SystemExit(error.returncode)
