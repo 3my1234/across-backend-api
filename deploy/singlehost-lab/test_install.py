@@ -1,9 +1,22 @@
-import io,tarfile,tempfile,unittest
+import io,os,tarfile,tempfile,unittest
 from pathlib import Path
 from install_host import extract,key_line
 from runtime import active_imports
 
 class InstallSafetyTests(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt','Unix container file permissions')
+    def test_only_gateway_config_is_readable_by_container_user(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);archive=root/'package.tar';base=root/'run';base.mkdir()
+            with tarfile.open(archive,'w') as out:
+                for name in ('haproxy.cfg','approval.json','fixture.json','ci.pub','verifier.bin'):
+                    entry=tarfile.TarInfo(name);entry.size=1;entry.mode=0o777
+                    out.addfile(entry,io.BytesIO(b'x'))
+            extract(archive,base)
+            for name in ('approval.json','fixture.json','ci.pub'):
+                self.assertEqual((base/name).stat().st_mode&0o777,0o600)
+            self.assertEqual((base/'haproxy.cfg').stat().st_mode&0o777,0o644)
+            self.assertEqual((base/'verifier.bin').stat().st_mode&0o777,0o500)
     def test_existing_import_is_detected_without_mistaking_container_logs(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

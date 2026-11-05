@@ -1,5 +1,5 @@
 """Actual Docker/Compose rehearsal on a disposable GitHub runner only."""
-import hashlib,json,os,shutil,signal,subprocess,sys,time,uuid
+import hashlib,json,os,shutil,signal,subprocess,sys,tarfile,time,uuid
 from pathlib import Path
 from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,verify_host_bridge,cleanup
 
@@ -66,7 +66,18 @@ def main():
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
         (base/'compose.json').write_text(json.dumps(doc,indent=2))
         (output/'compose.json').write_text(json.dumps(doc,indent=2))
-        shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',base/'haproxy.cfg')
+        # Reproduce the live installer's extraction and modes, rather than
+        # copying a repository file with accidentally more permissive modes.
+        from install_host import extract
+        package=output/'gateway-package.tar'
+        with tarfile.open(package,'w') as archive:
+            archive.add(root/'deploy/capacity-lab/haproxy.cfg',arcname='haproxy.cfg')
+        extract(package,base)
+        # Validate as the immutable image's default non-root user, with the
+        # exact extracted bind mount used by the live Compose gateway.
+        call(['docker','run','--rm','--network','none','--add-host','api1:127.0.0.1','--add-host','api2:127.0.0.1','--mount',
+            'type=bind,src='+str(base/'haproxy.cfg')+',dst=/usr/local/etc/haproxy/haproxy.cfg,readonly',
+            images['gateway'],'haproxy','-c','-f','/usr/local/etc/haproxy/haproxy.cfg'])
         (base/'exchange').mkdir(mode=0o700)
         call(['docker','compose','-f',str(base/'compose.runtime.json'),'config','--quiet'])
         sentinel=call(['docker','run','-d','--network','none','--label','atlxpres.singlehost.sentinel='+run,images['redis'],'redis-server','--save','','--appendonly','no']).decode().strip()

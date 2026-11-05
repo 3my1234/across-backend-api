@@ -15,7 +15,9 @@ def extract(package,base):
             if total>300*2**20 or row.size>limit:raise ValueError('reviewed package bounds exceeded')
             target=base/path;target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             with target.open('xb') as out:shutil.copyfileobj(archive.extractfile(row),out,1024*1024)
-            target.chmod(0o500 if row.name=='verifier.bin' else 0o600)
+            # HAProxy runs as its image's non-root user. This exact file has
+            # no credentials; other package files remain root-only.
+            target.chmod(0o644 if row.name=='haproxy.cfg' else 0o500 if row.name=='verifier.bin' else 0o600)
 
 def key_line(base,public,expiry):
     parts=public.split()
