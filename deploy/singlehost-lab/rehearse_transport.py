@@ -1,5 +1,5 @@
 """Disposable real SSH, local guard fault and systemd hard-stop integration."""
-import base64,json,os,socket,subprocess,sys,time,urllib.request
+import base64,json,os,shutil,socket,subprocess,sys,time,urllib.request
 from pathlib import Path
 from runtime import call,inventory,identity
 from policy import STAGES
@@ -96,7 +96,7 @@ def exercise(root,base,output,sentinel):
         # Exercise the actual staged coordinator, not only the direct smoke
         # command. Keep its normal relative output argument to catch Docker
         # bind-mount handling; exact live workload and gates remain unchanged.
-        staged=Path(os.path.relpath(output/'coordinator-stage',Path.cwd()))
+        staged=Path(os.path.relpath(root/'singlehost-coordinator-replay',Path.cwd()))
         staged.mkdir()
         runner.output=staged.resolve()
         runner.measure(STAGES[0])
@@ -130,3 +130,13 @@ def exercise(root,base,output,sentinel):
                 process.terminate()
                 try:process.wait(timeout=5)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+        # Never place bearer fixture directories under public artifact roots.
+        staged=root/'singlehost-coordinator-replay'
+        if staged.is_dir():shutil.copytree(staged,output/'coordinator-stage',dirs_exist_ok=True)
+        private=root/('private-'+run)
+        if private.is_dir():shutil.rmtree(private)
+        for name in ('watchdog-error.json','sample.json','watchdog.jsonl'):
+            path=base/name
+            if path.is_file():
+                shutil.copyfile(path,output/('coordinator-'+name))
+                if name=='watchdog-error.json':print('Disposable guard diagnostic: '+path.read_text(),flush=True)
