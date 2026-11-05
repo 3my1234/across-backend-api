@@ -8,6 +8,7 @@ def exercise(root,base,output):
     cases=(('services','provider_marketplace_controller.go','listListings',"'','','public','','',NULL,NULL,21,true,0,0,'',''"),
            ('catalogue','catalog_controller.go','ListProducts',"false,0,0,true,'NG','','','all'"))
     report={'capacity_qualified':False,'application_modified':False,'comparisons':{}}
+    report['population']=json.loads(sql(base,"SELECT json_build_object('providers',(SELECT count(*) FROM provider_organizations),'services',(SELECT count(*) FROM provider_listings),'products',(SELECT count(*) FROM products))"))
     for name,file,function,args in cases:
         source=(root/'internal/controllers'/file).read_text()
         source=source[source.index('func (',source.index('package controllers')):]
@@ -29,9 +30,10 @@ def exercise(root,base,output):
             values=["''","''","'public'","''","''","NULL","NULL","21","true","0","0","''","''"] if name=='services' else ['false','0','0','true',"'NG'","''","''","'all'"]
             return re.sub(r'\$(\d+)',lambda m:values[int(m[1])-1],statement)
         equivalence=sql(base,"BEGIN; SELECT (SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(query)+") q)=(SELECT COALESCE(jsonb_agg(to_jsonb(q)),'[]') FROM ("+literal(candidate)+") q); ROLLBACK;")
-        if 't' not in equivalence.splitlines():raise ValueError('ordered result mismatch: '+name)
-        result['ordered_full_rows_equal']=True
+        result['ordered_full_rows_equal']='t' in equivalence.splitlines()
+        result['candidate_adopted']=False
         result['samples']={label:{'median_ms':statistics.median(times),'max_ms':max(times),'values_ms':times} for label,times in samples.items()}
         report['comparisons'][name]=result
+        (output/'browsing-profile.json').write_text(json.dumps(report,indent=2))
     (output/'browsing-profile.json').write_text(json.dumps(report,indent=2))
     print('BROWSING_PROFILE '+json.dumps(report),flush=True)

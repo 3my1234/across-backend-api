@@ -39,7 +39,7 @@ def main():
     import argparse
     parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');args=parser.parse_args()
     if args.foundation and args.snapshot_build:raise ValueError('snapshot requires full500-pair fixture')
-    pairs=10 if args.foundation else 500
+    pairs=500 if os.environ.get('BROWSING_PROFILE')=='true' else (10 if args.foundation else 500)
     root=Path(__file__).resolve().parents[2]
     from provenance import verify
     verify(root)
@@ -65,7 +65,7 @@ def main():
         (base/'verifier.bin').chmod(0o500)
         result['verifier_sha256']=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
-        if args.foundation:
+        if args.foundation and pairs==10:
             for service in doc['services'].values():
                 if 'LAB_ACTOR_PAIRS' in service.get('environment',{}):service['environment']['LAB_ACTOR_PAIRS']='10'
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
@@ -110,6 +110,8 @@ def main():
         if os.environ.get('BROWSING_PROFILE')=='true':
             from profile_browsing import exercise as profile_browsing
             profile_browsing(root,base,output)
+            result['browsing_profile_completed']=True
+            return  # Profiling only; finally still performs exact test cleanup.
         compose(base,'start','api1','api2','gateway')
         deadline=time.monotonic()+90
         import urllib.request
