@@ -7,7 +7,7 @@ from trial_policy import STAGES,validate,client_hashes
 
 class Runner:
     def __init__(self,root,config,approval,output):
-        self.root=root;self.config=config;self.approval=approval;self.output=output
+        self.root=root.resolve();self.config=config.resolve();self.approval=approval;self.output=output.resolve()
         self.children=[];self.stop=threading.Event();self.error=None;self.previous={};self.activation_done=False
     def ssh(self,role,cmd,timeout=30,input=None,destination=None):
         args=['ssh','-F',str(self.config),'cohost-'+role,cmd]

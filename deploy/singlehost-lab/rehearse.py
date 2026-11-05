@@ -56,7 +56,12 @@ def main():
             small_queue_preflight(root,images,output)
             result['small_queue_preflight_passed']=True
         (base/'render.json').write_text(json.dumps(dict(run=run,images=images,verifier_override=True)))
-        with (base/'verifier.bin').open('wb') as binary:subprocess.run(['docker','run','--rm','--network','none','--entrypoint','/bin/cat',images['app'],'/app/lab'],stdout=binary,check=True,timeout=30)
+        # Build with the exact flags used by the Windows review packager.
+        from verifier_build import build_args,validate_binary
+        call(['docker','build','--target','build','-f','deploy/capacity-lab/Dockerfile','-t','singlehost-verifier-builder:local','.'],timeout=600)
+        call(['docker','run','--rm','--network','none','-e','CGO_ENABLED=0','-e','GOOS=linux','-e','GOARCH=amd64',
+            '-v',str(base)+':/out','singlehost-verifier-builder:local',*build_args('/out/verifier.bin')],timeout=180)
+        validate_binary(base/'verifier.bin')
         (base/'verifier.bin').chmod(0o500)
         result['verifier_sha256']=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))

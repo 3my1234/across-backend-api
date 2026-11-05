@@ -32,7 +32,9 @@ def main():
     (review/'compose.json').write_bytes(compose)
     for name in ('fixture.dump','fixture.json','snapshot-proof.json'):shutil.copyfile(a.snapshot_directory/name,review/name)
     build_env={**os.environ,'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'}
-    subprocess.run(['go','build','-trimpath','-ldflags=-s -w','-o',str(review/'verifier.bin'),'./cmd/capacity-lab'],cwd=root,env=build_env,check=True)
+    from verifier_build import build_args,validate_binary
+    subprocess.run(build_args(review/'verifier.bin'),cwd=root,env=build_env,check=True)
+    validate_binary(review/'verifier.bin')
     sys.path.insert(0,str(root/'deploy/cohost-lab'))
     from trial_policy import client_hashes
     approval=dict(run=run,topology='singlehost-database-vps',host='79.143.176.173',authorized=False,approved_unix=0,

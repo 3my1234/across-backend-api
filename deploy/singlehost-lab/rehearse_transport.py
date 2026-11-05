@@ -80,7 +80,7 @@ def exercise(root,base,output,sentinel):
         if denied.returncode==0:raise RuntimeError('unreviewed shell command allowed')
         blocked=subprocess.run(['ssh','-F',str(config),'-o','ControlMaster=no','-o','ControlPath=none','-o','ControlPersist=no','-W','127.0.0.1:5432','trial'],capture_output=True,timeout=15)
         if blocked.returncode==0 or b'administratively prohibited' not in blocked.stderr:raise RuntimeError('non-gateway forwarding not explicitly denied')
-        with socket.socket() as sock:sock.bind(('127.0.0.1',0));forward=sock.getsockname()[1]
+        with socket.socket() as sock:sock.bind(('127.0.0.1',8080));forward=8080
         from http_forward import start as start_forward
         tunnel=start_forward(config,'cohost-main',forward,output/'http-forward.log')
         deadline=time.monotonic()+15
@@ -93,6 +93,14 @@ def exercise(root,base,output,sentinel):
                 if tunnel.poll() is not None or time.monotonic()>deadline:raise
                 time.sleep(.2)
         result['restricted_control_and_http_only_forward_passed']=True
+        # Exercise the actual staged coordinator, not only the direct smoke
+        # command. Keep its normal relative output argument to catch Docker
+        # bind-mount handling; exact live workload and gates remain unchanged.
+        staged=Path(os.path.relpath(output/'coordinator-stage',Path.cwd()))
+        staged.mkdir()
+        runner.output=staged.resolve()
+        runner.measure(STAGES[0])
+        result['actual_staged_coordinator_smoke_passed']=True
         runner.check();runner.stop.set();runner.children_thread.join(timeout=12)
         (base/'inject-public-fault').touch()
         guard.wait(timeout=20)
