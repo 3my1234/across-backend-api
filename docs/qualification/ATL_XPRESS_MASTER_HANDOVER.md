@@ -627,3 +627,13 @@ Seed began00:57:31UTC and hit binary's720s context at01:09:32UTC: `timeout: cont
 
 CIrunner reports `Single-host cleanup confirmed`; subsequent always-cleanup step SUCCESS. All preserved evidence qualification/singlehost-live-41945109410; structuredresult qualification/SINGLE_HOST_LIVE_RESULT_41945109410.json. No automaticretry, sourcechange, capincrease or timeoutrelaxation performed. Prior20-session disposable pass41929372121 remainsvalid but is not actualservercapacity. Do not rerun consumedreview/oldoperator.
 
+
+
+## Snapshot replacement VERIFIED; approved operator launched ? 2026-11-05
+
+Disposable41949650079 SUCCESS at745c51fe35735886a2c249591be7a0996e5d508c; frozen refexperiment/approved-singlehost-745c51f. Full500-pair large-busy fixture retained unchanged. CustomPGdump154473627bytes, SHA2566f6c2812cd4616f6475989cd384db2f3eaf6fd7f1caedf5ebfda9936ec052a46. Atomic restore+all-table/all-row fingerprint/live-trigger comparison+ANALYZE39.1728s atPG1CPU/3GiB. Nonemptytarget refusal, injectedmid-DDL atomicrollback and normalretry passed underindependentguard. Original20session45s smoke passed onrestoredfullfixture:102acknowledgedwrites exactlyonce,zero missing/duplicates/unexpectederrors/controlledoverload; p9597.496ms/p99418.900ms. RealrestrictedSSH/HTTPforward/guardfault/deadlinecleanupalsoPASS. This is NOT500active-sessionqualification.
+
+Artifact downloadedONCE locally qualification/snapshot-evidence-41949650079; noGitHubartifactdownload duringliveexecution. All24reviewhashes verified. Freshreview qualification/singlehost-review/cohost-c6d1dbee1b3e4b1e (old56ee consumedmustnotrerun). Mainhostunused; previous56ee finalcleanupisread-onlyauditedONLYonDBhost. Useralreadyapprovedsamecaps/scope andexplicitlyordereddoit: approvalpersists, noadditionalapprovalquestion. VisiblePowerShelloperator opened PID24260 forlocalSSHpasswordentry; no password is requested/readbyCodex. Awaituserauth/setupstatus beforeclaimingnewlivejobstarted. Do notstartduplicateoperator. Local read-onlySSHstatus45s absolutetimeout+one read-onlyreconnect; cleanupneverautoretried. Serverjob restoresnapshotBEFOREready; runnerwillNOTregenerate1.5mhistoricalmessages. Alloriginalworkload/resource/safety/integritygates/hard120min remain.
+
+Rootstructuredvalidation qualification/SINGLE_HOST_SNAPSHOT_VALIDATION_41949650079.json; operatorrecord SINGLE_HOST_SNAPSHOT_EXECUTION_c6d1dbee1b3e4b1e.json. Lastactualserverrun41945109410 failedseed720s/zeroapplicationsessions, cleanupconfirmed; this newactualrun/resultstillPENDING. FirstsnapshotCI41948387545 failedmultilineJSONreaderafterseed341.640s; narrowfix+regression in745c51f,17focusedchecksPASS. No productiondeployment, migrations, DNS, newservers orK3schanges. Main/backend/mobile/release/K3sbranchesuntouched.
+
