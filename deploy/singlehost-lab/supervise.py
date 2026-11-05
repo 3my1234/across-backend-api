@@ -32,9 +32,6 @@ def validate_approval(base):
     if hashlib.sha256((base/'compose.json').read_bytes()).hexdigest()!=approval.get('compose_sha256'):raise ValueError('reviewed Compose changed')
     if hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest()!=approval['verifier_sha256']:raise ValueError('reviewed verifier binary changed')
     if not re.fullmatch('[a-f0-9]{40}',approval.get('source_commit','')):raise ValueError('immutable source required')
-    if 'api_sha256' in approval:
-        from api_artifact import validate_files
-        validate_files(base,approval)
     return approval
 
 def guard_ready(base):
@@ -58,6 +55,9 @@ def check_machine():
 def job(base):
     started=time.time()
     approval=validate_approval(base);check_machine()
+    if 'api_sha256' in approval:
+        from api_artifact import validate_files
+        validate_files(base,approval)
     require_live_fixture(json.loads((base/'compose.json').read_text()))
     if (base/'supervisor.json').exists() or (base/'cleanup.complete').exists():raise ValueError('refuse duplicate/closed execution')
     from stage_host import validate_networks
