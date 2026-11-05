@@ -15,6 +15,6 @@ def validate(approval,now=None):
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')
     if approval.get('stages')!=[list(stage) for stage in STAGES]:raise ValueError('original stage sequence required')
-    for key,size in (('source_commit',40),('compose_sha256',64),('image_archive_sha256',64),('verifier_sha256',64)):
+    for key,size in (('source_commit',40),('compose_sha256',64),('image_archive_sha256',64),('verifier_sha256',64),('snapshot_sha256',64)):
         if not re.fullmatch('[a-f0-9]{'+str(size)+'}',approval.get(key,'')):raise ValueError('immutable identity required: '+key)
     return approval

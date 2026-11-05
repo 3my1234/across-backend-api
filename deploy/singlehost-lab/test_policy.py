@@ -26,7 +26,7 @@ class PolicyTests(unittest.TestCase):
         return dict(run='cohost-'+'a'*16,topology='singlehost-database-vps',host='79.143.176.173',authorized=True,spending_cap_usd=0,
             aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=2,application_memory=2684354560,
             database_cpu=1,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
-            timing_policy='http-2s-observer-2.5s-v1',approved_unix=100,stages=[list(s) for s in STAGES],source_commit='b'*40,compose_sha256='c'*64,image_archive_sha256='d'*64,verifier_sha256='e'*64)
+            timing_policy='http-2s-observer-2.5s-v1',approved_unix=100,stages=[list(s) for s in STAGES],source_commit='b'*40,compose_sha256='c'*64,image_archive_sha256='d'*64,verifier_sha256='e'*64,snapshot_sha256='f'*64)
     def test_changed_placement_needs_explicit_current_approval(self):
         a=self.approval();validate(a,now=100)
         for key,value in (('authorized',False),('database_cpu',3),('aggregate_cpu',4),('host','173.212.219.169'),('spending_cap_usd',1)):

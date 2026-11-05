@@ -22,6 +22,10 @@ on:
         description: 'Disposable private bridge connectivity only; no seed or live hosts'
         type: boolean
         default: false
+      snapshot_build:
+        description: 'Build full500-pair synthetic dump; rehearse atomic restore and unchanged smoke'
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -59,7 +63,13 @@ jobs:
       - name: Rehearse actual20-session foundation using retained500-pair seed proof
         env:
           NODE_PATH: /tmp/singlehost-tools/node_modules
-        run: sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --foundation
+          SNAPSHOT_BUILD: ${{ inputs.snapshot_build }}
+        run: |
+          if [ "$SNAPSHOT_BUILD" = true ]; then
+            sudo --preserve-env=GITHUB_ACTIONS,GITHUB_RUN_ID,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --snapshot-build
+          else
+            sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --foundation
+          fi
       - name: Retain result in logs without depending on artifact downloads
         if: always()
         run: |

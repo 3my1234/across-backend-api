@@ -1,5 +1,5 @@
 """Install a checksum-reviewed small package, never a production deployment."""
-import argparse,hashlib,json,os,re,subprocess,tarfile,time
+import argparse,hashlib,json,os,re,shutil,subprocess,tarfile,time
 from pathlib import Path,PurePosixPath
 
 def extract(package,base):
@@ -11,10 +11,10 @@ def extract(package,base):
             path=PurePosixPath(row.name)
             if path.is_absolute() or '..' in path.parts or '\\' in row.name or ':' in row.name or row.issym() or row.islnk() or not row.isfile():raise ValueError('only explicit regular relative files allowed')
             total+=row.size
-            limit=32*2**20 if row.name=='verifier.bin' else 2*2**20
-            if total>40*2**20 or row.size>limit:raise ValueError('reviewed package bounds exceeded')
+            limit=256*2**20 if row.name=='fixture.dump' else 32*2**20 if row.name=='verifier.bin' else 2*2**20
+            if total>300*2**20 or row.size>limit:raise ValueError('reviewed package bounds exceeded')
             target=base/path;target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-            with target.open('xb') as out:out.write(archive.extractfile(row).read())
+            with target.open('xb') as out:shutil.copyfileobj(archive.extractfile(row),out,1024*1024)
             target.chmod(0o500 if row.name=='verifier.bin' else 0o600)
 
 def key_line(base,public,expiry):
@@ -32,7 +32,10 @@ def main():
     rows=json.loads(subprocess.check_output(['ip','-j','address','show'],text=True))
     if not any(addr['local']=='79.143.176.173' for row in rows for addr in row.get('addr_info',[])):raise ValueError('database VPS only')
     if a.package!=Path('/root')/(a.run+'-singlehost.tar.gz') or a.package.is_symlink():raise ValueError('fixed uploaded package required')
-    if hashlib.sha256(a.package.read_bytes()).hexdigest()!=a.sha256:raise ValueError('uploaded package checksum mismatch')
+    checksum=hashlib.sha256()
+    with a.package.open('rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''):checksum.update(block)
+    if checksum.hexdigest()!=a.sha256:raise ValueError('uploaded package checksum mismatch')
     base=Path('/root/atlxpres-singlehost')/a.run
     base.mkdir(parents=True,mode=0o700,exist_ok=False)
     extract(a.package,base)

@@ -25,16 +25,16 @@ if ($LASTEXITCODE -ne 0 -or $secretNames -contains 'SINGLEHOST_TRIAL_BUNDLE') { 
 $audit=@'
 import json,subprocess
 from pathlib import Path
-run='cohost-747d93fea0a9e0bc'
-base=Path('/root/atlxpres-cohost')/run
-if not (base/'cleanup.complete').is_file():raise RuntimeError('Previous cleanup marker missing')
+run='cohost-56ee8ed93722432b'
+base=Path('/root/atlxpres-singlehost')/run
+if not (base/'cleanup.finalized').is_file():raise RuntimeError('Previous cleanup marker missing')
 ids=subprocess.check_output(['docker','ps','-aq','--filter','label=atlxpres.cohost.run='+run],text=True,timeout=15).strip()
 if ids:raise RuntimeError('Previous test containers remain')
 keys=Path('/root/.ssh/authorized_keys')
 if keys.exists() and any(run in row for row in keys.read_text().splitlines()):raise RuntimeError('Previous temporary key remains')
 print(json.dumps(dict(previous_run=run,remaining_containers=0,remaining_keys=0,read_only=True)))
 '@
-foreach($address in @('173.212.219.169','79.143.176.173')) {
+foreach($address in @('79.143.176.173')) {
     $audit | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "root@$address" 'python3 -'
     if ($LASTEXITCODE -ne 0) { throw 'Previous cleanup not confirmed; no new setup started' }
 }
@@ -47,12 +47,12 @@ if ($LASTEXITCODE -ne 0 -or -not $known) { throw 'Previously trusted database ho
 $knownPath=Join-Path $private 'known_hosts'
 [IO.File]::WriteAllText($knownPath,$known+"`n",(New-Object Text.UTF8Encoding($false)))
 $remotePackage="/root/$run-singlehost.tar.gz"
-Write-Host 'Uploading small reviewed tools only. Existing image archive is reused. Enter the database-host password locally.'
+Write-Host 'Uploading reviewed tools and reusable synthetic database snapshot. Existing images are reused. Enter the database-host password locally.'
 Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"
 if ($LASTEXITCODE -ne 0) { throw 'Single-host installation did not finish; do not rerun. Inspect this exact job and cleanup first.' }
 function Trial([string]$command) {
-    $output=& ssh -i (Join-Path $private 'ci') -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$knownPath" -o ConnectTimeout=15 root@79.143.176.173 $command
+    $output=& python (Join-Path $PSScriptRoot 'ssh_once.py') --private $private --command $command
     if ($LASTEXITCODE -ne 0) { throw "Restricted test command failed: $command. Server-side hard stop remains armed." }
     return $output
 }

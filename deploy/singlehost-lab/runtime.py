@@ -114,7 +114,7 @@ def capture_evidence(base):
     if errors:(destination/'collection-errors.json').write_text(json.dumps(errors))
 
 def observations(base,full=False):
-    names=('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','cleanup.complete','cleanup.finalized')
+    names=('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','snapshot-restored.json','cleanup.complete','cleanup.finalized')
     report={name:(base/name).read_text() for name in names if (base/name).exists()}
     if not full and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-10:])
     if full and (base/'public').exists():

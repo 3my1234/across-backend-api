@@ -100,6 +100,11 @@ def job(base):
         compose(base,'start','postgres','redis')
         from rehearse import wait_ready
         wait_ready(base);write_json(base/'private-bridge.json',verify_host_bridge(base));guard_ready(base)
+        metadata=json.loads((base/'supervisor.json').read_text());metadata['phase']='snapshot-restore';write_json(base/'supervisor.json',metadata)
+        from snapshot import restore
+        fixture=json.loads((base/'fixture.json').read_text())
+        if fixture['sha256']!=approval['snapshot_sha256']:raise ValueError('approved snapshot differs')
+        restore(base,base/'fixture.dump',fixture,lambda:guard_ready(base))
         metadata=json.loads((base/'supervisor.json').read_text());metadata['phase']='waiting-for-generator';write_json(base/'supervisor.json',metadata)
         (base/'setup.ready').write_text(str(time.time()))
         print(json.dumps(dict(singlehost_setup='ready',run=base.name,load_started=False)),flush=True)

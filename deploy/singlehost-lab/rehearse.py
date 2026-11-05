@@ -37,7 +37,8 @@ def small_queue_preflight(root,images,output):
 def main():
     if os.environ.get('GITHUB_ACTIONS')!='true' or os.geteuid()!=0:raise ValueError('disposable CI root only')
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');args=parser.parse_args()
+    if args.foundation and args.snapshot_build:raise ValueError('snapshot requires full500-pair fixture')
     pairs=10 if args.foundation else 500
     root=Path(__file__).resolve().parents[2]
     from provenance import verify
@@ -82,6 +83,9 @@ def main():
         counts=json.loads(sql(base,"SELECT json_build_object('actors',(SELECT count(*) FROM capacity_lab_actors),'migration108',(SELECT count(*) FROM schema_migrations WHERE name='108_push_receipt_claims.sql'),'identity',(SELECT marker FROM capacity_lab_identity))"))
         if counts!={'actors':pairs,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
+        if args.snapshot_build:
+            from rehearse_snapshot import exercise as snapshot_replay
+            result['snapshot']=snapshot_replay(root,base,output,sentinel)
         print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
         # This command emits bearer fixtures. Capture privately, never in public evidence.
         exec_lab(base,'exporter','prepare-sessions')
@@ -141,6 +145,9 @@ def main():
         from rehearse_transport import exercise
         result.update(exercise(root,base,output,sentinel))
         result['passed']=not application_failures
+        if args.snapshot_build and result['passed']:
+            proof=dict(source=call(['git','-c','safe.directory='+str(root),'rev-parse','HEAD']).decode().strip(),workflow_run=os.environ['GITHUB_RUN_ID'],snapshot_sha256=result['snapshot']['snapshot_sha256'],restore_and_original_smoke_passed=True)
+            (output/'snapshot-proof.json').write_text(json.dumps(proof,indent=2))
         if application_failures:raise RuntimeError('Application gates failed; shutdown/transport replay retained: '+'; '.join(application_failures))
     finally:
         if created:

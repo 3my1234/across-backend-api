@@ -28,9 +28,12 @@ class SingleHostRunner(Runner):
         self.progress('durable notification drain and delayed receipt verification',lambda:super(SingleHostRunner,self).notifications())
 
     def prepare(self):
-        for name in ('seed','exporter','verifier','lifecycle','queue-check'):self.service(name)
-        self.progress('synthetic500-pair seed; no application load yet',lambda:self.lab('seed','seed',self.output/'seed.log'))
-        print('Seed completed; preparing private session fixtures (tokens withheld).',flush=True)
+        report=json.loads(self.ssh('main','observations'))
+        restored=json.loads(report.get('snapshot-restored.json','{}'))
+        if restored.get('restore_passed') is not True or restored.get('snapshot_sha256')!=self.approval['snapshot_sha256']:raise ValueError('verified full snapshot restoration missing')
+        (self.output/'snapshot-restored.json').write_text(json.dumps(restored,indent=2))
+        for name in ('exporter','verifier','lifecycle','queue-check'):self.service(name)
+        print('Full500-pair snapshot verified; preparing fresh private sessions. No live seed regeneration.',flush=True)
         self.lab('prepare-sessions')
         self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
         self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
