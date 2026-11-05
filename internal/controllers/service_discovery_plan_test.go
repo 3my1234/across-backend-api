@@ -27,7 +27,7 @@ func TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(ctx, `INSERT INTO provider_listings(id,provider_id,title,category,created_at) VALUES(gen_random_uuid(),$1,'Plumbing A','Repair','2026-01-03'),(gen_random_uuid(),$2,'Plumbing B','Repair','2026-01-02'),(gen_random_uuid(),$3,'Hidden','Repair','2026-01-01')`, a, b, hidden)
+	_, err = db.Exec(ctx, `INSERT INTO provider_listings(id,provider_id,title,category,created_at) VALUES(gen_random_uuid(),$1,'Plumbing Synthetic A','Repair','2026-01-03'),(gen_random_uuid(),$2,'Plumbing hotel B','Repair','2026-01-02'),(gen_random_uuid(),$3,'Hidden','Repair','2026-01-01')`, a, b, hidden)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +63,15 @@ func TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan(t *testing.T) 
 			t.Fatalf("incorrect eligibility/order after connection reuse: %+v", result)
 		}
 	}
+	for _, tc := range []struct{ search, provider string }{{"Synthetic", a}, {"hotel", b}} {
+		result := get("?search=" + tc.search)
+		if len(result.Items) != 1 || result.Items[0].Provider != tc.provider {
+			t.Fatalf("workload search %s changed: %+v", tc.search, result)
+		}
+	}
+	if result := get("?search=trousers"); len(result.Items) != 0 {
+		t.Fatal("nonmatching workload search returned listings")
+	}
 	first := get("?limit=1")
 	if len(first.Items) != 1 || first.Next == "" {
 		t.Fatalf("first page missing: %+v", first)
@@ -79,7 +88,7 @@ func TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan(t *testing.T) 
 		t.Fatal("search filter lost")
 	}
 	var named int
-	err = db.QueryRow(ctx, `SELECT count(*) FROM pg_prepared_statements WHERE statement LIKE 'SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type%'`).Scan(&named)
+	err = db.QueryRow(ctx, `SELECT count(*) FROM pg_prepared_statements WHERE statement LIKE 'SELECT l.id::text,l.provider_id::text,p.business_name,l.listing_type%' OR statement LIKE 'WITH discovery_identity AS MATERIALIZED%'`).Scan(&named)
 	if err != nil || named != 0 {
 		t.Fatalf("service query used a reusable named statement: count=%d error=%v", named, err)
 	}
