@@ -1,5 +1,5 @@
 """Actual Docker/Compose rehearsal on a disposable GitHub runner only."""
-import hashlib,json,os,shutil,signal,subprocess,sys,tarfile,time,uuid
+import hashlib,json,os,re,shutil,signal,subprocess,sys,tarfile,time,uuid
 from pathlib import Path
 from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,verify_host_bridge,cleanup
 
@@ -107,8 +107,9 @@ def main():
             # unrelated million-row message history, which these SQL paths never read.
             source=(root/'cmd/capacity-lab/main.go').read_text()
             for table in ('provider_listings','products'):
-                fragment=source.split(' INSERT INTO '+table+'(provider_id,',1)[1].split(';',1)[0]
-                sql(base,'INSERT INTO '+table+'(provider_id,'+fragment.replace('%d','9')+';')
+                fragments=[s for s in re.findall(r' INSERT INTO '+table+r'\(provider_id,[^;]+;',source) if 'generate_series(1,%d)' in s]
+                if len(fragments)!=1:raise ValueError('unique original browsing expansion required')
+                sql(base,fragments[0].replace('%d','9'))
         if args.snapshot_build:
             from rehearse_snapshot import exercise as snapshot_replay
             result['snapshot']=snapshot_replay(root,base,output,sentinel)
