@@ -6,7 +6,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, sender-profile, gateway-probe, fanout, qualified-500]
+        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, sender-profile, gateway-probe, fanout, qualified-500, generator-clock]
         default: roles
       calibration_run:
         description: Successful bounded calibration independently reviewed for sustained500
@@ -738,3 +738,43 @@ jobs:
           name: gateway-probe-${{ github.run_id }}
           path: gateway-evidence/
           retention-days: 14
+
+  corrected-generator:
+    if: github.event.inputs.phase == 'generator-clock'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      LAB_GENERATOR_MEMORY: 4g
+      LAB_EXCHANGE_DIR: ${{ github.workspace }}/generator-exchange
+      LAB_GENERATOR_SUITE_DIR: ${{ github.workspace }}/deploy/session-lab
+      LAB_INVESTIGATION_PHASE: system
+      GENERATOR_SESSION_PROFILE: sustained
+      GENERATOR_MEMORY_DIAGNOSTIC: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Check source, synthetic target and unchanged resource gates
+        run: |
+          go test -race ./deploy/generator-lab
+          python3 -m unittest discover -s deploy/generator-lab -p 'test_*.py'
+          python3 -m unittest discover -s deploy/notification-lab -p test_measured_abort.py
+          python3 -m unittest discover -s deploy/cohost-lab -p test_stage_outcome.py
+          python3 deploy/generator-lab/verify_source.py
+          bash -n deploy/generator-lab/run.sh deploy/generator-lab/record-output.sh
+          CGO_ENABLED=0 go build -o deploy/generator-lab/generator-target ./deploy/generator-lab
+          docker build -t atlxpres-generator-target:local deploy/generator-lab
+          docker compose -f deploy/generator-lab/compose.yml pull sessions
+      - name: Independently sustain 500 synthetic sessions for 30 minutes
+        run: bash deploy/generator-lab/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corrected-generator-${{ github.run_id }}
+          path: generator-evidence/
+          retention-days: 14
+      - name: Remove disposable runner resources
+        if: always()
+        run: docker compose -f deploy/generator-lab/compose.yml down --volumes --remove-orphans
