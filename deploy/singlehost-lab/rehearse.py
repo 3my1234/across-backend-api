@@ -37,7 +37,8 @@ def small_queue_preflight(root,images,output):
 def main():
     if os.environ.get('GITHUB_ACTIONS')!='true' or os.geteuid()!=0:raise ValueError('disposable CI root only')
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');parser.add_argument('--launch-checkpoint',action='store_true');args=parser.parse_args()
+    if args.launch_checkpoint and (args.foundation or args.snapshot_build):raise ValueError('launch checkpoint requires the full fixture')
     if args.foundation and args.snapshot_build:raise ValueError('snapshot requires full500-pair fixture')
     pairs=500 if os.environ.get('BROWSING_PROFILE')=='true' else (10 if args.foundation else 500)
     root=Path(__file__).resolve().parents[2]
@@ -169,39 +170,65 @@ def main():
         original=(root/'deploy/session-lab/sessions.js').read_text();generated=correct_clock(candidate(original))
         if recover(recover_clock(generated))!=original or hashlib.sha256(generated.encode()).hexdigest()!='0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290':raise ValueError('qualified generator source mismatch')
         (suite/'sessions.js').write_text(generated)
-        # Rehearse the unchanged first20-session stage, not500 capacity.
+        # Same qualified generator, original stage policy, extended to180seconds.
+        profile='stage' if args.launch_checkpoint else 'smoke'
+        if args.launch_checkpoint:
+            from datetime import datetime,timezone
+            (exchange/'approval.json').write_text(json.dumps(dict(authorized=True,environment='isolated-staging',profile='stage',max_sessions=20,max_duration_seconds=180,spending_cap_usd=0,approved_at=datetime.now(timezone.utc).isoformat(),source='User bounded disposable mixed-workload direction,6November2026; no VPS or production')))
+        # Rehearse the original20-session stage, not500 capacity.
         generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:172.29.248.10','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',
             '-v',str(suite)+':/suite:ro','-v',str(exchange)+':/exchange',
-            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE=smoke','-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
+            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_APPROVAL=/exchange/approval.json','-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
             'grafana/k6:2.3.0','run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
-        print('Starting actual unchanged20-session smoke',flush=True)
-        with (output/'k6.log').open('wb') as log:code=subprocess.run(generator,stdout=log,stderr=subprocess.STDOUT,timeout=330).returncode
+        print('Starting actual unchanged20-session '+profile,flush=True)
+        from threading import Event,Thread
+        stopped=Event()
+        def sample():
+            from runtime import observations
+            with (output/'mixed-resources.jsonl').open('w') as stream:
+                while not stopped.is_set():
+                    try:
+                        record=dict(utc=time.time(),resources=observations(base),database=sql(base,"SELECT json_build_object('clients',count(*),'active',count(*) FILTER(WHERE state='active'),'lock_waiters',count(*) FILTER(WHERE wait_event_type='Lock')) FROM pg_stat_activity WHERE backend_type='client backend'"))
+                        stream.write(json.dumps(record)+'\n');stream.flush()
+                    except Exception as error:
+                        stream.write(json.dumps(dict(observation_error=type(error).__name__))+'\n');stream.flush()
+                    stopped.wait(5)
+        sampler=Thread(target=sample,daemon=True)
+        if args.launch_checkpoint:sampler.start()
+        try:
+            with (output/'k6.log').open('wb') as log:code=subprocess.run(generator,stdout=log,stderr=subprocess.STDOUT,timeout=330).returncode
+        finally:
+            stopped.set()
+            if args.launch_checkpoint:sampler.join(timeout=60)
         (exchange/'k6-exit-code.txt').write_text(str(code));shutil.copyfile(output/'k6.log',exchange/'k6.log')
         for filename in ('summary.json','timeseries.json'):
             if (exchange/filename).exists():shutil.copyfile(exchange/filename,output/filename)
         # Always attempt acknowledged-write reconciliation, including a failed load gate.
-        application_failures=[]
+        application_failures=[];reconciliation_passed=True
         try:exec_lab(base,'verifier','verify-sessions',output/'reconciliation.jsonl')
-        except Exception as error:application_failures.append('reconciliation: '+str(error))
+        except Exception as error:reconciliation_passed=False;application_failures.append('reconciliation: '+str(error))
         if code:application_failures.append('unchanged20-session k6 gate exit '+str(code))
         if not application_failures:
-            gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),'smoke','20'])
+            gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),profile,'20'])
             if gate.returncode:application_failures.append('original stage gate failed')
-        result['planned_smoke_sessions']=20;result['planned_smoke_seconds']=45;result['application_failures']=application_failures
-        result['write_reconciliation_passed']=not application_failures
+        result['planned_smoke_sessions']=20;result['planned_smoke_seconds']=180 if args.launch_checkpoint else 45;result['application_failures']=application_failures
+        result['write_reconciliation_passed']=reconciliation_passed
         result['effective_cgroups_after_seed']=verify_limits(base)
         # Preserve logs before the actual hard-stop integration destroys the lab.
         m,_=inventory(base)
         for name,ident in m['services'].items():
             with (output/(name+'-container.log')).open('wb') as log:subprocess.run(['docker','logs','--tail','2000',ident],stdout=log,stderr=subprocess.STDOUT,timeout=15)
-        from rehearse_transport import exercise
-        result.update(exercise(root,base,output,sentinel))
+        if not args.launch_checkpoint:
+            from rehearse_transport import exercise
+            result.update(exercise(root,base,output,sentinel))
         result['passed']=not application_failures
         if args.snapshot_build and result['passed']:
             proof=dict(source=call(['git','-c','safe.directory='+str(root),'rev-parse','HEAD']).decode().strip(),workflow_run=os.environ['GITHUB_RUN_ID'],snapshot_sha256=result['snapshot']['snapshot_sha256'],restore_and_original_smoke_passed=True)
             (output/'snapshot-proof.json').write_text(json.dumps(proof,indent=2))
         if application_failures:raise RuntimeError('Application gates failed; shutdown/transport replay retained: '+'; '.join(application_failures))
     finally:
+        if args.launch_checkpoint:
+            subprocess.run(['docker','rm','-f',run+'-generator'],timeout=30,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         if created:
             try:
                 m,_=inventory(base)

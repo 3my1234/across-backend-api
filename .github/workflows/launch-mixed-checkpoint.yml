@@ -1,0 +1,48 @@
+name: Current release mixed launch checkpoint
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: disposable-launch-mixed-checkpoint
+  cancel-in-progress: false
+jobs:
+  mixed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check original workload and source integrity
+        run: |
+          npm install --prefix /tmp/singlehost-tools --ignore-scripts --no-audit --no-fund yaml@2.9.0
+          NODE_PATH=/tmp/singlehost-tools/node_modules node deploy/singlehost-lab/test-render.cjs
+          node deploy/session-lab/test-policy.mjs
+          python3 -m py_compile deploy/singlehost-lab/*.py
+          python3 deploy/singlehost-lab/provenance.py
+          python3 deploy/singlehost-lab/check_seed.py
+      - name: Build disposable tools and verify current release prerequisites
+        run: |
+          docker build -f deploy/capacity-lab/Dockerfile -t atlxpres-singlehost-rehearsal:local .
+          docker pull postgres:16-alpine
+          docker pull redis:7.2-alpine
+          docker pull haproxy:3.0-alpine
+          docker pull grafana/k6:2.3.0
+      - name: Run full-fixture mixed 20-session 180-second checkpoint
+        run: |
+          export NODE_PATH=/tmp/singlehost-tools/node_modules
+          sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --launch-checkpoint
+      - name: Print bounded results even after failed acceptance gates
+        if: always()
+        run: |
+          for f in result.json k6.log reconciliation.jsonl; do
+            if [ -f "singlehost-rehearsal-evidence/$f" ]; then tail -n 45 "singlehost-rehearsal-evidence/$f"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-mixed-${{ github.run_id }}
+          path: singlehost-rehearsal-evidence/
+          retention-days: 7
