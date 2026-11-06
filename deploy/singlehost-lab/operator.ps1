@@ -67,7 +67,7 @@ if ($a.snapshot_cache_run) { Write-Host 'The existing checksum-verified snapshot
 else { Write-Host 'This upload includes the refreshed full synthetic snapshot.' }
 if ($a.api_cache_run) { Write-Host 'The existing checksum-verified API executable is reused.' }
 else { Write-Host 'This upload includes the new verified API executable.' }
-Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
+Native -exe 'python' -arguments @((Join-Path $PSScriptRoot 'upload.py'),$packed.package,'--run',$run,'--sha256',$packed.sha256)
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"
 if ($LASTEXITCODE -ne 0) { throw 'Single-host installation did not finish; do not rerun. Inspect this exact job and cleanup first.' }
 function Trial([string]$command) {
