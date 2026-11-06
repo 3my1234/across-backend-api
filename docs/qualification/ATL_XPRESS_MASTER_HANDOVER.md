@@ -1044,3 +1044,41 @@ Preparedreview qualification/singlehost-review/cohost-a8379918676f430a viaorigin
 FRESH_CHECKPOINT_READY.json nowstateprepared,authorizedFalse,newrun/currenthash/proofs/frozenref;previousfailed46fstatepreserved FRESH_CHECKPOINT_READY.before-a8379918676f430a.json. Publiconecommand qualification/Start-Reviewed500.ps1 -ApproveTrial is explicitliveauthorization, notrunbyagent. Itbindsfreshreview/launcher+auditsha,currentbinary,invokesreviewedoperatorandthenrequestsonefinalrootpasswordforindependentREAD-ONLYaudit qualification/verify_reviewed500_cleanup.py. Auditchecksnewruncontainers/networks/volumes/keylines/unitstates/cleanupmarkers,protectedproductioninventoryandAPIreadiness;GHtemporarysecretabsencereadonlychecked. Savescohort-cleanup-audit.json locally. Anytest/auditfailureisreportedandreadinessconsumed;noautomaticsecondattempt. Cachedsnapshot/images/evidenceintentionallyretained. WrapperPSsyntaxandPythonsyntaxverifiedwithoutSSH/execution.
 
 Executionreview qualification/VPS_500_EXECUTION_REVIEW_CURRENT.md, mirrored release docs/qualification/VPS_500_EXECUTION_REVIEW.md. Contains originalsequence,exactcaps/gates/abortconditions,120minutehardstop,temporarycredentialremoval,independentcleanup,scopeandcommand. Expectedtraffic36m45splusbaseline/restore/drain;no500capacityclaimbeforecompletepass. FinaldecisionAPPROVALREQUIREDforliveexecution:preparationonlyauthorizedinthisturn. No productiondeploy/migration,purchase,K3s,unrelatedwebsiteprobe oractualVPSloadperformed.
+
+
+## 2026-11-06: actual optimized VPS trial42220057545
+
+# VPS result: run 42220057545
+
+The optimized executable was verified on both API replicas. Setup, readiness, queue recovery and the original 20-session checkpoint passed. The 100-session checkpoint failed its unchanged latency threshold; 500 sessions were not attempted. This does not establish sustained 100-session or 500-session capacity.
+
+| Metric | 20 sessions | 100 sessions, aborted |
+| --- | ---: | ---: |
+| Measured traffic duration | 49.10 s | 16.77 s |
+| Overall successful-request p95 | 277.25 ms | 752.74 ms |
+| Overall p99 | 354.45 ms | 975.07 ms |
+| Catalogue p95 | 476.71 ms | 416.81 ms |
+| Services p95 | 303.95 ms | 299.02 ms |
+| Unexpected HTTP errors | 0 | 0 |
+| Acknowledged writes stored exactly once | 100/100 | 217/217 |
+| Committed writes without recorded acknowledgement | 0 | 1 |
+
+100-session slow operations include private messaging send 1034.92 ms, Town Hall send 870.33 ms, Hall history 746.65 ms, nearby search 730.65 ms, driver presence 725.61 ms, Hall offers 721.19 ms and inbox 654.24 ms p95. These are short aborted-window measurements, not sustained estimates. HTTP request rates including setup were 7.11/s and 14.50/s; they must not be presented as steady-state throughput.
+
+## Event order and classification
+
+12:45:42 UTC executable hashes verified. 12:45:54 stage20 began; 12:48:42 all original gates passed and stage100 began. Stage100 had approximately 65 seconds of initialization before 16.77 seconds of measured traffic. At 12:50:08 k6 aborted on measured_latency_abort p95<500. The independent verifier subsequently rejected normal-completion inventory, correctly: 218 offered and stored, 217 acknowledged, one unconfirmed committed, load_process_completed=false. No missing acknowledged, duplicate or unknown stored keys. This is not evidence of lost acknowledged writes, but the aborted stage cannot claim complete correctness qualification.
+
+Generator resource assertions all passed: CPU p95 9.32% of its quota, burst p95 15.37%, peak memory 98,623,488 bytes, zero throttling/OOM. Coverage/duration/full-VU/offered-completed assertions failed after the early abort (993 offered requests versus 986 completed). The combined generator failure message must not be interpreted as generator resource exhaustion.
+
+## Bottleneck evidence and limits
+
+At 100 sessions the room-lock SQL accumulated 191 calls, mean 77.95 ms, max 775.15 ms; notification recipient SQL averaged 47.35 ms, max 362.06 ms. These totals are cumulative across stages, not isolated stage deltas. Nine sparse database samples in each stage observed no lock waiters; this does not exclude between-sample contention. The room-lock statement remains a strong contributor, not proof that it explains every slow endpoint. Pool and resource telemetry must be examined before choosing a correction; no lock removal, pool enlargement or server purchase is justified by these results alone.
+
+468 retained watchdog samples reported production healthy. Peak host CPU briefly reached 91.33%, peak I/O wait 5.25%; no claim of continuously low CPU. The final saved sample reported no OOM or sustained CPU/I/O safety breach. Independent root audit confirmed zero exact-run containers, networks, volumes or key lines; all owned units inactive; both cleanup markers present; three protected containers running healthy; public API HTTP200. Restricted-key SSH denial after cleanup is expected after key removal, not a separate application failure.
+
+## Decision
+
+20-session original checkpoint PASS; 100-session checkpoint FAIL on latency; 500 NOT REACHED. No automatic retry. No production changes. Preserve this evidence and diagnose the measured transaction/pool/resource delay offline before proposing another run. Existing snapshots and image archives remain intentionally retained.
+
+Evidence qualification/live-42220057545, checksums live-42220057545-sha256.json; independent cleanup audit cohost-a8379918676f430a-cleanup-audit.json. Approval consumed, no automatic rerun.
