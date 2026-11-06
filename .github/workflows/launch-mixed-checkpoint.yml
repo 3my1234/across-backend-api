@@ -1,5 +1,8 @@
 name: Current release mixed launch checkpoint
 on:
+  push:
+    branches: [experiment/launch-mixed-checkpoint]
+    paths: [.github/workflows/launch-mixed-checkpoint.yml]
   workflow_dispatch:
 permissions:
   contents: read
