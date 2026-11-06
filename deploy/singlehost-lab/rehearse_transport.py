@@ -17,6 +17,9 @@ def exercise(root,base,output,sentinel):
     approval.update(json.loads((base/'api-artifact.json').read_text()))
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
     (base/'supervisor.json').write_text(json.dumps(dict(run=run,production_container_ids=[sentinel],deadline_unix=time.time()+7200)))
+    # Match the live installer: sampler ownership must be pinned to the exact inventory.
+    manifest,_=inventory(base)
+    (base/'manifest.json').write_text(json.dumps(manifest));(base/'manifest.json').chmod(0o600)
     (base/'setup.ready').touch()
     # Simulated public sensors ONLY in this disposable replay; real container,
     # CPU/memory/disk observation, fault decision and owned-stop code execute.

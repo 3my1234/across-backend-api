@@ -162,7 +162,7 @@ def access(base,command):
             subprocess.Popen([sys.executable,str(Path(__file__).with_name('transaction_sampler.py')),str(base),'--seconds','180'],stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         deadline=time.monotonic()+15
         while not (base/'bounded-transaction-diagnostic/samples.jsonl').exists() or (base/'bounded-transaction-diagnostic/samples.jsonl').stat().st_size==0:
-            if time.monotonic()>deadline:raise RuntimeError('diagnostic did not produce a first sample')
+            if time.monotonic()>deadline:raise RuntimeError('diagnostic did not produce a first sample: '+(base/'diagnostic-launch.log').read_text(errors='replace')[-2000:])
             time.sleep(.1)
         print('read-only diagnostic started; maximum180 seconds');return
     if command=='api-identity':
