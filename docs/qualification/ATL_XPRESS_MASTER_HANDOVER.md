@@ -917,3 +917,14 @@ Local artifact transfer initially encountered network read timeout; no partial f
 Actual local completion worker qualification/Complete-FreshCheckpoint.py is running: waits for genuine completed proof, rechecks successful exact-source CI, invokes tested prepare with fresh fixture plus preflight cachec062, verifies every review hash, writes qualification/FRESH_CHECKPOINT_READY.json and updates this handover. It performs NO SSH/live setup/load. Do not start another download, fixture build or setup while it runs. Read that status file first when resuming. Saved archive/download can resume independently if network fails.
 
 User launch entrypoint qualification/Invoke-VerifiedCheckpoint.ps1 -ApproveTrial waits with saved-byte progress until verified-ready, then calls the original operator script directly with the generated review, preserving PSScriptRoot. It stops on failed readiness and never starts a partial/unverified fixture. It requires local root password input only after readiness. No repeated old setup command. All original resource, health, performance, write-integrity and cleanup gates preserved. No current VPS load, deployment, migration, DNS/Coolify change, purchase or K3s action.500capacity remains pending. Old review197b044862ff4ece is superseded and expired.
+
+
+## Latest checkpoint: refreshed fixture and verified local review ready — 2026-11-06
+
+Fresh fixture42167679174 passed full500-pair seed, atomic restore, fingerprints/triggers,20-session smoke and cleanup at0abd7a0. Packaging rehearsal42169407131 passed at14a06c1f61dfcf124a4ada52904625a602707e90; pre-upload baseline cache is independent of snapshot reuse. No age/performance/safety thresholds changed.
+
+Retrieved actual CI fixture via resumable curl after a network interruption; archive/member CRC, fixture SHA and API SHA verified. Fixture SHA 58bfeeb9ddf6bd0229fa0f39bb02e71d5f472d2f64b9e3fd6bbea210eb00b802, bytes 154514214, created_unix 1793943040, expires_unix 1794029440. No timestamp renewal. API15388a5, digest 5e4b3a134f2574ca5445dd3e944c8531b1b5675222787e1f884837014cd9447c, remains actual CI-tested binary.
+
+Fresh review cohost-ad09262dac9a4cdd, all hashes checked, authorized=false, no live resources. Frozen ref experiment/approved-singlehost-14a06c1. Snapshot is fresh and must be uploaded; old c062 observer cache is reused only for the pre-upload baseline. New API included; images reused. Original3CPU/5.5GiB, app1CPU/PG2CPU,20->100->gradual500->500for30min and all gates unchanged.
+
+qualification/Invoke-VerifiedCheckpoint.ps1 -ApproveTrial waits for verified readiness, then invokes the unchanged tested operator directly, preserving PSScriptRoot. No dynamic copied-function continuation. User enters root passwords locally. Each endpoint result is retained even if another gate fails. Production unchanged;500sessions remain unqualified.
