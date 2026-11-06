@@ -1,0 +1,15 @@
+name: Bounded transaction sampler checks
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  disposable-sampler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline ownership and finite-lifetime tests
+        run: python3 -m unittest discover -s deploy/singlehost-lab -p 'test_transaction_sampler.py' -v
+      - name: Exercise real PostgreSQL16 blocker observation and cleanup
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/singlehost-lab/exercise_transaction_sampler.py
