@@ -16,6 +16,9 @@ class SingleHostRunner(Runner):
         finally:done.set();heartbeat.join(timeout=1)
 
     def measure(self,stage):
+        if self.approval.get('execution_mode')=='diagnostic20':
+            if stage!=STAGES[0]:raise ValueError('diagnostic cannot advance beyond20 sessions')
+            self.ssh('main','diagnostic-start',timeout=25)
         self.progress('stage '+stage[0]+' (planned '+str(stage[2])+' sessions)',lambda:super(SingleHostRunner,self).measure(stage))
         summary=json.loads((self.output/stage[0]/'summary.json').read_text());metrics=summary['metrics']
         values=lambda name:metrics.get(name,{}).get('values',{})
@@ -107,6 +110,13 @@ class SingleHostRunner(Runner):
         subprocess.run(['docker','stop','--timeout','2','cohost-generator'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
         self.ssh('main','cleanup',timeout=180,destination=self.output/'host-cleanup.log')
 
+def execute_diagnostic(runner):
+    try:
+        runner.start();runner.prepare();runner.check();runner.measure(STAGES[0])
+    finally:
+        signal.alarm(0)
+        runner.cleanup()
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--execute',action='store_true');p.add_argument('--approval',type=Path);p.add_argument('--ssh-config',type=Path);p.add_argument('--output',type=Path,default=Path('singlehost-evidence'));a=p.parse_args()
     if not a.execute:
@@ -129,6 +139,11 @@ def main():
     runner=SingleHostRunner(root,a.ssh_config,approval,a.output)
     def interrupted(*unused):raise KeyboardInterrupt('trial interrupted')
     signal.signal(signal.SIGTERM,interrupted);signal.signal(signal.SIGINT,interrupted)
+    if approval.get('execution_mode')=='diagnostic20':
+        signal.signal(signal.SIGALRM,interrupted);signal.alarm(900)
+        execute_diagnostic(runner)
+        (a.output/'diagnostic-completed.json').write_text(json.dumps(dict(stage_gates_passed=True,maximum_sessions=20,capacity_500_qualified=False)))
+        return
     execute_sequence(runner)
     (a.output/'trial-passed.json').write_text(json.dumps(dict(passed=True,topology='singlehost',production_capacity_claim=False)))
 

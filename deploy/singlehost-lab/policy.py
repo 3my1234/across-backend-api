@@ -14,6 +14,7 @@ def validate(approval,now=None):
     for key,value in expected.items():
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')
+    if approval.get('execution_mode','staged500') not in ('staged500','diagnostic20'):raise ValueError('unknown execution mode')
     if approval.get('stages')!=[list(stage) for stage in STAGES]:raise ValueError('original stage sequence required')
     if 'dns_retry_policy' in approval and approval['dns_retry_policy']!='dns-only-3-attempts-12s-v1':raise ValueError('unreviewed DNS retry policy')
     for key in ('snapshot_cache_run','api_cache_run','preflight_cache_run'):

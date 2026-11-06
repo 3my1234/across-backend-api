@@ -122,6 +122,8 @@ def observations(base,full=False):
     names=('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','snapshot-restored.json','api-running.json','cleanup.complete','cleanup.finalized')
     report={name:(base/name).read_text() for name in names if (base/name).exists()}
     if not full and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-10:])
+    if full and (base/'bounded-transaction-diagnostic').is_dir():
+        report['bounded_transaction_diagnostic']={name:(base/'bounded-transaction-diagnostic'/name).read_text() for name in ('samples.jsonl','result.json','sampler-error.log') if (base/'bounded-transaction-diagnostic'/name).is_file()}
     if full and (base/'public').exists():
         report['final_test_logs']={path.name:path.read_text(errors='replace') for path in (base/'public').iterdir() if path.is_file() and path.suffix in ('.log','.json')}
     if (base/'cleanup.complete').exists() or (base/'watchdog-error.json').exists():return report

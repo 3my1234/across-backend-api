@@ -13,6 +13,7 @@ def exercise(root,base,output,sentinel):
         database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
         health_scope='backend-api-blocking-homepage-advisory-v1',timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64,verifier_sha256=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=json.loads((output/'fixture.json').read_text())['sha256'] if (output/'fixture.json').exists() else 'f'*64)
+    approval['execution_mode']='diagnostic20'
     approval.update(json.loads((base/'api-artifact.json').read_text()))
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
     (base/'supervisor.json').write_text(json.dumps(dict(run=run,production_container_ids=[sentinel],deadline_unix=time.time()+7200)))
@@ -109,6 +110,11 @@ def exercise(root,base,output,sentinel):
         runner.sql('UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();')
         runner.service('notification-provider')
         runner.measure(STAGES[0])
+        report=json.loads(ssh('observations-full'))
+        diagnostic=report.get('bounded_transaction_diagnostic',{})
+        if not diagnostic.get('samples.jsonl'):raise ValueError('diagnostic samples not retrieved over restricted SSH')
+        (output/'transaction-samples.jsonl').write_text(diagnostic['samples.jsonl'])
+        result['diagnostic20_sampling_over_restricted_ssh_passed']=True
         result['actual_staged_coordinator_smoke_passed']=True
         runner.check();runner.stop.set();runner.children_thread.join(timeout=12)
         (base/'inject-public-fault').touch()

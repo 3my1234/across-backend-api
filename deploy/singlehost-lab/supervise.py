@@ -154,6 +154,17 @@ def access(base,command):
         with (base/'trial-started').open('x') as out:out.write(str(time.time()))
         print('single-host trial activated');return
     if not (base/'trial-started').exists():raise ValueError('trial not activated')
+    if command=='diagnostic-start':
+        if approval.get('execution_mode')!='diagnostic20':raise ValueError('diagnostic approval required')
+        if (base/'diagnostic-started').exists():raise ValueError('diagnostic already started')
+        with (base/'diagnostic-started').open('x') as marker:marker.write(str(time.time()))
+        with (base/'diagnostic-launch.log').open('x') as log:
+            subprocess.Popen([sys.executable,str(Path(__file__).with_name('transaction_sampler.py')),str(base),'--seconds','180'],stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        deadline=time.monotonic()+15
+        while not (base/'bounded-transaction-diagnostic/samples.jsonl').exists() or (base/'bounded-transaction-diagnostic/samples.jsonl').stat().st_size==0:
+            if time.monotonic()>deadline:raise RuntimeError('diagnostic did not produce a first sample')
+            time.sleep(.1)
+        print('read-only diagnostic started; maximum180 seconds');return
     if command=='api-identity':
         from api_artifact import verify_running
         print(json.dumps(verify_running(base,approval)));return

@@ -26,7 +26,7 @@ def apply_cache_sources(approval,snapshot_run,preflight_run,workspace,artifact):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');p.add_argument('--preflight-cache-from');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--diagnostic20',action='store_true');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');p.add_argument('--preflight-cache-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
@@ -73,6 +73,7 @@ def main():
         timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256(compose).hexdigest(),image_archive_sha256=ARCHIVE_SHA,image_source=APP_SOURCE,
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])
+    if a.diagnostic20:approval['execution_mode']='diagnostic20'
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
     approval['dns_retry_policy']='dns-only-3-attempts-12s-v1'
     approval['health_scope']='backend-api-blocking-homepage-advisory-v1'
@@ -82,7 +83,7 @@ def main():
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')
-    for folder,names in (('cohost-lab',cohost),('singlehost-lab',('runtime.py','supervise.py','monitor.py','rehearse.py','policy.py','snapshot.py','api_artifact.py','verifier_build.py'))):
+    for folder,names in (('cohost-lab',cohost),('singlehost-lab',('runtime.py','supervise.py','monitor.py','rehearse.py','policy.py','snapshot.py','api_artifact.py','verifier_build.py','transaction_sampler.py'))):
         destination=review/'src/deploy'/folder;destination.mkdir(parents=True)
         for name in names:shutil.copyfile(root/'deploy'/folder/name,destination/name)
     shutil.copyfile(root/'deploy/singlehost-lab/install_host.py',review/'install_host.py')
