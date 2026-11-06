@@ -54,6 +54,8 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest, "valid longitude is required")
 		}
 	}
+	// The country is unique: resolve its eligible currency once per statement,
+	// keeping delivery specificity, product eligibility and ordering unchanged.
 	rows, err := cc.db.Query(c.Context(), `
 		SELECT p.id, p.sku, p.title, p.description, p.category_path, p.image_urls,
 			offer.currency_code,
@@ -68,7 +70,7 @@ func (cc *CatalogController) ListProducts(c *fiber.Ctx) error {
 			CASE WHEN $1::boolean AND p.inventory_country_code=$5 AND p.stock_state<>'import_on_demand' AND p.inventory_latitude IS NOT NULL AND p.inventory_longitude IS NOT NULL THEN 6371 * 2 * asin(sqrt(power(sin(radians((p.inventory_latitude::float8-$2::float8)/2)),2)+cos(radians($2::float8))*cos(radians(p.inventory_latitude::float8))*power(sin(radians((p.inventory_longitude::float8-$3::float8)/2)),2))) END AS distance_km
 		FROM products p
         LEFT JOIN provider_public_identity visibility ON visibility.provider_id=p.provider_id
-		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$5 AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
+		JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a WHERE a.product_id=p.id AND a.country_code=$5 AND a.currency_code=(SELECT market.currency_code FROM countries_config market WHERE market.country_code=$5 AND market.is_active=true AND 'flutterwave'=ANY(market.active_payment_gateways)) AND (a.state_key='' OR a.state_key=$6) AND (a.city_key='' OR a.city_key=$7) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) offer ON TRUE
 		LEFT JOIN logistics_hubs lh ON lh.id = p.origin_hub_id
 		WHERE p.is_active = true AND p.moderation_status='approved' AND (p.provider_id IS NULL OR p.plan_slot<=COALESCE(visibility.listing_limit,1))
 		  AND p.provider_id IS NOT NULL AND p.fulfillment_mode IN ('merchant_local','merchant_cross_border')
