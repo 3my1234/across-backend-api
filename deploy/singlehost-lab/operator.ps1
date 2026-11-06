@@ -46,9 +46,10 @@ if ($a.preflight_cache_run) {
     Write-Host 'PRE-UPLOAD baseline: about five minutes, with 30-second progress. No new key, containers or payload upload yet.'
     $baselineCode=[Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $source 'deploy/cohost-lab/baseline.py')))
     $observerHash=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'deploy/cohost-lab/watchdog.py')).Hash.ToLowerInvariant()
+    $observerCode=[Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $source 'deploy/cohost-lab/watchdog.py')))
     $safetyHash=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source 'deploy/cohost-lab/safety.py')).Hash.ToLowerInvariant()
     $preflightCode=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'preflight_host.py'))
-    $invocation="preflight('$run','$($a.preflight_cache_run)','$baselineCode',{'watchdog.py':'$observerHash','safety.py':'$safetyHash'})"
+    $invocation="preflight('$run','$($a.preflight_cache_run)','$baselineCode',{'watchdog.py':'$observerHash','safety.py':'$safetyHash'},{'watchdog.py':'$observerCode'})"
     ($preflightCode+"`n"+$invocation) | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 root@79.143.176.173 'python3 -B -'
     if ($LASTEXITCODE -ne 0) { throw 'Pre-upload baseline failed; no new setup, credentials or payload upload started.' }
 }

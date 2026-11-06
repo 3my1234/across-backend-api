@@ -2,7 +2,7 @@
 import argparse,json,time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from watchdog import URLS,probe
+from watchdog import URLS,BLOCKING_URLS,HEALTH_SCOPE,probe
 
 POLICY="http-2s-observer-2.5s-v1"
 DNS_POLICY='dns-only-3-attempts-12s-v1'
@@ -30,15 +30,16 @@ def validate(doc,now):
     if doc.get('observed_seconds',0)<300 or not 0<=now-doc.get('finished_unix',0)<=900:
         raise ValueError('fresh five-minute baseline required')
     rows=doc.get('urls',{})
-    if set(rows)!=set(URLS):raise ValueError('all protected sites required')
+    if doc.get("health_scope")!=HEALTH_SCOPE:raise ValueError("explicit backend health scope required")
+    if set(rows)!=set(BLOCKING_URLS):raise ValueError('all protected sites required')
     for value in rows.values():
         if value.get('successful_samples',0)<60 or not 0<value.get('p95_seconds',0)<=2 or not 0<value.get('observer_p95_seconds',0)<=2.5:
             raise ValueError('baseline evidence incomplete/unhealthy')
-    return {url:rows[url]['p95_seconds'] for url in URLS}
+    return {url:rows[url]['p95_seconds'] for url in BLOCKING_URLS}
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('output',type=Path);a=ap.parse_args()
-    values={u:[] for u in URLS};observers={u:[] for u in URLS};start=time.monotonic()
+    values={u:[] for u in BLOCKING_URLS};observers={u:[] for u in BLOCKING_URLS};start=time.monotonic()
     started_unix=time.time()
     heartbeat=start
     print('Five-minute pre-load baseline starting; DNS-only retries are bounded. No load or test containers started.',flush=True)
@@ -48,6 +49,9 @@ def main():
         with a.output.with_name('baseline-observations.jsonl').open('a') as log:
             log.write(json.dumps(dict(baseline_started_unix=started_unix,collected_unix=time.time(),probes=details))+'\n')
         for url,ok,seconds in results:
+            if url not in BLOCKING_URLS:
+                if not ok or seconds>2:print(json.dumps(dict(phase="homepage advisory",url=url,healthy=ok,seconds=seconds,blocking=False)),flush=True)
+                continue
             if not ok or seconds>2:
                 failure=dict(baseline='failed',url=url,healthy=ok,seconds=seconds,
                     completed_samples={u:len(v) for u,v in values.items()},load_started=False,probe=details.get(url))
@@ -59,7 +63,7 @@ def main():
         time.sleep(5)
         if time.monotonic()-heartbeat>=30:
             print(json.dumps(dict(phase='baseline',elapsed_seconds=round(time.monotonic()-start),successful_samples={u:len(v) for u,v in values.items()},load_started=False)),flush=True);heartbeat=time.monotonic()
-    doc=dict(timing_policy=POLICY,dns_retry_policy=DNS_POLICY,observed_seconds=time.monotonic()-start,finished_unix=time.time(),urls={
+    doc=dict(health_scope=HEALTH_SCOPE,timing_policy=POLICY,dns_retry_policy=DNS_POLICY,observed_seconds=time.monotonic()-start,finished_unix=time.time(),urls={
         url:dict(successful_samples=len(v),p95_seconds=sorted(v)[int((len(v)-1)*.95)],observer_p95_seconds=sorted(observers[url])[int((len(v)-1)*.95)]) for url,v in values.items()})
     validate(doc,time.time());a.output.write_text(json.dumps(doc,indent=2))
     print('Five-minute baseline passed; no load authorized.')

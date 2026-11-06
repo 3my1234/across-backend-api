@@ -11,7 +11,7 @@ def exercise(root,base,output,sentinel):
     approval=dict(run=run,topology='singlehost-database-vps',host='79.143.176.173',authorized=True,approved_unix=int(time.time()),
         spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=1,application_memory=2684354560,
         database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
-        timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
+        health_scope='backend-api-blocking-homepage-advisory-v1',timing_policy='http-2s-observer-2.5s-v1',stages=[list(s) for s in STAGES],source_commit=source,
         compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64,verifier_sha256=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=json.loads((output/'fixture.json').read_text())['sha256'] if (output/'fixture.json').exists() else 'f'*64)
     approval.update(json.loads((base/'api-artifact.json').read_text()))
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
@@ -20,12 +20,12 @@ def exercise(root,base,output,sentinel):
     # Simulated public sensors ONLY in this disposable replay; real container,
     # CPU/memory/disk observation, fault decision and owned-stop code execute.
     sys.path.insert(0,str(root/'deploy/cohost-lab'))
-    from watchdog import URLS
-    baseline=dict(timing_policy='http-2s-observer-2.5s-v1',observed_seconds=310,finished_unix=time.time(),
-        urls={url:dict(successful_samples=60,p95_seconds=.2,observer_p95_seconds=.3) for url in URLS})
+    from watchdog import BLOCKING_URLS,HEALTH_SCOPE
+    baseline=dict(health_scope=HEALTH_SCOPE,timing_policy='http-2s-observer-2.5s-v1',observed_seconds=310,finished_unix=time.time(),
+        urls={url:dict(successful_samples=60,p95_seconds=.2,observer_p95_seconds=.3) for url in BLOCKING_URLS})
     (base/'baseline.json').write_text(json.dumps(baseline))
     wrapper=base/'ci-monitor-replay.py'
-    wrapper.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(root/'deploy/singlehost-lab'))+')\nimport monitor\nfrom watchdog import state,URLS\nbase=Path('+repr(str(base))+')\ndef sensors(ids,details):\n return [(u,not (base/"inject-public-fault").exists(),.1) for u in URLS],state(ids)\nmonitor.collect_checks=sensors\nsys.argv=["monitor",str(base)]\nmonitor.main()\n')
+    wrapper.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(root/'deploy/singlehost-lab'))+')\nimport monitor\nfrom watchdog import state,BLOCKING_URLS\nbase=Path('+repr(str(base))+')\ndef sensors(ids,details):\n return [(u,not (base/"inject-public-fault").exists(),.1) for u in BLOCKING_URLS],state(ids)\nmonitor.collect_checks=sensors\nsys.argv=["monitor",str(base)]\nmonitor.main()\n')
     guard=sshd=tunnel=runner=None;config=base/'ssh_config';result={}
     def ssh(command,input=None,timeout=30):return call(['ssh','-F',str(config),'trial',command],timeout,input=input,stderr=subprocess.PIPE)
     try:

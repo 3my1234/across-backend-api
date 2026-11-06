@@ -15,7 +15,19 @@ import time
 from safety import reasons
 
 # User-approved scope: ATL Xpress endpoints only. No unrelated website probes.
-URLS = ("https://api.atlxpres.com/api/v1/ready", "https://atlxpres.com/")
+BLOCKING_URLS = ("https://api.atlxpres.com/api/v1/ready",)
+ADVISORY_URLS = ("https://atlxpres.com/",)
+URLS = BLOCKING_URLS + ADVISORY_URLS
+HEALTH_SCOPE = "backend-api-blocking-homepage-advisory-v1"
+
+
+def update_health_counters(results, baseline, failures, slow):
+    """Only production API results drive shutdown; all probes remain in evidence."""
+    for url, ok, latency in results:
+        if url not in BLOCKING_URLS:
+            continue
+        failures[url] = 0 if ok else failures[url] + 1
+        slow[url] = slow[url] + 1 if latency > max(2, 3 * baseline[url]) else 0
 
 
 def cpu():
@@ -130,7 +142,7 @@ def main():
     if a.setup_only and m.get("load_authorized") is not False:raise ValueError("setup-only guard requires load disabled")
     started=time.monotonic()
     before=cpu();last=time.monotonic();high_cpu=high_io=0
-    failures={u:0 for u in URLS};slow={u:0 for u in URLS}
+    failures={u:0 for u in BLOCKING_URLS};slow={u:0 for u in BLOCKING_URLS}
     initial_oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
     next_tick=time.monotonic()+1
     try:
@@ -145,9 +157,7 @@ def main():
             mem={k:int(v.split()[0])*1024 for k,v in (x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines())}
             probe_details={}
             results,states=collect_checks(ids+m.get("container_ids",[]),probe_details)
-            for url,ok,latency in results:
-                failures[url]=0 if ok else failures[url]+1
-                slow[url]=slow[url]+1 if latency>max(2,3*baseline[url]) else 0
+            update_health_counters(results,baseline,failures,slow)
             current=json.loads(a.manifest.read_text())
             if current.get("run")!=m["run"] or current.get("role")!=m["role"] or current.get("production_container_ids")!=ids:
                 raise ValueError("protected inventory changed")

@@ -10,11 +10,11 @@ def exercise(root,base,output,sentinel):
     # Only CI deletes its seed database. Live restore refuses a nonempty target.
     subprocess.run(['docker','exec',ident,'dropdb','-U','lab','capacity_lab'],check=True,timeout=30)
     subprocess.run(['docker','exec',ident,'createdb','-U','lab','capacity_lab'],check=True,timeout=30)
-    from watchdog import URLS
+    from watchdog import BLOCKING_URLS,HEALTH_SCOPE
     (base/'supervisor.json').write_text(json.dumps(dict(run=base.name,production_container_ids=[sentinel],deadline_unix=time.time()+7200)))
-    (base/'baseline.json').write_text(json.dumps(dict(timing_policy='http-2s-observer-2.5s-v1',observed_seconds=310,finished_unix=time.time(),urls={u:dict(successful_samples=60,p95_seconds=.1,observer_p95_seconds=.2) for u in URLS})))
+    (base/'baseline.json').write_text(json.dumps(dict(health_scope=HEALTH_SCOPE,timing_policy='http-2s-observer-2.5s-v1',observed_seconds=310,finished_unix=time.time(),urls={u:dict(successful_samples=60,p95_seconds=.1,observer_p95_seconds=.2) for u in BLOCKING_URLS})))
     wrapper=base/'ci-restore-monitor.py'
-    wrapper.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(root/'deploy/singlehost-lab'))+')\nimport monitor\nfrom watchdog import state,URLS\nmonitor.collect_checks=lambda ids,details: ([(u,True,.1) for u in URLS],state(ids))\nsys.argv=["monitor",'+repr(str(base))+']\nmonitor.main()\n')
+    wrapper.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(root/'deploy/singlehost-lab'))+')\nimport monitor\nfrom watchdog import state,BLOCKING_URLS\nmonitor.collect_checks=lambda ids,details: ([(u,True,.1) for u in BLOCKING_URLS],state(ids))\nsys.argv=["monitor",'+repr(str(base))+']\nmonitor.main()\n')
     guard=subprocess.Popen(['python3',str(wrapper)],stdout=(output/'restore-guard.log').open('wb'),stderr=subprocess.STDOUT)
     try:
         deadline=time.monotonic()+15

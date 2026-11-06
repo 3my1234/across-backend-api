@@ -75,6 +75,7 @@ def main():
         client_hashes=client_hashes(root),rehearsal_run=a.rehearsal_run,verifier_sha256=hashlib.sha256((review/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=fixture['sha256'])
     approval['execution_ref']='experiment/approved-singlehost-'+source[:7]
     approval['dns_retry_policy']='dns-only-3-attempts-12s-v1'
+    approval['health_scope']='backend-api-blocking-homepage-advisory-v1'
     approval.update(artifact)
     approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
     apply_cache_sources(approval,a.reuse_server_snapshot_from,a.preflight_cache_from,workspace,artifact)

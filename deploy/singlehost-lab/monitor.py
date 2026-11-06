@@ -3,7 +3,7 @@ import json,os,subprocess,sys,time
 from pathlib import Path
 from runtime import inventory
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'cohost-lab'))
-from watchdog import cpu,delta,collect_checks,URLS
+from watchdog import cpu,delta,collect_checks,BLOCKING_URLS,update_health_counters
 from safety import reasons,validate_inventory
 from baseline import validate as validate_baseline
 
@@ -12,7 +12,7 @@ def observe(base):
     production=metadata['production_container_ids']
     baseline=validate_baseline(json.loads((base/'baseline.json').read_text()),time.time())
     before=cpu();last=time.monotonic();high_cpu=high_io=0
-    failures={u:0 for u in URLS};slow={u:0 for u in URLS}
+    failures={u:0 for u in BLOCKING_URLS};slow={u:0 for u in BLOCKING_URLS}
     initial_oom=int(next(x.split()[1] for x in Path('/proc/vmstat').read_text().splitlines() if x.startswith('oom_kill ')))
     next_tick=last+1
     while True:
@@ -22,9 +22,7 @@ def observe(base):
         high_cpu=high_cpu+elapsed if busy>85 else 0;high_io=high_io+elapsed if wait>10 else 0
         manifest,owned=inventory(base)
         details={};results,states=collect_checks(production+manifest['container_ids'],details)
-        for url,ok,latency in results:
-            failures[url]=0 if ok else failures[url]+1
-            slow[url]=slow[url]+1 if latency>max(2,3*baseline[url]) else 0
+        update_health_counters(results,baseline,failures,slow)
         mem={k:int(v.split()[0])*1024 for k,v in (row.split(':',1) for row in Path('/proc/meminfo').read_text().splitlines())}
         import shutil
         oom=int(next(x.split()[1] for x in Path('/proc/vmstat').read_text().splitlines() if x.startswith('oom_kill ')))

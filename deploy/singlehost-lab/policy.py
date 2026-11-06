@@ -10,7 +10,7 @@ def validate(approval,now=None):
     expected=dict(topology='singlehost-database-vps',host='79.143.176.173',authorized=True,
         spending_cap_usd=0,aggregate_cpu=3,aggregate_memory=5905580032,application_cpu=1,application_memory=2684354560,
         database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,
-        timing_policy='http-2s-observer-2.5s-v1')
+        timing_policy='http-2s-observer-2.5s-v1',health_scope='backend-api-blocking-homepage-advisory-v1')
     for key,value in expected.items():
         if type(approval.get(key)) is not type(value) or approval[key]!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')

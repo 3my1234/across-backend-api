@@ -49,6 +49,7 @@ jobs:
           python3 -m py_compile deploy/singlehost-lab/*.py
           python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
           python3 -m unittest discover -s deploy/cohost-lab -p 'test_baseline_dns.py' -v
+          python3 -m unittest discover -s deploy/cohost-lab -p 'test_backend_health_scope.py' -v
           python3 deploy/singlehost-lab/provenance.py
           python3 deploy/singlehost-lab/check_seed.py
       - name: Build actual unchanged API and seed tools on free CI
@@ -92,6 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
+          python3 -m unittest discover -s deploy/cohost-lab -p 'test_backend_health_scope.py' -v
           python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
           python3 deploy/singlehost-lab/runner.py
           pwsh -NoProfile -Command '$errors=$null; $tokens=$null; [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "deploy/singlehost-lab/operator.ps1"),[ref]$tokens,[ref]$errors) | Out-Null; if ($errors.Count) { $errors; exit 1 }'
