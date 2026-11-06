@@ -44,6 +44,62 @@ results, resource/lock samples and independent write reconciliation are retained
 
 Run: https://github.com/3my1234/across-backend-api/actions/runs/42210541636
 
+### Completed result: PASS
+
+The complete original 20-session, 180-second stage passed on PostgreSQL 16,
+Redis and two API processes through the gateway. All declared thresholds passed;
+20 sessions were authenticated and no iterations were interrupted. Source
+`1572457` is the test harness; the actual API source is `395ef24`. Both running
+processes and the downloaded executable match SHA-256
+`c8aa65b6d9618a4a8698616b0370d045d94dd8d1077041051e4ebeb502863c63`.
+
+| Measured operation | Client p95 |
+| --- | --- |
+| All successful measured requests | 37.86 ms |
+| Catalogue, ordinary cache hit/miss mix | 76.97 ms |
+| Service search | 45.05 ms |
+| Town Hall offer | 13.53 ms |
+| Town Hall send | 9.87 ms |
+| Private marketplace send | 12.39 ms |
+| Inbox | 12.80 ms |
+| Driver presence update | 6.62 ms |
+| Nearby search | 8.66 ms |
+
+Overall successful-request p99 was 69.85 ms. There were 1,912 measured requests
+offered, 1,956 HTTP requests including setup, zero unexpected errors and zero
+controlled overload responses. The configured 180-second constant-user stage
+completed; total k6 wall time also includes setup and graceful completion.
+
+Independent inventory: all 319 offered and acknowledged writes stored exactly
+once, zero missing/duplicate/unknown/unconfirmed committed keys. Current bid
+states and final presence states reconciled. There were 60 durable bid messages,
+94 Town Hall messages and 165 private marketplace messages; 120 offer HTTP calls
+targeted the same Town Hall room (including intentional retry requests), so
+hot-room traffic was retained. Only two providers exercised presence: 11 online
+updates and two offline transitions. This does not test hundreds of drivers.
+
+Gateway catalogue evidence: 148 cache hits and 42 misses across the six original
+query variants (77.9% hits). Gateway-total p95 was 2 ms on hits and 85 ms on misses.
+Those are gateway timings, distinct from the client p95 table above. No cache TTL,
+authentication, payload, or acceptance threshold was relaxed.
+
+Twenty-nine resource observations sampled no lock waiters; short waits between
+samples are not excluded. Peak sampled PostgreSQL container CPU was 19.12% of one
+core and memory 251.7 MiB. App-group peak memory was 108,994,560 bytes; DB-group
+peak 2,048,147,456 bytes includes page cache and differs from Docker's displayed
+working set. OOM counters remained zero. Sampling and quotas on a shared GitHub
+runner do not prove equivalent VPS capacity or independent CPU allocation.
+
+Cleanup completed successfully. The small queue retry/recovery preflight passed.
+Mixed-run reconciliation verifies persisted notification/delivery rows, not
+worker drain or external notification delivery: external email/push/device and
+payment journeys remain outside this load test.
+
+Raw evidence: shared workspace `qualification/launch-mixed-42210541636/`, workflow
+log/status, `RESULT_LAUNCH_MIXED_42210541636.json` and SHA-256 inventory. Compact
+results are also committed alongside this report as
+`LAUNCH_MIXED_RESULT_42210541636.json`.
+
 This is a free disposable GitHub runner, not either VPS. Resource quotas do not
 guarantee independent CPU cores on the runner. Even a pass is not 500-session
 VPS qualification. It is bounded release-candidate evidence to decide the next
@@ -51,10 +107,13 @@ action. No production deployment, migration, SSH password or purchase is involve
 
 ## Release decision requirements
 
-No broad-launch sign-off is established by the earlier partial tests. The pending
-checkpoint must report feature-specific results and separate latency, generator,
-fixture and write-integrity failures. Do not label a failed performance gate as
-data corruption, or passing acknowledged writes as a full capacity pass.
+This is a successful bounded current-candidate checkpoint, not broad-launch
+sign-off. The justified capacity action is one separately approved isolated VPS
+checkpoint with this exact verified binary; further speculative SQL changes are
+not justified by this passing mixed run. The old VPS package must not be rerun:
+its API pin predates these catalogue corrections. 100/500 sustained VPS capacity
+remains unqualified. Do not label a failed performance gate as data corruption,
+or passing acknowledged writes as a full capacity pass.
 
 Current billing/payment lifecycle, SES production sending readiness/quotas, actual
 device push delivery, store binary identity, backup restoration and deployment
