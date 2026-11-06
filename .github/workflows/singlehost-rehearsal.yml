@@ -97,6 +97,8 @@ jobs:
           python3 -m unittest discover -s deploy/singlehost-lab -p 'test_*.py' -v
           python3 deploy/singlehost-lab/runner.py
           pwsh -NoProfile -Command '$errors=$null; $tokens=$null; [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "deploy/singlehost-lab/operator.ps1"),[ref]$tokens,[ref]$errors) | Out-Null; if ($errors.Count) { $errors; exit 1 }'
+      - name: Exercise bounded read-only transaction sampler on disposable PostgreSQL16
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/singlehost-lab/exercise_transaction_sampler.py
   network:
     if: ${{ inputs.network_only && !inputs.execute }}
     runs-on: ubuntu-latest

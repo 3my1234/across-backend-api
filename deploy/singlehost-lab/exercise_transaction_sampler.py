@@ -22,7 +22,8 @@ def main():
             '--cpus','2','--memory','512m','-e','POSTGRES_DB=capacity_lab','-e','POSTGRES_USER=lab',
             '-e','POSTGRES_PASSWORD=disposable-sampler-only','postgres:16-alpine'],text=True,timeout=120).strip()
         for _ in range(60):
-            if subprocess.run(['docker','exec',cid,'pg_isready','-U','lab','-d','capacity_lab'],capture_output=True,timeout=5).returncode==0:break
+            initialized='PostgreSQL init process complete' in subprocess.check_output(['docker','logs',cid],text=True,stderr=subprocess.STDOUT,timeout=5)
+            if initialized and subprocess.run(['docker','exec',cid,'pg_isready','-U','lab','-d','capacity_lab'],capture_output=True,timeout=5).returncode==0:break
             time.sleep(.5)
         else:raise RuntimeError('Disposable PostgreSQL not ready')
         (base/'manifest.json').write_text(json.dumps(dict(run=run,services={'postgres':cid})))
