@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from concurrent.futures import Future
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import baseline
@@ -12,6 +14,22 @@ from safety import reasons
 
 
 class BackendHealthScopeTests(unittest.TestCase):
+    def test_pending_homepage_probe_cannot_delay_api_sampling(self):
+        class PendingAdvisory:
+            def submit(self, *args):return Future()
+        clock=[0.0]
+        def api_probe(url, details):
+            self.assertIn(url,BLOCKING_URLS)
+            details[url]=dict(observer_seconds=.1)
+            return url,True,.1
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'baseline.json'
+            with patch('baseline.time.monotonic',side_effect=lambda:clock[0]),patch('baseline.time.time',side_effect=lambda:1000+clock[0]),patch('baseline.time.sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)),patch('baseline.baseline_probe',side_effect=api_probe),contextlib.redirect_stdout(io.StringIO()):
+                baseline.run_baseline(SimpleNamespace(output=output),PendingAdvisory())
+            doc=json.loads(output.read_text())
+            self.assertEqual(doc['observed_seconds'],300)
+            self.assertEqual(doc['urls'][BLOCKING_URLS[0]]['successful_samples'],60)
+
     def run_baseline(self, api_ok=True):
         clock = [0.0]
         def sleep(seconds):

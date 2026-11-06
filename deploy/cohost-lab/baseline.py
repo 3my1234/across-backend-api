@@ -2,7 +2,7 @@
 import argparse,json,time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from watchdog import URLS,BLOCKING_URLS,HEALTH_SCOPE,probe
+from watchdog import URLS,BLOCKING_URLS,ADVISORY_URLS,HEALTH_SCOPE,probe
 
 POLICY="http-2s-observer-2.5s-v1"
 DNS_POLICY='dns-only-3-attempts-12s-v1'
@@ -39,13 +39,28 @@ def validate(doc,now):
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('output',type=Path);a=ap.parse_args()
+    with ThreadPoolExecutor(max_workers=len(ADVISORY_URLS)) as advisory_pool:
+        run_baseline(a,advisory_pool)
+
+def run_baseline(a,advisory_pool):
+    pending={}
+    def schedule(url):
+        detail={}
+        return advisory_pool.submit(probe,url,detail),detail
+    for url in ADVISORY_URLS:pending[url]=schedule(url)
     values={u:[] for u in BLOCKING_URLS};observers={u:[] for u in BLOCKING_URLS};start=time.monotonic()
     started_unix=time.time()
     heartbeat=start
     print('Five-minute pre-load baseline starting; DNS-only retries are bounded. No load or test containers started.',flush=True)
     while time.monotonic()-start<300 or min(map(len,values.values()))<60:
         details={}
-        with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(lambda url:baseline_probe(url,details),URLS))
+        with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(lambda url:baseline_probe(url,details),BLOCKING_URLS))
+        # Advisory probes never join the blocking API scan or its sample clock.
+        for url,(future,detail) in list(pending.items()):
+            if future.done():
+                result=future.result();details.update(detail)
+                if not result[1]:print(json.dumps(dict(phase='homepage advisory',url=url,healthy=False,blocking=False)),flush=True)
+                pending[url]=schedule(url)
         with a.output.with_name('baseline-observations.jsonl').open('a') as log:
             log.write(json.dumps(dict(baseline_started_unix=started_unix,collected_unix=time.time(),probes=details))+'\n')
         for url,ok,seconds in results:
