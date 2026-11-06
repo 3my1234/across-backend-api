@@ -20,9 +20,10 @@ import (
 )
 
 type CommunityController struct {
-	db     *pgxpool.Pool
-	market *ProviderMarketplaceController
-	cache  *redis.Client
+	db         *pgxpool.Pool
+	market     *ProviderMarketplaceController
+	cache      *redis.Client
+	roomWrites roomWriteQueue
 }
 
 func NewCommunityController(db *pgxpool.Pool, cfg config.Config, cache ...*redis.Client) *CommunityController {
@@ -659,6 +660,11 @@ func (s *CommunityController) Send(c *fiber.Ctx) error {
 	}
 	actor := communityActor(c)
 	room := c.Params("conversation_id")
+	release, err := s.roomWrites.acquire(c.Context(), room)
+	if err != nil {
+		return communityError(err)
+	}
+	defer release()
 	tx, err := s.db.Begin(c.Context())
 	if err != nil {
 		return communityError(err)
