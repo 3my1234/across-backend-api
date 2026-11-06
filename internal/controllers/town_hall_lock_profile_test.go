@@ -26,7 +26,7 @@ func TestTownHallLockMatchedProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(ctx, `INSERT INTO town_hall_requests(room_id,description,unit,engagement_deadline) SELECT id,'Synthetic request','',clock_timestamp()+interval '24 hours' FROM chat_rooms; ANALYZE chat_rooms; ANALYZE town_hall_requests`)
+	_, err = db.Exec(ctx, `INSERT INTO town_hall_requests(room_id,description,location,unit,message_only,engagement_deadline) SELECT id,'Synthetic request','','',true,clock_timestamp()+interval '24 hours' FROM chat_rooms; ANALYZE chat_rooms; ANALYZE town_hall_requests`)
 	if err != nil {
 		t.Fatal(err)
 	}
