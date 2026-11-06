@@ -3,6 +3,14 @@ import hashlib,json,os,re,shutil,signal,subprocess,sys,tarfile,time,uuid
 from pathlib import Path
 from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,verify_host_bridge,cleanup
 
+def session_authorization(exchange,launch_checkpoint):
+    # k6 evaluates open(approval_path) before requireApproval. Smoke must not
+    # advertise a file it does not create, even though smoke needs no approval.
+    if not launch_checkpoint:return 'smoke',''
+    from datetime import datetime,timezone
+    (exchange/'approval.json').write_text(json.dumps(dict(authorized=True,environment='isolated-staging',profile='stage',max_sessions=20,max_duration_seconds=180,spending_cap_usd=0,approved_at=datetime.now(timezone.utc).isoformat(),source='User bounded disposable mixed-workload direction,6November2026; no VPS or production')))
+    return 'stage','/exchange/approval.json'
+
 def wait_ready(base):
     deadline=time.monotonic()+90
     while time.monotonic()<deadline:
@@ -171,14 +179,11 @@ def main():
         if recover(recover_clock(generated))!=original or hashlib.sha256(generated.encode()).hexdigest()!='0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290':raise ValueError('qualified generator source mismatch')
         (suite/'sessions.js').write_text(generated)
         # Same qualified generator, original stage policy, extended to180seconds.
-        profile='stage' if args.launch_checkpoint else 'smoke'
-        if args.launch_checkpoint:
-            from datetime import datetime,timezone
-            (exchange/'approval.json').write_text(json.dumps(dict(authorized=True,environment='isolated-staging',profile='stage',max_sessions=20,max_duration_seconds=180,spending_cap_usd=0,approved_at=datetime.now(timezone.utc).isoformat(),source='User bounded disposable mixed-workload direction,6November2026; no VPS or production')))
+        profile,approval_path=session_authorization(exchange,args.launch_checkpoint)
         # Rehearse the original20-session stage, not500 capacity.
         generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:172.29.248.10','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',
             '-v',str(suite)+':/suite:ro','-v',str(exchange)+':/exchange',
-            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_APPROVAL=/exchange/approval.json','-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
+            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_APPROVAL='+approval_path,'-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
             'grafana/k6:2.3.0','run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
         print('Starting actual unchanged20-session '+profile,flush=True)
         from threading import Event,Thread
