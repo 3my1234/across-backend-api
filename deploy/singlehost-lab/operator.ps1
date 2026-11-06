@@ -61,8 +61,11 @@ if ($LASTEXITCODE -ne 0 -or -not $known) { throw 'Previously trusted database ho
 $knownPath=Join-Path $private 'known_hosts'
 [IO.File]::WriteAllText($knownPath,$known+"`n",(New-Object Text.UTF8Encoding($false)))
 $remotePackage="/root/$run-singlehost.tar.gz"
-if ($a.api_cache_run) { Write-Host 'Uploading updated tools/verifier only; optimized API, snapshot and images are reused. Enter password locally.' }
-else { Write-Host 'Uploading reviewed tools and the new API artifact; snapshot and images are reused. Enter password locally.' }
+Write-Host 'Uploading the reviewed package; existing base images are reused. Enter password locally.'
+if ($a.snapshot_cache_run) { Write-Host 'The existing checksum-verified snapshot is reused.' }
+else { Write-Host 'This upload includes the refreshed full synthetic snapshot.' }
+if ($a.api_cache_run) { Write-Host 'The existing checksum-verified API executable is reused.' }
+else { Write-Host 'This upload includes the new verified API executable.' }
 Native -exe 'scp' -arguments @('-o','StrictHostKeyChecking=yes',$packed.package,"root@79.143.176.173:$remotePackage")
 Get-Content -Raw -LiteralPath (Join-Path $Review 'install_host.py') | & ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 root@79.143.176.173 "python3 - --package $remotePackage --sha256 $($packed.sha256) --run $run"
 if ($LASTEXITCODE -ne 0) { throw 'Single-host installation did not finish; do not rerun. Inspect this exact job and cleanup first.' }

@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from prepare import compatible_renderer
+from prepare import compatible_renderer,apply_cache_sources
 
 class RendererProofTests(unittest.TestCase):
     def test_current_renderer_proof_is_reusable_without_reapplying_changes(self):
@@ -14,3 +14,14 @@ class RendererProofTests(unittest.TestCase):
         self.assertTrue(compatible_renderer(legacy,current))
         self.assertFalse(compatible_renderer(legacy,current+'\n// unexpected drift'))
         self.assertFalse(compatible_renderer(current,current.replace('cpus=2','cpus=3')))
+
+
+class CacheSeparationTests(unittest.TestCase):
+    def test_new_snapshot_retains_preupload_check_without_claiming_snapshot_reuse(self):
+        approval={}
+        apply_cache_sources(approval,None,'cohost-'+'a'*16,Path('.'),{'api_sha256':'new'})
+        self.assertEqual(approval,{'preflight_cache_run':'cohost-'+'a'*16})
+
+    def test_invalid_cache_nonce_rejected(self):
+        for snapshot,preflight in (('../bad',None),(None,'../bad')):
+            with self.assertRaises(ValueError):apply_cache_sources({},snapshot,preflight,Path('.'),{'api_sha256':'new'})

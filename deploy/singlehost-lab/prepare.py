@@ -13,8 +13,20 @@ def compatible_renderer(original_renderer,current_renderer):
     return current_renderer==approved_renderer
 
 
+
+def apply_cache_sources(approval,snapshot_run,preflight_run,workspace,artifact):
+    for run in (snapshot_run,preflight_run):
+        if run and not re.fullmatch('cohost-[a-f0-9]{16}',run):raise ValueError('fixed cache nonce required')
+    if preflight_run or snapshot_run:approval['preflight_cache_run']=preflight_run or snapshot_run
+    if snapshot_run:
+        approval['snapshot_cache_run']=snapshot_run
+        cached=workspace/'qualification/singlehost-review'/snapshot_run/'api-artifact.json'
+        if cached.is_file() and json.loads(cached.read_text()).get('api_sha256')==artifact['api_sha256']:
+            approval['api_cache_run']=snapshot_run
+
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');p.add_argument('--preflight-cache-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
@@ -65,13 +77,7 @@ def main():
     approval['dns_retry_policy']='dns-only-3-attempts-12s-v1'
     approval.update(artifact)
     approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
-    if a.reuse_server_snapshot_from:
-        if not re.fullmatch('cohost-[a-f0-9]{16}',a.reuse_server_snapshot_from):raise ValueError('fixed cached-snapshot nonce required')
-        approval['snapshot_cache_run']=a.reuse_server_snapshot_from
-        approval['preflight_cache_run']=a.reuse_server_snapshot_from
-        cached=workspace/'qualification/singlehost-review'/a.reuse_server_snapshot_from/'api-artifact.json'
-        if cached.is_file() and json.loads(cached.read_text()).get('api_sha256')==artifact['api_sha256']:
-            approval['api_cache_run']=a.reuse_server_snapshot_from
+    apply_cache_sources(approval,a.reuse_server_snapshot_from,a.preflight_cache_from,workspace,artifact)
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')
