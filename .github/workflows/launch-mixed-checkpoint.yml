@@ -1,13 +1,13 @@
-name: Current release mixed launch checkpoint
+name: Messaging pool 100-session disposable checkpoint
 on:
   push:
-    branches: [experiment/launch-mixed-checkpoint]
+    branches: [experiment/messaging-100-rehearsal]
     paths: [.github/workflows/launch-mixed-checkpoint.yml]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: disposable-launch-mixed-checkpoint
+  group: disposable-messaging-100-checkpoint
   cancel-in-progress: false
 jobs:
   mixed:
@@ -33,10 +33,10 @@ jobs:
           docker pull redis:7.2-alpine
           docker pull haproxy:3.0-alpine
           docker pull grafana/k6:2.3.0
-      - name: Run full-fixture mixed 20-session 180-second checkpoint
+      - name: Run full-fixture mixed 100-session 180-second checkpoint
         run: |
           export NODE_PATH=/tmp/singlehost-tools/node_modules
-          sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --launch-checkpoint
+          sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --launch-checkpoint --checkpoint-sessions 100
       - name: Print bounded results even after failed acceptance gates
         if: always()
         run: |
@@ -46,6 +46,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: launch-mixed-${{ github.run_id }}
+          name: messaging-100-${{ github.run_id }}
           path: singlehost-rehearsal-evidence/
           retention-days: 7

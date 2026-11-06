@@ -3,12 +3,12 @@ import hashlib,json,os,re,shutil,signal,subprocess,sys,tarfile,time,uuid
 from pathlib import Path
 from runtime import ROOT,call,compose,inventory,install_limits,exec_lab,sql,verify_limits,verify_host_bridge,cleanup
 
-def session_authorization(exchange,launch_checkpoint):
+def session_authorization(exchange,launch_checkpoint,target=20):
     # k6 evaluates open(approval_path) before requireApproval. Smoke must not
     # advertise a file it does not create, even though smoke needs no approval.
     if not launch_checkpoint:return 'smoke',''
     from datetime import datetime,timezone
-    (exchange/'approval.json').write_text(json.dumps(dict(authorized=True,environment='isolated-staging',profile='stage',max_sessions=20,max_duration_seconds=180,spending_cap_usd=0,approved_at=datetime.now(timezone.utc).isoformat(),source='User bounded disposable mixed-workload direction,6November2026; no VPS or production')))
+    (exchange/'approval.json').write_text(json.dumps(dict(authorized=True,environment='isolated-staging',profile='stage',max_sessions=target,max_duration_seconds=180,spending_cap_usd=0,approved_at=datetime.now(timezone.utc).isoformat(),source='User bounded disposable mixed-workload direction,6November2026; no VPS or production')))
     return 'stage','/exchange/approval.json'
 
 def wait_ready(base):
@@ -45,7 +45,9 @@ def small_queue_preflight(root,images,output):
 def main():
     if os.environ.get('GITHUB_ACTIONS')!='true' or os.geteuid()!=0:raise ValueError('disposable CI root only')
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');parser.add_argument('--launch-checkpoint',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--foundation',action='store_true');parser.add_argument('--snapshot-build',action='store_true');parser.add_argument('--launch-checkpoint',action='store_true');parser.add_argument('--checkpoint-sessions',type=int,choices=(20,100),default=20);args=parser.parse_args()
+    if args.checkpoint_sessions!=20 and not args.launch_checkpoint:raise ValueError('100-session rehearsal requires explicit disposable launch checkpoint')
+    target=args.checkpoint_sessions
     if args.launch_checkpoint and (args.foundation or args.snapshot_build):raise ValueError('launch checkpoint requires the full fixture')
     if args.foundation and args.snapshot_build:raise ValueError('snapshot requires full500-pair fixture')
     pairs=500 if os.environ.get('BROWSING_PROFILE')=='true' else (10 if args.foundation else 500)
@@ -179,13 +181,13 @@ def main():
         if recover(recover_clock(generated))!=original or hashlib.sha256(generated.encode()).hexdigest()!='0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290':raise ValueError('qualified generator source mismatch')
         (suite/'sessions.js').write_text(generated)
         # Same qualified generator, original stage policy, extended to180seconds.
-        profile,approval_path=session_authorization(exchange,args.launch_checkpoint)
+        profile,approval_path=session_authorization(exchange,args.launch_checkpoint,target)
         # Rehearse the original20-session stage, not500 capacity.
         generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:172.29.248.10','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',
             '-v',str(suite)+':/suite:ro','-v',str(exchange)+':/exchange',
-            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_APPROVAL='+approval_path,'-e','LAB_SESSION_TARGET=20','-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
+            '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_APPROVAL='+approval_path,'-e','LAB_SESSION_TARGET='+str(target),'-e','LAB_SESSION_MIX=mixed','-e','LAB_SESSION_AUTH_MODE=established',
             'grafana/k6:2.3.0','run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
-        print('Starting actual unchanged20-session '+profile,flush=True)
+        print('Starting original '+str(target)+'-session '+profile+' workload,180seconds; disposable only',flush=True)
         from threading import Event,Thread
         stopped=Event()
         def sample():
@@ -212,11 +214,11 @@ def main():
         application_failures=[];reconciliation_passed=True
         try:exec_lab(base,'verifier','verify-sessions',output/'reconciliation.jsonl')
         except Exception as error:reconciliation_passed=False;application_failures.append('reconciliation: '+str(error))
-        if code:application_failures.append('unchanged20-session k6 gate exit '+str(code))
+        if code:application_failures.append('unchanged '+str(target)+'-session k6 gate exit '+str(code))
         if not application_failures:
-            gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),profile,'20'])
+            gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),profile,str(target)])
             if gate.returncode:application_failures.append('original stage gate failed')
-        result['planned_smoke_sessions']=20;result['planned_smoke_seconds']=180 if args.launch_checkpoint else 45;result['application_failures']=application_failures
+        result['planned_smoke_sessions']=target;result['planned_smoke_seconds']=180 if args.launch_checkpoint else 45;result['application_failures']=application_failures
         result['write_reconciliation_passed']=reconciliation_passed
         result['effective_cgroups_after_seed']=verify_limits(base)
         # Preserve logs before the actual hard-stop integration destroys the lab.
