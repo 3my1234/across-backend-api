@@ -710,18 +710,9 @@ func insertSharedMessage(ctx context.Context, tx pgx.Tx, room, actor string, inp
 	}
 	fresh := id == requested
 	if fresh {
-		// Keep both statements and their order inside this transaction, but send
-		// them together so the room lock is not held across an extra round trip.
-		batch := &pgx.Batch{}
-		batch.Queue(`UPDATE chat_rooms SET revision=revision+1,last_message_at=$2 WHERE id=$1::uuid;`, room, at)
-		batch.Queue(`UPDATE chat_participants SET last_read_at=GREATEST(COALESCE(last_read_at,'epoch'::timestamptz),$3) WHERE room_id=$1::uuid AND user_id=$2::uuid`, room, actor, at)
-		results := tx.SendBatch(ctx, batch)
-		_, err = results.Exec()
+		_, err = tx.Exec(ctx, `UPDATE chat_rooms SET revision=revision+1,last_message_at=$2 WHERE id=$1::uuid;`, room, at)
 		if err == nil {
-			_, err = results.Exec()
-		}
-		if closeErr := results.Close(); err == nil {
-			err = closeErr
+			_, err = tx.Exec(ctx, `UPDATE chat_participants SET last_read_at=GREATEST(COALESCE(last_read_at,'epoch'::timestamptz),$3) WHERE room_id=$1::uuid AND user_id=$2::uuid`, room, actor, at)
 		}
 	}
 	return id, at, fresh, err

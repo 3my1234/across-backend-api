@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestSharedMessageMetadataBatchRollbackAndRetry(t *testing.T) {
+func TestSharedMessageMetadataRollbackAndRetry(t *testing.T) {
 	db := communityTestDB(t)
 	ctx := context.Background()
 	actor, room := uuid.NewString(), uuid.NewString()
