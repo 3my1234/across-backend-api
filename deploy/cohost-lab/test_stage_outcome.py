@@ -20,3 +20,26 @@ class OutcomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);(p/'summary.json').write_text('{"metrics":{}}');(p/'reconciliation.jsonl').write_text('')
             self.assertIsNone(summarize(p,1,['missing evidence'])['offered_write_inventory_reconciled'])
+
+    def test_retained_early_abort_separates_accounting_from_resource_pressure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp);(p/'summary.json').write_text('{"metrics":{}}')
+            (p/'reconciliation.jsonl').write_text(json.dumps(dict(
+                all_acknowledged_keys_stored_once=True,journal_consistent=True,
+                offered_write_keys=11,exact_acknowledged_keys=8,stored_write_keys=11,
+                unconfirmed_committed_keys=3,load_process_completed=False)))
+            checks=dict(coverage=False,duration=False,offered_completed=False,
+                cpu_p95=True,burst_cpu_p95=True,throttle=True,memory=True,no_oom=True)
+            (p/'actual-generator-gate.json').write_text(json.dumps(dict(assertions=checks,passed=False)))
+            result=summarize(p,99,['original k6 gate exit 99'])
+            self.assertTrue(result['acknowledged_writes_stored_once'])
+            self.assertEqual(result['unconfirmed_committed_writes'],3)
+            self.assertFalse(result['offered_write_inventory_reconciled'])
+            self.assertFalse(result['generator']['resource_headroom_gate_failed'])
+            self.assertEqual(result['generator']['accounting_failures'],['coverage','duration','offered_completed'])
+            self.assertFalse(result['qualification_passed'])
+            checks['throttle']=False
+            (p/'actual-generator-gate.json').write_text(json.dumps(dict(assertions=checks,passed=False)))
+            result=summarize(p,99,['failure'])
+            self.assertTrue(result['generator']['resource_headroom_gate_failed'])
+            self.assertEqual(result['generator']['resource_failures'],['throttle'])
