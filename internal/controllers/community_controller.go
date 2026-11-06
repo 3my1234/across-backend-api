@@ -660,7 +660,7 @@ func (s *CommunityController) Send(c *fiber.Ctx) error {
 	}
 	actor := communityActor(c)
 	room := c.Params("conversation_id")
-	release, err := s.roomWrites.acquire(c.Context(), room)
+	release, err := s.acquireRoomWrite(c, room)
 	if err != nil {
 		return communityError(err)
 	}

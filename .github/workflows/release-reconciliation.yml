@@ -36,11 +36,11 @@ jobs:
           s=Path('reconciliation-tests.log').read_text()
           for name in ('TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
               assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
-          for name in ('TestRoomWriteQueueCancellationAndIndependentRooms','TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity'):
+          for name in ('TestRoomWriteQueueCancellationAndIndependentRooms','TestRoomWriteQueueBacklogBound','TestRoomWriteQueueDeadlineReturnsRetryBeforeDatabase','TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity'):
               assert '--- PASS: '+name+' ' in s, 'Room scheduling regression did not execute: '+name
           PY
       - name: Race-check room scheduling and real database retry isolation
-        run: go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueueCancellationAndIndependentRooms|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity)$'
+        run: go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity)$'
       - name: Measure actual conditional polling handler and SQL cost
         env: {POLL_COST_LOCAL: 'true'}
         run: |

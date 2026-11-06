@@ -443,7 +443,7 @@ func (s *CommunityController) HallOffer(c *fiber.Ctx) error {
 	if in.Price <= 0 {
 		return fiber.NewError(422, "Enter a positive price with up to two decimal places")
 	}
-	release, err := s.roomWrites.acquire(c.Context(), id)
+	release, err := s.acquireRoomWrite(c, id)
 	if err != nil {
 		return communityError(err)
 	}

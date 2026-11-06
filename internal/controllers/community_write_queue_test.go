@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -59,22 +60,24 @@ func TestRoomWriteQueueCancellationAndIndependentRooms(t *testing.T) {
 	release() // deferred/explicit release cannot over-release.
 	var active, peak atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r, e := q.acquire(context.Background(), room)
-			if e != nil {
-				t.Error(e)
-				return
+			for j := 0; j < 10; j++ {
+				r, e := q.acquire(context.Background(), room)
+				if e != nil {
+					t.Error(e)
+					return
+				}
+				n := active.Add(1)
+				if n > 1 {
+					peak.Store(n)
+				}
+				time.Sleep(time.Microsecond)
+				active.Add(-1)
+				r()
 			}
-			n := active.Add(1)
-			if n > 1 {
-				peak.Store(n)
-			}
-			time.Sleep(time.Microsecond)
-			active.Add(-1)
-			r()
 		}()
 	}
 	wg.Wait()
@@ -86,6 +89,96 @@ func TestRoomWriteQueueCancellationAndIndependentRooms(t *testing.T) {
 	if len(q.rooms) != 0 {
 		t.Fatalf("leaked %d room entries", len(q.rooms))
 	}
+}
+
+func TestRoomWriteQueueBacklogBound(t *testing.T) {
+	var q roomWriteQueue
+	room := uuid.NewString()
+	release, err := q.acquire(context.Background(), room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := make(chan error, roomWriteMaxQueued)
+	for i := 0; i < roomWriteMaxQueued; i++ {
+		go func() {
+			r, e := q.acquire(ctx, room)
+			if r != nil {
+				r()
+			}
+			results <- e
+		}()
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		q.mu.Lock()
+		refs := q.rooms[room].refs
+		q.mu.Unlock()
+		if refs == roomWriteMaxQueued+1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queue did not reach its bound")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if r, e := q.acquire(context.Background(), room); !errors.Is(e, errRoomWriteBusy) || r != nil {
+		t.Fatalf("full queue: %v", e)
+	}
+	other, e := q.acquire(context.Background(), uuid.NewString())
+	if e != nil {
+		t.Fatal(e)
+	}
+	other()
+	cancel()
+	for i := 0; i < roomWriteMaxQueued; i++ {
+		if e := <-results; e != context.Canceled {
+			t.Fatalf("waiter: %v", e)
+		}
+	}
+	release()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.rooms) != 0 {
+		t.Fatal("queue entries leaked")
+	}
+}
+
+func TestRoomWriteQueueDeadlineReturnsRetryBeforeDatabase(t *testing.T) {
+	// A nil database makes any accidental Begin observable. Timeout must occur
+	// before the handler attempts a transaction or persists a write.
+	s := &CommunityController{}
+	room := uuid.NewString()
+	release, err := s.roomWrites.acquire(context.Background(), room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/hall/:room_id/offers", s.HallOffer)
+	body := fmt.Sprintf(`{"unit_price":1200,"client_message_id":"%s"}`, uuid.NewString())
+	req := httptest.NewRequest("POST", "/hall/"+room+"/offers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	started := time.Now()
+	res, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 503 || res.Header.Get("Retry-After") != "2" || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d headers=%v", res.StatusCode, res.Header)
+	}
+	if time.Since(started) < roomWriteMaxWait {
+		t.Fatal("request failed before its queue deadline")
+	}
+	release()
+	next, e := s.roomWrites.acquire(context.Background(), room)
+	if e != nil {
+		t.Fatal(e)
+	}
+	next()
 }
 
 // Two independent API controllers share a deliberately small pool. An external
