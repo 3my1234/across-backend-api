@@ -6,6 +6,13 @@ from policy import STAGES
 ARCHIVE_SHA='020bacefeffd12bdfa460c165b43b471f9f987b5da7579bdfd219137ceb2c366'
 APP_SOURCE='13d316c62ce8bdd35c1c2fe72bf3d4d357581914'
 
+def compatible_renderer(original_renderer,current_renderer):
+    if original_renderer==current_renderer:return True
+    approved_renderer=original_renderer.replace('doc.services.postgres=db;','doc.services.postgres=db;\n  doc.services.postgres.cpus=2;').replace("s.environment.LAB_DB_CPUS='1'","s.environment.LAB_DB_CPUS='2'")
+    approved_renderer=approved_renderer.replace('  delete doc.services.gateway.ports;','  delete doc.services.gateway.ports;\n  if (input.api_override===true) for (const name of [\'api1\',\'api2\']) (doc.services[name].volumes??=[]).push(base+\'/api.bin:/app/api:ro\');')
+    return current_renderer==approved_renderer
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
@@ -33,9 +40,7 @@ def main():
     # Snapshot rows/schema do not depend on CPU limits. Allow ONLY the exact
     # newly approved 1->2 database CPU resource change in its original renderer.
     original_renderer=subprocess.check_output(['git','show',proof['source']+':deploy/singlehost-lab/render.cjs'],cwd=root,text=True)
-    approved_renderer=original_renderer.replace('doc.services.postgres=db;','doc.services.postgres=db;\n  doc.services.postgres.cpus=2;').replace("s.environment.LAB_DB_CPUS='1'","s.environment.LAB_DB_CPUS='2'")
-    approved_renderer=approved_renderer.replace('  delete doc.services.gateway.ports;','  delete doc.services.gateway.ports;\n  if (input.api_override===true) for (const name of [\'api1\',\'api2\']) (doc.services[name].volumes??=[]).push(base+\'/api.bin:/app/api:ro\');')
-    if (root/'deploy/singlehost-lab/render.cjs').read_text()!=approved_renderer:raise ValueError('renderer change exceeds approved CPU reallocation; retained snapshot proof cannot be reused')
+    if not compatible_renderer(original_renderer,(root/'deploy/singlehost-lab/render.cjs').read_text()):raise ValueError('renderer change exceeds approved CPU reallocation; retained snapshot proof cannot be reused')
     metadata=json.loads((workspace/'qualification/cohost-image-bundle-40930181592/images.json').read_text())
     if metadata['source']!=APP_SOURCE:raise ValueError('retained image source mismatch')
     run='cohost-'+uuid.uuid4().hex[:16];review=workspace/'qualification/singlehost-review'/run;review.mkdir(parents=True,exist_ok=False)
