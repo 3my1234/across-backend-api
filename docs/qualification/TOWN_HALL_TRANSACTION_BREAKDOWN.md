@@ -106,8 +106,9 @@ and limit20/hotel search. Adding actual pagination/search in the future must
 update the cache-key policy; that contract test will fail if semantics change.
 
 Local cache/freshness/isolation tests and actual PostgreSQL18 controller tests
-passed. PostgreSQL16 and race verification run42197490500 tests this exact
-candidate. Its final status is recorded in the master handover. This source
+passed. PostgreSQL16 and race verification run42197490500 PASSED in1minute32seconds
+at b7e1a87, including the actual response-equivalence regression, existing native
+ownership/privacy tests, middleware race tests and handler/route compilation. This source
 change has not been deployed or included in a new VPS qualification image.
 The first cache miss still has the intrinsic query cost measured above; do not
 claim this change alone fixes all hot-room or catalogue latency.
