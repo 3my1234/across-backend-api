@@ -77,13 +77,40 @@ queuing. This is not a claim that the same milliseconds apply on Contabo.
    and post-commit response processing are not the dominant observed costs.
 3. Target catalogue cache-miss SQL work alongside hot-room critical-section work.
    Increasing connection pools would not eliminate either cost.
-4. No runtime candidate was adopted. An identity-materialization catalogue
+4. No SQL or locking candidate was adopted. An identity-materialization catalogue
    candidate saved only a modest amount and changed the ordered selected rows
    in this fixture; it was rejected rather than changing the response to claim
    improvement. API SQL, filters, ordering and80-item behavior remain unchanged.
 5. A next candidate must reduce measured work while preserving ordered results
    and transactional correctness, then pass a matched comparison and existing
    concurrent correctness regressions. No unchanged VPS retry is justified.
+
+## Narrow catalogue cache correction
+
+Following the measurements, commit b7e1a87 implements a separate seven-line
+runtime correction in internal/middleware/scale.go. The exact `/api/v1/products`
+endpoint ignores `search` and `limit` today, but its public cache formerly keyed
+them as different responses. Equivalent requests could therefore each trigger
+the same expensive cache-miss handler. Only these ignored parameters on that
+exact route are normalized away. Service searches, other product routes and all
+delivery/location/stock filters remain distinct. Revision, time bucket, encoding,
+country-header isolation, TTL, authorization bypass and overload behavior remain
+unchanged. No request action or qualification acceptance threshold changes.
+
+Matched regression: the original middleware ran3handlerfills for30simultaneous
+requests across3equivalent variants; corrected middleware runs1. This is a
+reduction in duplicate handler loads, not a measured percentage improvement in
+end-to-end latency. A real PostgreSQL handler test verifies the entire ordered
+25-product response is identical with no parameters, limit1/nonmatching search,
+and limit20/hotel search. Adding actual pagination/search in the future must
+update the cache-key policy; that contract test will fail if semantics change.
+
+Local cache/freshness/isolation tests and actual PostgreSQL18 controller tests
+passed. PostgreSQL16 and race verification run42197490500 tests this exact
+candidate. Its final status is recorded in the master handover. This source
+change has not been deployed or included in a new VPS qualification image.
+The first cache miss still has the intrinsic query cost measured above; do not
+claim this change alone fixes all hot-room or catalogue latency.
 
 ## Evidence and cleanup
 
