@@ -1,3 +1,4 @@
+# Exact bounded room-queue candidate: baa03e4; original 100-session workload unchanged.
 name: Messaging pool 100-session disposable checkpoint
 on:
   push:
