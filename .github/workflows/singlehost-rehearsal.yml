@@ -62,7 +62,7 @@ jobs:
           docker pull redis:7.2-alpine
           docker pull haproxy:3.0-alpine
           docker pull grafana/k6:2.3.0
-      - name: Replay verified100-session full-fixture workload with reviewed migration109
+      - name: Rehearse corrected20-session execution and cleanup
         env:
           NODE_PATH: /tmp/singlehost-tools/node_modules
           SNAPSHOT_BUILD: ${{ inputs.snapshot_build }}
@@ -70,7 +70,7 @@ jobs:
           if [ "$SNAPSHOT_BUILD" = true ]; then
             sudo --preserve-env=GITHUB_ACTIONS,GITHUB_RUN_ID,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --snapshot-build
           else
-            sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --launch-checkpoint --checkpoint-sessions 100
+            sudo --preserve-env=GITHUB_ACTIONS,NODE_PATH python3 deploy/singlehost-lab/rehearse.py --foundation
           fi
       - name: Retain result in logs without depending on artifact downloads
         if: always()

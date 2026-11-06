@@ -119,7 +119,7 @@ def capture_evidence(base):
     if errors:(destination/'collection-errors.json').write_text(json.dumps(errors))
 
 def observations(base,full=False):
-    names=('sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','snapshot-restored.json','api-running.json','cleanup.complete','cleanup.finalized')
+    names=('database-patch.json','sample.json','watchdog.jsonl','watchdog-error.json','image-identities.json','baseline.json','supervisor.json','snapshot-restored.json','api-running.json','cleanup.complete','cleanup.finalized')
     report={name:(base/name).read_text() for name in names if (base/name).exists()}
     if not full and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-10:])
     if full and (base/'bounded-transaction-diagnostic').is_dir():

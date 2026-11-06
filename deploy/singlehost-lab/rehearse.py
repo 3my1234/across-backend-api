@@ -124,14 +124,8 @@ def main():
         counts=json.loads(sql(base,"SELECT json_build_object('actors',(SELECT count(*) FROM capacity_lab_actors),'migration108',(SELECT count(*) FROM schema_migrations WHERE name='108_push_receipt_claims.sql'),'identity',(SELECT marker FROM capacity_lab_identity))"))
         if counts!={'actors':pairs,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
-        if args.launch_checkpoint:
-            patch_path=root/'deploy/singlehost-lab/reviewed-notification-fast-path.sql'
-            patch=patch_path.read_bytes().replace(b'\r\n',b'\n')
-            if hashlib.sha256(patch).hexdigest()!='d5a1d47cef13730de36497e90766956a82efbb94950d88f3fe30d8331b16f397':raise ValueError('Reviewed migration109 checksum mismatch')
-            if sql(base,'SELECT marker FROM capacity_lab_identity')!='disposable-compose-only':raise ValueError('Isolated DB marker required')
-            sql(base,"BEGIN;"+patch.decode()+"\nINSERT INTO schema_migrations(name) VALUES('109_notification_sender_fast_path.sql') ON CONFLICT DO NOTHING; COMMIT;")
-            if sql(base,"SELECT count(*) FROM schema_migrations WHERE name='109_notification_sender_fast_path.sql'")!='1':raise ValueError('Migration109 ledger missing')
-            result['reviewed_database_patch']=dict(migration='109_notification_sender_fast_path.sql',sha256='d5a1d47cef13730de36497e90766956a82efbb94950d88f3fe30d8331b16f397',source='a38e0dd9baac92f3ecfbddc311c1157a97a2e178',regression_run=42301537629,isolated_only=True)
+        from database_patch import apply as apply_database_patch
+        result['reviewed_database_patch']=apply_database_patch(base)
 
         if os.environ.get('BROWSING_PROFILE')=='true':
             # Query-only profile: same 500 providers/5000 browsing rows, omit
