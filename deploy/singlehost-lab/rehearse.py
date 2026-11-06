@@ -163,10 +163,11 @@ def main():
         fixtures.pop('sessions');(exchange/'run.json').write_text(json.dumps(fixtures))
         sys.path.insert(0,str(root/'deploy/notification-lab'))
         from generator_prewarm import candidate,recover
+        from measured_abort import candidate as correct_clock,recover as recover_clock
         suite=base/'suite';suite.mkdir()
         for file in (root/'deploy/session-lab').glob('*.mjs'):shutil.copyfile(file,suite/file.name)
-        original=(root/'deploy/session-lab/sessions.js').read_text();generated=candidate(original)
-        if recover(generated)!=original or hashlib.sha256(generated.encode()).hexdigest()!='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49':raise ValueError('qualified generator source mismatch')
+        original=(root/'deploy/session-lab/sessions.js').read_text();generated=correct_clock(candidate(original))
+        if recover(recover_clock(generated))!=original or hashlib.sha256(generated.encode()).hexdigest()!='0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290':raise ValueError('qualified generator source mismatch')
         (suite/'sessions.js').write_text(generated)
         # Rehearse the unchanged first20-session stage, not500 capacity.
         generator=['docker','run','--rm','--name',run+'-generator','--network','host','--add-host','gateway:172.29.248.10','--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512','--user','0:0',

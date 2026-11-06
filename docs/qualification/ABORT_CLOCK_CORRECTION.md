@@ -41,11 +41,20 @@ Evidence lives in the shared workspace under qualification/k6-early-transient.lo
 k6-corrected-transient.log, k6-corrected-slow.log and their .exit files. The
 reproduction is qualification/reproduce-k6-abort-clock.js; it sends no HTTP.
 
-The corrected candidate is deliberately not enabled in trial_runner.py:
-the runner still enforces the old independently qualified executed-client hash.
-Do not change that hash to pretend the modified generator has already passed
-its required independent 500-session/30-minute qualification. That independent
-validation and a new exact-source package rehearsal remain prerequisites to
-another VPS attempt. Existing historical proof remains unchanged and valid
-for its own client. No 500-session application capacity claim follows from
-these offline timing results.
+Independent qualification subsequently PASSED in GitHub run42178904513 at
+f6efa17cf4bc69cea1ddf0df65e66728a9c5c110. All 500 authenticated sessions were
+sustained for 1800 seconds (1804.60 measured seconds), with 449841 requests
+offered and completed, no dropped iterations, all original thresholds passing
+and successful disposable cleanup. CPU p95 was19.23% of the two-core quota,
+burst p9543.64%, throttling0.0166%, peak memory2771558400 bytes against4GiB,
+and OOM events zero. This is a synthetic-target generator result, not an
+application/database capacity result.
+
+The trial runner and disposable rehearsal now generate the exact independently
+verified client hash0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290.
+Authentic CI proof members are retained under
+deploy/cohost-lab/proofs/generator-42178904513 and anchored by their gate/client
+checksums. Historical proof remains valid for its own client, and cannot be
+mixed with the corrected client. No historical artifact download is needed
+at execution time. A successful exact-source package rehearsal is still
+required before another VPS attempt.

@@ -131,7 +131,7 @@ jobs:
           assert evidence['status']=='completed' and evidence['conclusion']=='success' and evidence['headSha']==a['source_commit']
           assert len([j for j in evidence['jobs'] if j['name']=='rehearsal' and j['status']=='completed' and j['conclusion']=='success'])==1
           PY
-          python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-40866958782
+          python3 deploy/cohost-lab/check_generator.py deploy/cohost-lab/proofs/generator-42178904513
           docker pull grafana/k6:2.3.0
           python3 deploy/singlehost-lab/install_ci.py .singlehost-private
       - name: Execute only the approved original staged workload

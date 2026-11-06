@@ -121,7 +121,7 @@ def main():
     if commit!=approval['source_commit'] or approval.get('client_hashes')!=client_hashes(root):raise ValueError('approved source/workload mismatch')
     from provenance import verify
     verify(root)
-    subprocess.run(['python3',str(root/'deploy/cohost-lab/check_generator.py'),str(root/'deploy/cohost-lab/proofs/generator-40866958782')],check=True)
+    subprocess.run(['python3',str(root/'deploy/cohost-lab/check_generator.py'),str(root/'deploy/cohost-lab/proofs/generator-42178904513')],check=True)
     if not a.ssh_config or not a.ssh_config.is_file():raise ValueError('pinned restricted SSH configuration required')
     if int(next(x.split()[1] for x in Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:')))*1024<6*2**30:raise ValueError('generator memory reserve insufficient')
     a.output.mkdir(exist_ok=False)

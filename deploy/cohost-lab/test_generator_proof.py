@@ -10,6 +10,15 @@ class GeneratorProofTests(unittest.TestCase):
             gate=check(self.proof())
         self.assertEqual(gate['requested_seconds'],1800)
         self.assertTrue(all(gate['assertions'].values()))
+    def test_corrected_proof_is_bound_to_its_own_client(self):
+        corrected=Path(__file__).parent/'proofs/generator-42178904513'
+        gate=check(corrected)
+        self.assertEqual(gate['completed'],449841)
+        self.assertTrue(gate['independent_generator_gate_passed'])
+        with tempfile.TemporaryDirectory() as tmp:
+            dest=Path(tmp)/'proof';shutil.copytree(corrected,dest)
+            shutil.copyfile(self.proof()/'cpu-2-prewarm/executed-sessions.js',dest/'cpu-2-prewarm/executed-sessions.js')
+            with self.assertRaises(ValueError):check(dest)
     def test_gate_and_executed_client_tampering_rejected(self):
         for name in ('gate.json','executed-sessions.js'):
             with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:

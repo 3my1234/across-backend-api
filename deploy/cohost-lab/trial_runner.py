@@ -132,10 +132,11 @@ class Runner:
         for original in (self.root/'deploy/session-lab').glob('*.mjs'):shutil.copyfile(original,suite/original.name)
         sys.path.insert(0,str(self.root/'deploy/notification-lab'))
         from generator_prewarm import candidate,recover
+        from measured_abort import candidate as correct_clock,recover as recover_clock
         original=(self.root/'deploy/session-lab/sessions.js').read_text()
-        generated=candidate(original)
-        if recover(generated)!=original:raise RuntimeError('qualified local prewarm is not reversible')
-        expected='dad72e9b2b8dd7dd9fca94bb6a0d6856d4081a49d301b53e3e133c127d01ea49'
+        generated=correct_clock(candidate(original))
+        if recover(recover_clock(generated))!=original:raise RuntimeError('qualified local prewarm/clock correction is not reversible')
+        expected='0beb48eadb26144c2cbfea5820bf5f01c179aa3f6d6ff21f00c05d8da7c36290'
         if hashlib.sha256(generated.encode()).hexdigest()!=expected:raise RuntimeError('executed generator differs from qualified source')
         (suite/'sessions.js').write_text(generated)
         (public/'executed-client.sha256').write_text(expected)
