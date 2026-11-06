@@ -1,64 +1,95 @@
-# Reviewed staged 500-session VPS qualification
+# Frozen-build staged VPS execution review
 
-Status: PREPARED ? LIVE EXECUTION NOT AUTHORIZED OR STARTED.
-Run: `cohost-a8379918676f430a`. Review directory: `C:\Users\EMMA\Desktop\gouwu\qualification\singlehost-review\cohost-a8379918676f430a`.
-Frozen execution source: `d3cf7ceea5f4c0a122df57f5883804c1a1128fe7` on `experiment/approved-singlehost-d3cf7ce`.
-API source: `395ef241b9a35be9712cb6fc7d107bfe8be85f38`.
-API SHA-256: `c8aa65b6d9618a4a8698616b0370d045d94dd8d1077041051e4ebeb502863c63`.
+**Decision: APPROVAL REQUIRED. Preparation is complete; no live execution has started.**
 
-## Completed evidence
+Reviewed attempt: `cohost-ffd511286f3d418e`. Review files: `C:\Users\EMMA\Desktop\gouwu\qualification\singlehost-review\cohost-ffd511286f3d418e`.
+Frozen backend: `baa03e4aea43db055c2a0e7622e20dc047a1f23a`.
+Executable SHA256: `5c42473a27a48d3c003d4047d438c31005907fbca2cf85f7a7e1e51f54a7fb16`.
+Frozen execution source: `b72174fc71bfcdae1e7ccceda856769a4ea76e6c`, published as `experiment/approved-singlehost-b72174f`.
 
-- Current full-fixture mixed 20-session/180-second application checkpoint PASSED: https://github.com/3my1234/across-backend-api/actions/runs/42210541636
-- Exact-current-source coordinator/restricted-SSH/HTTP-forward/watchdog fault-stop/systemd hard-stop cleanup rehearsal PASSED: https://github.com/3my1234/across-backend-api/actions/runs/42216042490
-- The rehearsal's executable hash is identical to the passing mixed test. Both API processes are checked via `/proc/1/exe` before load.
-- Original generator proof42178904513 and original generator bytes/gates remain unchanged.
-- Launcher/approval-file regression corrected and covered by 35 local tests (3 platform skips); exact-source Linux rehearsal passed.
-- Review file hashes, API hash, snapshot hash/age/inventory and frozen published ref verified locally. No new temporary key or live GitHub trial secret exists yet.
+## Completed readiness evidence
 
-## Sequence ? original reviewed policy, not the proposed alternate schedule
+- Exact frozen executable passed the original authenticated100-session/180-second disposable workload: [42245254946](https://github.com/3my1234/across-backend-api/actions/runs/42245254946). p958.33ms,9361measuredrequests, zero unexpected/controlled overload errors,1513offered/acknowledged/storedwrites; cleanup passed. These timings are NOT VPS predictions.
+- Exact execution source passed coordinator/restricted-SSH/HTTP-forward/watchdog fault-stop/native-import guard/systemd-deadline cleanup integration: [42262818567](https://github.com/3my1234/across-backend-api/actions/runs/42262818567). Actual running executable identity was checked over restricted SSH; downloaded executable hash matches the100-session binary above.
+- PostgreSQL16 release regression/race checks passed: [42245174772](https://github.com/3my1234/across-backend-api/actions/runs/42245174772).
+- Original free500-session generator proof42178904513, original generator source and acceptance gates retained. No historical-artifact download is required at live runtime.
+- Local review-file hashes, API/snapshot hashes, full snapshot inventory/restore proof, source immutability and launcher syntax passed. New approval remainsfalse; no new SSH key/private credential directory, GitHub secret or live test resources created.
 
-| Stage | Sessions | Duration |
-|---|---:|---:|
-| Baseline | 20 | 45 seconds |
-| Baseline | 100 | 180 seconds |
-| Gradual ramp | up to 500 | 180 seconds |
-| Sustained qualification | 500 | 1,800 seconds |
+No further backend optimization or new instrumentation is included. The API queue remains bounded at two seconds/32waiters per room per replica, with retryable503 before transaction creation. The normal workload must still produce zero controlled overload responses.
 
-Advance only if the existing performance, correctness, accounting and safety gates pass. No 250-session stage or new five-minute stages were silently added. Scheduled stage traffic totals36m45s; baseline, restore and receipt verification add time. Server-side hard limit remains120minutes. Stop at the first failing stage, preserve partial evidence, reconcile and clean up. No automatic second attempt.
+## Sequence and advancement rules
 
-## Resources and isolation
+| Stage | Sessions | Measured workload duration |
+| --- | ---: | ---: |
+| Baseline |20|45seconds|
+| Previous-failure checkpoint |100|180seconds|
+| Gradual ramp |up to500|180seconds|
+| Sustained qualification |500|1800seconds|
 
-| Resource | Limit |
-|---|---|
-| Application test group | 1 CPU / 2.5 GiB |
-| Isolated PostgreSQL | 2 CPUs / 3 GiB |
-| Aggregate on database VPS79.143.176.173 | 3 CPUs / 5.5 GiB |
-| Qualified free GitHub generator | 2 CPUs / 4 GiB |
+Preserve the original sequence. No250stage or new five-minute stages. Scheduled traffic totals36minutes45seconds; baseline, upload, snapshot restore, session initialization, receipts and reconciliation add time. Allow roughly60-90minutes overall. The independent server job has a120-minute hard lifetime from installation; pre-upload baseline/upload occur before that lifetime starts.
 
-CPU quotas are limits, not reserved independent cores. The main VPS hosts no new test resources. Existing production PostgreSQL/Redis/data/Coolify services/DNS/firewall/SSH authentication configuration are unchanged. Synthetic accounts, separate PostgreSQL container/database, Redis, bridge and storage only; no public test ports. Generator connects through restricted SSH forwarding to the private test gateway; database ports are not exposed publicly.
+A stage passes only when it completes its FULL measured duration/concurrency and every original gate passes: overall and per-operation p95<500ms/p99<1500ms; unexpected-error rate<0.005; controlled_overload.rate==0; valid content/session/authentication and generator resource/accounting checks; exact independent write inventory; current bid/presence state and original receipt/queue/correctness gates as applicable. Zero unexpected errors is the desired observed result; the original0.005 gate is not silently changed or described as zero. Report both rates and counts.
 
-The existing full snapshot `cohost-ad09262dac9a4cdd` and image archive are reused and checksum checked; the new API executable and tools are uploaded. If a required cached image is absent, the existing supervisor can load it from the verified existing archive under its independent guard; no image/archive download or new infrastructure is purchased. No production configuration or credentials are copied into the test.
+**100PASS:** continue the already reviewed gradual500/sustained500sequence. This does not authorize production deployment or public launch. **AnyFAIL/abort:** no advancement or immediate retry; stop generation, preserve partial evidence, reconcile and complete test-only cleanup. Diagnose the retained primary failure before proposing a correction. Aborted-run missing completion/coverage must be distinguished from generator resource exhaustion, and unconfirmed committed writes must remain visible.
 
-## Preflight and stop conditions
+**OverallPASS:**500sessions actually reach and sustain30minutes, with all correctness, generator, performance and production-safety gates passing and cleanup independently confirmed. Anything less remains partial evidence, not500qualification.
 
-Startup independently checks the latest consumed attempt46f3dc98f1c94056 is cleaned up, checks no other test containers remain, verifies retained observer/snapshot/binary integrity, performs the existing five-minute ATL Xpress health baseline and checks current resource headroom before test creation/load. Live host state has NOT been queried during this preparation; these are mandatory just-in-time gates, not assumed passes.
+## Allocation and isolation
 
-Keep original p95<500ms and p99<1,500ms overall/per-operation, unexpected-error rate<0.005, no uncontrolled overload, valid content and exact independent write reconciliation. Do not relax them to advance.
+| Resource | Hard reviewed limit |
+| --- | --- |
+| Application group, including both API replicas |1CPU /2.5GiB|
+| Separate synthetic PostgreSQL |2CPUs /3GiB|
+| Aggregate test allocation on database VPS79.143.176.173 |3CPUs /5.5GiB|
+| Free GitHub generator |2CPUs /4GiB|
 
-Independent local watchdog aborts on available RAM<2GiB, disk free<20GiB, OOM, unhealthy protected production containers, CPU>85% for5seconds, IOwait>10% for5seconds, two consecutive public health failures, or three consecutive public-latency breaches. HTTP request limit remains2s, observer total2.5s, existing DNS-only bounded retries remain. Guard lease must be fresh within5s. Public probes are ATL Xpress API/readiness and atlxpres.com, not the unrelated website. The120-minute systemd hard stop and exact-owned-resource cleanup survive coordinator disconnection.
+Two API pools retain8connections each; test HTTP admission remains64per replica. CPU quotas are limits, not reserved physical cores. No allocation increase is authorized.
 
-## Cleanup and approval command
+This is the previously approved isolated single-host placement on the existing DATABASE VPS; no new test containers on main VPS173.212.219.169. It tests the application at these caps, not the exact two-host production network topology. A private test PostgreSQL/Redis/database/bridge and synthetic accounts/storage are used. No production database credentials, customer data, production schemas or existing Coolify services are changed. No DNS/firewall/sshd authentication changes, purchases or K3s. No public test ports: generator uses the existing restricted HTTP-only SSH forward to private HAProxy; database forwarding/public exposure is disallowed.
 
-Normal success/failure cleanup removes only this run's recorded/labelled test resources and temporary SSH key. Operator removes the temporary GitHub secret. The one-command launcher then requests a final local SSH password for a separate READ-ONLY audit: zero test containers/networks/volumes/key lines, stopped owned units, cleanup markers and protected production/API health. Audit failure is reported; it does not silently authorize another run. Cached images/snapshot and evidence files are deliberately retained.
+Reuse checksum-verified existing image archive and full snapshot fromcohost-ad09262dac9a4cdd. Upload the new verified API executable and small reviewed tools only. A required missing cached image may be imported from the existing verified archive only under the existing independent guard; do not download/rebuild images on the VPS or bypass the guard.
 
-Approval is required because the following command authorizes creating isolated resources and generating load on the live host. To approve this exact original staged procedure and execute it:
+## Just-in-time preflight and automatic stop
+
+Latest a837 cleanup was independently confirmed in its saved root audit: zero exact test containers/networks/volumes/key lines, units inactive, protected containers healthy/API200. This is historical evidence, not assumed current health. Pre-upload baseline uses verified retained tools froma837, requires its finalized marker and checks that NO prior cohost containers remain. The existing operator additionally checks its historical46f3cleanup marker. Current available RAM/disk/CPU, production container health and public ATL readiness are checked before creation/load; a failed check stops this attempt.
+
+Retain all existing stop rules: available RAM<2GiB; diskfree<20GiB; OOM; protected production unhealthy; CPU>85%for5seconds; I/Owait>10%for5seconds; two consecutive public health failures; three consecutive public latency breaches; stale guard lease>5seconds;120-minute hard stop. HTTP2second/observer2.5second policy and bounded DNS-only retries unchanged. Public probes are api.atlxpres.com readiness and atlxpres.com, not the unrelated website. Watchdog and hard-stop cleanup survive coordinator/local terminal disconnection.
+
+Telemetry is unchanged: k6 per-operation latency/errors/throughput, pool counters/cumulative acquisition waiting, sampled lock waiters, SQL aggregate mean/max, container/cgroup CPU/memory/throttling, queue and production-health evidence. It does not provide true per-request pool/lock-wait percentiles. Do not mislabel sampled counts or averages as percentiles.
+
+## Cleanup / rollback
+
+Success, failure, timeout or interruption invokes the existing exact-owned-resource cleanup. Remove only this run's recorded/labelled test containers/networks/volumes/anchors and temporary SSH key; delete its temporary GitHub secret. Never Docker-prune or remove unrelated resources. Retain verified snapshot/images and evidence intentionally.
+
+The canonical launcher performs a separate final ROOT read-only audit after the operator: absence of exact-run containers/networks/volumes/key lines, owned units stopped, cleanup markers, protected production health/API200 and no temporary GitHub trial secret. Enter the password locally when prompted. A restricted-key denial after key removal is not itself a production failure; the independent audit decides cleanup confirmation. On audit failure, preserve evidence and inspect this same run; do not rerun setup.
+
+For a manual abort, use a second PowerShell window to cancel ONLY this nonce's GitHub job, if dispatched:
+
+```powershell
+$trial = (& gh run list --repo 3my1234/across-backend-api --workflow singlehost-rehearsal.yml --limit 30 --json databaseId,displayTitle,status | ConvertFrom-Json) | Where-Object { $_.displayTitle -eq 'Single-host trial cohost-ffd511286f3d418e' -and $_.status -ne 'completed' } | Select-Object -First 1
+if ($trial) { & gh run cancel $trial.databaseId --repo 3my1234/across-backend-api }
+```
+
+Then request the existing restricted test-only cleanup (also works during setup if the temporary key is installed):
+
+```powershell
+& python 'C:\Users\EMMA\Desktop\gouwu\.worktrees\messaging-100-rehearsal\deploy\singlehost-lab\ssh_once.py' --private 'C:\Users\EMMA\Desktop\gouwu\qualification\singlehost-private\cohost-ffd511286f3d418e' --command cleanup
+```
+
+Keep the original operator window open for its final audit. If the key is already removed/unavailable, do not reinstall it or rerun setup; use the saved job evidence and independent read-only audit. The server-side watchdog/hard stop remains independent.
+
+## Explicit approval and exact start command
+
+This review is complete but unauthorized. Running the following command approves this exact isolated full sequence, conditional advancement, caps, stops and cleanup:
 
 ```powershell
 & "C:\Users\EMMA\Desktop\gouwu\qualification\Start-Reviewed500.ps1" -ApproveTrial
 ```
 
-Enter SSH passwords locally, keep the window open, and use the printed GitHub link for stage progress. The same command performs the final read-only audit; do not launch another copy. Without `-ApproveTrial`, or with stale/consumed/changed review files, it stops before SSH/setup.
+Enter SSH passwords locally and leave that window open. Use the printed GitHub link for30-second phase heartbeats; gh watch's single job line is not a workload heartbeat. Do not run another copy. Without the flag, with a consumed/changed review, or after the fixture start window, the launcher refuses before SSH/setup.
 
-## Interpretation
+The retained full fixture expires7November2026at06:30:40Lagos. This launcher conservatively requires starting **before7November2026at04:30:40Lagos**, leaving the120-minute window. It will refuse later; never falsify timestamps or reuse a consumed approval.
 
-A pass proves only the tested synthetic workload/build/resource limits and isolated database-VPS placement. It is not production-deployment approval, a complete two-host production-topology certification, a simultaneous-signup/media-upload test, actual handset GPS/device-push/payment verification, or an unlimited-user guarantee. 500-session capacity is not qualified until the complete final stage and reconciliation/safety requirements pass.
+## Release boundary
+
+A pass qualifies only this tested build/workload/capped isolated placement. It does not qualify500simultaneous signups, every driver/media/payment/device-delivery pattern or unrestricted production traffic. The mobile retry correction3448048onfix/community-overload-cooldown must be included in reviewed store builds; this server-test approval does not build, publish, submit, migrate or deploy anything to production.
