@@ -89,6 +89,13 @@ func canonicalPublicURL(raw string) string {
 	for _, key := range []string{"fresh", "refresh", "_"} {
 		query.Del(key)
 	}
+	// ListProducts returns the existing eighty-item feed and does not consume
+	// these two parameters. Keep identical responses in one revision-bound cache
+	// entry. Other product routes and service search/pagination still use them.
+	if parsed.Path == "/api/v1/products" {
+		query.Del("search")
+		query.Del("limit")
+	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }

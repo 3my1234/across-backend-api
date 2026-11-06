@@ -57,6 +57,56 @@ func TestSimultaneousPublicCacheMissesShareOneLoad(t *testing.T) {
 	}
 }
 
+func TestIgnoredCatalogueParametersShareOneConcurrentFill(t *testing.T) {
+	r := redis.NewClient(&redis.Options{Addr: "unused.invalid:6379"})
+	defer r.Close()
+	r.AddHook(&memoryRedis{values: map[string]string{}})
+	app := fiber.New()
+	app.Use(SharedPublicCache(r, time.Second))
+	var calls atomic.Int32
+	app.Get("/api/v1/products", func(c *fiber.Ctx) error {
+		calls.Add(1)
+		time.Sleep(40 * time.Millisecond)
+		return c.JSON(fiber.Map{"products": []string{"synthetic"}})
+	})
+	variants := []string{"country_code=NG", "country_code=NG&limit=20&search=Synthetic", "limit=1&country_code=NG&search=hotel"}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for n := 0; n < 30; n++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			<-start
+			res, err := app.Test(httptest.NewRequest("GET", "/api/v1/products?"+variants[n%len(variants)], nil), 5000)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer res.Body.Close()
+			body, _ := io.ReadAll(res.Body)
+			if res.StatusCode != 200 || string(body) != `{"products":["synthetic"]}` {
+				t.Errorf("unexpected response %d %s", res.StatusCode, body)
+			}
+		}(n)
+	}
+	close(start)
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("identical catalogue variants performed %d fills, want1", calls.Load())
+	}
+	base := canonicalPublicURL("/api/v1/products?country_code=NG&search=Synthetic&limit=20")
+	for _, query := range []string{"country_code=GH", "country_code=NG&stock_scope=local", "country_code=NG&latitude=9&longitude=7", "country_code=NG&city=Abuja", "country_code=NG&state=FCT"} {
+		if canonicalPublicURL("/api/v1/products?"+query) == base {
+			t.Fatal("meaningful filter merged", query)
+		}
+	}
+	for _, path := range []string{"/api/v1/marketplace/listings", "/api/v1/products/flash-sale", "/api/v1/products/recommendations"} {
+		if canonicalPublicURL(path+"?search=hotel&limit=20") == canonicalPublicURL(path+"?search=rice&limit=1") {
+			t.Fatal("another endpoint's parameters removed", path)
+		}
+	}
+}
+
 func TestPublicCacheSeparatesCountryEncodingAndRevision(t *testing.T) {
 	r := redis.NewClient(&redis.Options{Addr: "unused.invalid:6379"})
 	defer r.Close()
