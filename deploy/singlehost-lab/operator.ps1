@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0 -or $secretNames -contains 'SINGLEHOST_TRIAL_BUNDLE') { 
 $audit=@'
 import json,subprocess
 from pathlib import Path
-run='cohost-c062100af27e482d'
+run='cohost-46f3dc98f1c94056'
 base=Path('/root/atlxpres-singlehost')/run
 if not (base/'cleanup.finalized').is_file():raise RuntimeError('Previous cleanup marker missing')
 ids=subprocess.check_output(['docker','ps','-aq','--filter','label=atlxpres.cohost.run='+run],text=True,timeout=15).strip()
