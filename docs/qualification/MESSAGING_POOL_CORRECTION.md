@@ -1,3 +1,5 @@
+> Historical c2da06d measurements. The current bounded queue candidate and its exact-build validation are documented in [ROOM_QUEUE_REVIEW.md](ROOM_QUEUE_REVIEW.md).
+
 # Messaging and Town Hall pool interference correction
 
 Candidate application source: c2da06d1ddf715bd3904a56864c0a0667785b4df. No deployment, migration or live-host retry performed.
