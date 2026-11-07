@@ -1,5 +1,5 @@
 ﻿import copy,unittest
-from pathlib import Path
+from pathlib import Path,PureWindowsPath,PurePosixPath
 from unittest.mock import patch
 from message_fanout_replay import configure,require_ledger,mode
 
@@ -31,3 +31,9 @@ class FanoutReplayTests(unittest.TestCase):
             with self.assertRaises(ValueError):require_ledger('async',{**observation,key:value},ledger)
         with self.assertRaises(ValueError):require_ledger('inline',observation,ledger)
         with self.assertRaises(ValueError):require_ledger('async',observation,{**ledger,'expected_jobs':0})
+
+    def test_worker_mount_is_linux_absolute_from_windows_packager(self):
+        for base in [PureWindowsPath('/root/atlxpres-singlehost/cohost-'+'a'*16),PurePosixPath('/root/atlxpres-singlehost/cohost-'+'a'*16)]:
+            doc={'services':{name:dict(environment={'DATABASE_URL':'postgres://postgres?application_name=system-api1'}) for name in ('api1','api2')}}
+            configure(doc,base,arm='async')
+            self.assertEqual(doc['services']['message-fanout']['volumes'],['/root/atlxpres-singlehost/cohost-'+'a'*16+'/worker.bin:/app/worker:ro'])

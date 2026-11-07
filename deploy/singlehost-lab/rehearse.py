@@ -90,6 +90,20 @@ def main():
         result.update(artifact)
         shutil.copyfile(base/'api.bin',output/'api.bin');shutil.copyfile(base/'api-artifact.json',output/'api-artifact.json')
         if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            if os.environ.get('LIVE_FANOUT_PACKAGE')=='true':
+                # Exercise the installer's actual cached-binary path, with root
+                # ownership, immutable SHA and the exact current worker ELF.
+                from message_fanout_live import metadata as fanout_metadata
+                from install_host import reuse_worker
+                cached=ROOT/('cohost-'+uuid.uuid4().hex[:16]);cached.mkdir(mode=0o700)
+                try:
+                    shutil.copyfile(base/'worker.bin',cached/'worker.bin');(cached/'worker.bin').chmod(0o555)
+                    (base/'worker.bin').unlink()
+                    reuse_worker(base,{'message_fanout':fanout_metadata(),'worker_cache_run':cached.name})
+                    if (base/'worker.bin').stat().st_ino!=(cached/'worker.bin').stat().st_ino:raise ValueError('worker cache was not hard linked')
+                    result['checksum_verified_worker_cache_reuse_passed']=True
+                finally:
+                    (cached/'worker.bin').unlink(missing_ok=True);cached.rmdir()
             shutil.copyfile(base/'worker.bin',output/'worker.bin')
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
         if os.environ.get('BROWSING_PROFILE')=='true':
@@ -100,7 +114,8 @@ def main():
                 if 'LAB_ACTOR_PAIRS' in service.get('environment',{}):service['environment']['LAB_ACTOR_PAIRS']='10'
         if os.environ.get('MESSAGE_FANOUT_REPLAY'):
             from message_fanout_replay import configure
-            configure(doc,base)
+            from pathlib import PureWindowsPath
+            configure(doc,PureWindowsPath(base.as_posix()) if os.environ.get('LIVE_FANOUT_PACKAGE')=='true' else base)
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
         (base/'compose.json').write_text(json.dumps(doc,indent=2))
         (output/'compose.json').write_text(json.dumps(doc,indent=2))

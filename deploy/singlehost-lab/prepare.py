@@ -26,7 +26,7 @@ def apply_cache_sources(approval,snapshot_run,preflight_run,workspace,artifact):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--durable-message-fanout',action='store_true');p.add_argument('--notification-fast-path',action='store_true');p.add_argument('--diagnostic20',action='store_true');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-snapshot-from');p.add_argument('--preflight-cache-from');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--durable-message-fanout',action='store_true');p.add_argument('--notification-fast-path',action='store_true');p.add_argument('--diagnostic20',action='store_true');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--rehearsal-run',required=True);p.add_argument('--snapshot-directory',type=Path,required=True);p.add_argument('--api-directory',type=Path,required=True);p.add_argument('--reuse-server-runtime-from');p.add_argument('--reuse-server-snapshot-from');p.add_argument('--preflight-cache-from');a=p.parse_args()
     if not a.rehearsal_run.isdigit():raise ValueError('completed rehearsal ID required')
     root=Path(__file__).resolve().parents[2];workspace=a.workspace.resolve()
     source=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
@@ -92,6 +92,13 @@ def main():
     approval.update(artifact)
     approval['snapshot_rehearsal_run']=str(proof['workflow_run'])
     apply_cache_sources(approval,a.reuse_server_snapshot_from,a.preflight_cache_from,workspace,artifact)
+    if a.reuse_server_runtime_from:
+        cached_run=a.reuse_server_runtime_from
+        if not a.durable_message_fanout or not re.fullmatch('cohost-[a-f0-9]{16}',cached_run):raise ValueError('reviewed durable runtime cache required')
+        cached=workspace/'qualification/singlehost-review'/cached_run
+        for name,key,expected in [('api.bin','api_cache_run',artifact['api_sha256']),('worker.bin','worker_cache_run',approval['message_fanout']['worker_sha256'])]:
+            if hashlib.sha256((cached/name).read_bytes()).hexdigest()!=expected:raise ValueError('cached runtime differs: '+name)
+            approval[key]=cached_run
     (review/'approval.json').write_text(json.dumps(approval,indent=2))
     shutil.copyfile(root/'deploy/capacity-lab/haproxy.cfg',review/'haproxy.cfg')
     cohost=('baseline.py','watchdog.py','safety.py','stage_host.py','image_identity.py','import_process.py','control.py','exchange.py','trial_policy.py')

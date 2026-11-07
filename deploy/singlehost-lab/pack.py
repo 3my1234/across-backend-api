@@ -20,6 +20,7 @@ def main():
     with tarfile.open(package,'w:gz',compresslevel=1) as archive:
         for file in sorted(review.rglob('*')):
             if file.name=='fixture.dump' and approval.get('snapshot_cache_run'):continue
+            if file.name=='worker.bin' and approval.get('worker_cache_run'):continue
             if file.name=='api.bin' and approval.get('api_cache_run'):continue
             if file.is_file() and file.name not in ('render.json','review-hashes.json'):
                 archive.add(file,arcname=file.relative_to(review).as_posix(),recursive=False)

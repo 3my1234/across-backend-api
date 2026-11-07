@@ -26,7 +26,7 @@ def configure(doc,base,arm=None):
     for name in ('api1','api2'):
         doc['services'][name]['environment']['ASYNC_MESSAGE_NOTIFICATIONS']='true' if arm=='async' else 'false'
     worker=copy.deepcopy(doc['services']['api1'])
-    worker.update(command=['/app/worker'],volumes=[str(base/'worker.bin')+':/app/worker:ro'],cpus=0.25,mem_limit='256m',memswap_limit='256m')
+    worker.update(command=['/app/worker'],volumes=[(base/'worker.bin').as_posix()+':/app/worker:ro'],cpus=0.25,mem_limit='256m',memswap_limit='256m')
     worker.pop('healthcheck',None)
     worker['environment'].update(WORKER_ROLES='message_fanout',DB_MAX_CONNS='2',DB_MIN_CONNS='1',WORKER_HEALTH_ADDR=':9090',DATABASE_URL=worker['environment']['DATABASE_URL'].replace('system-api1','system-message-fanout'))
     doc['services']['message-fanout']=worker

@@ -24,7 +24,7 @@ def validate(approval,now=None):
         expected_patch=metadata();actual_patch=approval['database_patch']
         if type(actual_patch) is not dict or actual_patch.keys()!=expected_patch.keys() or any(type(actual_patch[k]) is not type(v) or actual_patch[k]!=v for k,v in expected_patch.items()):raise ValueError('Unreviewed database patch')
     if 'dns_retry_policy' in approval and approval['dns_retry_policy']!='dns-only-3-attempts-12s-v1':raise ValueError('unreviewed DNS retry policy')
-    for key in ('snapshot_cache_run','api_cache_run','preflight_cache_run'):
+    for key in ('snapshot_cache_run','api_cache_run','worker_cache_run','preflight_cache_run'):
         if key in approval and not re.fullmatch('cohost-[a-f0-9]{16}',approval[key]):raise ValueError('invalid cached run: '+key)
     if 'api_sha256' in approval:
         from api_artifact import SOURCE,REGRESSION_RUN

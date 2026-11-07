@@ -48,6 +48,19 @@ def reuse_api(base,approval):
     from api_artifact import validate_files
     validate_files(base,approval)
 
+
+def reuse_worker(base,approval):
+    from message_fanout_live import validate,validate_files
+    validate(approval)
+    run=approval['worker_cache_run']
+    if not re.fullmatch('cohost-[a-f0-9]{16}',run):raise ValueError('invalid cached worker nonce')
+    source=base.parent/run/'worker.bin'
+    if source.resolve()!=source or source.stat().st_uid!=os.geteuid() or source.stat().st_mode&0o022:raise ValueError('unsafe cached worker path/ownership')
+    if hashlib.sha256(source.read_bytes()).hexdigest()!=approval['message_fanout']['worker_sha256']:raise ValueError('cached worker checksum mismatch')
+    os.link(source,base/'worker.bin')
+    validate_files(base)
+
+
 def main():
     import fcntl
     p=argparse.ArgumentParser();p.add_argument('--package',type=Path,required=True);p.add_argument('--sha256',required=True);p.add_argument('--run',required=True);a=p.parse_args()
@@ -70,6 +83,8 @@ def main():
         reuse_fixture(base,approval)
     if approval.get('api_cache_run'):
         reuse_api(base,approval)
+    if approval.get('worker_cache_run'):
+        reuse_worker(base,approval)
     if approval.get('preflight_cache_run'):
         preflight=base.parent/approval['preflight_cache_run']/('preflight-'+a.run)/'baseline.json'
         if preflight.is_file():
