@@ -11,7 +11,7 @@ are assumptions, not installed inventory, live prices, exchange rates or bills.
 2. Deploy compatible mobile/PWA clients with `file_size` video metadata first.
    Old clients can continue core operations but cannot request NEW video uploads
    without that metadata. Existing published video URLs remain readable.
-3. Apply the reviewed missing schema migrations through 112 using the separate
+3. Apply the reviewed missing schema migrations through 114 using the separate
    migration command; never run API replicas as automatic migrators. Review the
    new indexes' effect and migration lock budget before production approval.
 4. Deploy the API/worker images built from the reviewed release SHA. The optional
@@ -142,3 +142,34 @@ Private image-pending lifecycle rules are a proposal, not an applied bucket rule
 Actual storage estimates must count all three variants; processing does not prove
 an AWS bill or a production storage ceiling. Image recovery after a polling timeout
 and thumbnail selection across all browsing surfaces remain release-review items.
+
+
+## Renewal crash recovery and migration114
+
+Provider renewal recovery is an explicit owner action, not a background cancellation
+replay. GET /providers/me/subscription-renewal reports uncertain until reconciliation.
+Use Retry cancellation (POST the same endpoint with an empty next_plan_id) after the
+previous operation's two-minute DB lease expires. The API reads the active gateway
+subscriptions scoped to the original verified transaction/email. If cancellation
+already succeeded, it sends no further cancellation PUT and confirms the local audit
+and preference atomically. Unknown/error responses remain uncertain and preserve
+paid access through its legitimate expiry; a replacement checkout stays blocked.
+There is no claim of exactly-once external network delivery under ambiguous gateway
+responses. The UI's Retry cancellation remains available after paid access expires.
+
+Migration114 adds nullable lease fields, a pair constraint and an update/delete
+fence on provider_renewal_preferences. Existing rows retain their status/entitlements.
+The separate migrator uses bounded lock/statement timeouts; a busy DDL failure must
+stop the rollout rather than force a restart. Keep old healthy replicas serving
+until the exact-source migrator has succeeded and inventory confirms114. New
+production/staging APIs now fail startup if lease columns/constraint/enabled fence
+are absent. This is a read-only startup gate, never an automatic migration.
+
+During a rolling release, old renewals already holding the advisory lock exclude
+new reservations. New active leases reject legacy preference updates before the
+old API can make a gateway cancellation. Such legacy requests can receive an error
+and must be retried after the operation; do not promise error-free mixed-version
+renewal writes. Do not drop the added schema during rollback. Drain/expire operations
+and reconcile uncertainty; keep the additive fields/fence for an older API rollback.
+Actual production migration inventory, backup and DDL lock duration are not verified
+by a disposable test. No deployment is authorized by this document.

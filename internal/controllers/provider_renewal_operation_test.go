@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	appdb "across/backend/internal/db"
 	"context"
 	"os"
 	"path/filepath"
@@ -26,7 +27,19 @@ func TestRenewalOperationFencingAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if appdb.VerifyProviderRenewalSchema(ctx, db) == nil {
+		t.Fatal("pre114 schema accepted")
+	}
 	exec(string(sql))
+	if err := appdb.VerifyProviderRenewalSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	exec(`ALTER TABLE provider_renewal_preferences DISABLE TRIGGER provider_renewal_operation_fence`)
+	if appdb.VerifyProviderRenewalSchema(ctx, db) == nil {
+		t.Fatal("disabled lease fence accepted")
+	}
+	exec(`ALTER TABLE provider_renewal_preferences ENABLE TRIGGER provider_renewal_operation_fence`)
+
 	provider, other, owner, oldToken, newToken := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	exec(`INSERT INTO provider_renewal_preferences(provider_id,renewal_status,operation_token,operation_expires_at) VALUES($1,'uncertain',$2,clock_timestamp()-interval '1 second'),($3,'uncertain',NULL,NULL)`, provider, oldToken, other)
 	exec(`INSERT INTO provider_members VALUES($1,$2,true,'owner')`, provider, owner)
