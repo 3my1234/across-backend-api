@@ -125,7 +125,8 @@ def main():
         if counts!={'actors':pairs,'migration108':1,'identity':'disposable-compose-only'}:raise RuntimeError('actual seed schema/identity/population mismatch')
         result['seed_counts']=counts
         from database_patch import apply as apply_database_patch
-        result['reviewed_database_patch']=apply_database_patch(base)
+        if not args.snapshot_build:
+            result['reviewed_database_patch']=apply_database_patch(base)
 
         if os.environ.get('BROWSING_PROFILE')=='true':
             # Query-only profile: same 500 providers/5000 browsing rows, omit
@@ -148,6 +149,7 @@ def main():
         if args.snapshot_build:
             from rehearse_snapshot import exercise as snapshot_replay
             result['snapshot']=snapshot_replay(root,base,output,sentinel)
+            result['reviewed_database_patch']=apply_database_patch(base)
         print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
         # This command emits bearer fixtures. Capture privately, never in public evidence.
         exec_lab(base,'exporter','prepare-sessions')
