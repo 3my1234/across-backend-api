@@ -40,7 +40,9 @@ jobs:
               assert '--- PASS: '+name+' ' in s, 'Room scheduling regression did not execute: '+name
           PY
       - name: Race-check room scheduling and real database retry isolation
-        run: go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*)$'
+        run: |
+          go test -race -count=1 ./internal/workers ./internal/config
+          go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*)$'
       - name: Measure actual conditional polling handler and SQL cost
         env: {POLL_COST_LOCAL: 'true'}
         run: |

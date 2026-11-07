@@ -31,7 +31,9 @@ they do not prove that every slow request is caused by notification processing.
   with bounded backoff; they are never silently dropped. Page scheduling yields
   to other jobs so a large room does not monopolize the queue.
 - The `message_fanout` worker role runs one database transaction at a time, with
-  four pages per polling cycle and a one-second ticker. Completed jobs older
+  at most32 pages or100ms of work per cycle, followed by a100ms yield. Queue
+  observations remain once per second. This replaces a four-job/second ceiling
+  below the observed100-session write rate. Completed jobs older
   than seven days are pruned in bounded batches. Pending jobs are never pruned.
   This uses the configured worker pool; it does not silently increase its size.
 - `ASYNC_MESSAGE_NOTIFICATIONS=false` is the default. Existing room locks,
