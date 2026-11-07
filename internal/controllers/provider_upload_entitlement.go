@@ -15,8 +15,11 @@ func (m *ProviderMarketplaceController) checkPostUpload(ctx context.Context, pro
 	if err != nil {
 		return fiber.NewError(503, "Your upload allowance could not be checked. Retry.")
 	}
+	if purpose == "post_video" && policy.VideoUploadsPaused {
+		return fiber.NewError(503, "Video uploads are temporarily paused. Your published videos remain available.")
+	}
 	if purpose == "post_video" && policy.Videos == 0 {
-		return fiber.NewError(403, "Upgrade to Diamond or Gold to upload videos.")
+		return fiber.NewError(403, "Upgrade to Gold to upload videos.")
 	}
 	if id == "" {
 		return nil

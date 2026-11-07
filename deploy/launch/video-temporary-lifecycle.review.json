@@ -1,0 +1,9 @@
+{
+ "Rules": [{
+   "ID": "atl-video-pending-only-review-before-applying",
+   "Status": "Enabled",
+   "Filter": {"Prefix": "private/video-pending/"},
+   "Expiration": {"Days": 1},
+   "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
+ }]
+}

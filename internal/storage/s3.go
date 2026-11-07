@@ -46,6 +46,18 @@ func (s *S3) Configured() bool {
 }
 
 func (s *S3) PresignPut(key, contentType string, expires time.Duration) (string, error) {
+	return s.presignPut(key, contentType, expires, 0)
+}
+
+// Bind new video uploads to the exact declared length. Browsers send the file's
+// Content-Length automatically; a larger PUT no longer matches the signature.
+func (s *S3) PresignPutSized(key, contentType string, expires time.Duration, size int64) (string, error) {
+	if size <= 0 {
+		return "", errors.New("positive upload size required")
+	}
+	return s.presignPut(key, contentType, expires, size)
+}
+func (s *S3) presignPut(key, contentType string, expires time.Duration, size int64) (string, error) {
 	if !s.Configured() {
 		return "", errors.New("s3 is not configured")
 	}
@@ -71,16 +83,23 @@ func (s *S3) PresignPut(key, contentType string, expires time.Duration) (string,
 	q.Set("X-Amz-Credential", credential)
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", fmt.Sprintf("%d", int(expires.Seconds())))
-	q.Set("X-Amz-SignedHeaders", "content-type;host")
+	signedHeaders := "content-type;host"
+	if size > 0 {
+		signedHeaders = "content-length;" + signedHeaders
+	}
+	q.Set("X-Amz-SignedHeaders", signedHeaders)
 	u.RawQuery = canonicalQuery(q)
 
 	canonicalHeaders := fmt.Sprintf("content-type:%s\nhost:%s\n", contentType, u.Host)
+	if size > 0 {
+		canonicalHeaders = fmt.Sprintf("content-length:%d\n", size) + canonicalHeaders
+	}
 	canonicalRequest := strings.Join([]string{
 		http.MethodPut,
 		u.EscapedPath(),
 		u.RawQuery,
 		canonicalHeaders,
-		"content-type;host",
+		signedHeaders,
 		"UNSIGNED-PAYLOAD",
 	}, "\n")
 	stringToSign := strings.Join([]string{
@@ -297,4 +316,13 @@ func signingKey(secret, date, region, service string) []byte {
 	kRegion := hmacSHA256(kDate, region)
 	kService := hmacSHA256(kRegion, service)
 	return hmacSHA256(kService, "aws4_request")
+}
+
+// Video bytes go directly from S3 to the viewer. The application only returns
+// a short-lived redirect; images keep their existing CDN URL contract.
+func (s *S3) VideoObjectURL(key string) (string, error) {
+	if s.publicURL == "" {
+		return "", errors.New("PUBLIC_BASE_URL is required for video links")
+	}
+	return s.publicURL + "/api/v1/public/videos/view/" + encodeKeyPath(key), nil
 }

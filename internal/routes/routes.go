@@ -151,6 +151,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
+	v1.Get("/public/videos/view/*", marketplaceController.PublicProviderVideo)
 	// Keep a terminating 404 rather than allowing the path to fall through to
 	// authenticated route middleware. Controller also guards direct use.
 	v1.Post("/dev/login", dev.Login)

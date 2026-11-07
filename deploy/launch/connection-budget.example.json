@@ -1,0 +1,32 @@
+{
+  "inventory_verified": false,
+  "postgres_max_connections": 100,
+  "admin_and_emergency_reserve": 10,
+  "other_clients_max": 6,
+  "services": [
+    {
+      "name": "API",
+      "instances": 2,
+      "primary_max": 8,
+      "separate_read_pool": false
+    },
+    {
+      "name": "general worker",
+      "instances": 1,
+      "primary_max": 4,
+      "separate_read_pool": false
+    },
+    {
+      "name": "message fanout",
+      "instances": 1,
+      "primary_max": 2,
+      "separate_read_pool": false
+    },
+    {
+      "name": "temporary migrator",
+      "instances": 1,
+      "primary_max": 2,
+      "separate_read_pool": false
+    }
+  ]
+}

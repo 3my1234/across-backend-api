@@ -1,0 +1,57 @@
+{
+  "region": "eu-north-1 CODE DEFAULT ONLY; actual bucket region unverified",
+  "prices_verified": false,
+  "ngn_per_usd": 1500,
+  "rates_usd": {
+    "storage_gb_month": 0.025,
+    "put_1000": 0.006,
+    "get_1000": 0.0005,
+    "origin_egress_gb": 0.1,
+    "cdn_egress_gb": 0.02,
+    "encoding_hour": 0.1,
+    "video_cdn_egress_gb": 0
+  },
+  "tier_shares": {
+    "free": 0.3,
+    "bronze": 0.25,
+    "silver": 0.2,
+    "diamond": 0.15,
+    "gold": 0.1
+  },
+  "usage": {
+    "images_per_provider": 10,
+    "image_bytes": 150000,
+    "videos_per_gold_provider": 5,
+    "video_bytes": 52428800,
+    "temporary_storage_fraction": 0.25,
+    "monthly_replacements_per_asset": 1,
+    "encoding_seconds_per_video": 30,
+    "video_view_fraction": 0.1
+  },
+  "provider_counts": [
+    100,
+    1000,
+    10000
+  ],
+  "viewing_scenarios": [
+    {
+      "name": "light",
+      "asset_views_per_provider_month": 30
+    },
+    {
+      "name": "moderate",
+      "asset_views_per_provider_month": 300
+    },
+    {
+      "name": "heavy",
+      "asset_views_per_provider_month": 3000
+    }
+  ],
+  "cache_hit_rates": [
+    0,
+    0.85,
+    0.95
+  ],
+  "video_cache_hit_rate": 0,
+  "assumptions_note": "Illustrative USD rates/FX only. Images150KB, videos at current50MiB maximum (no compression claimed). Video goes direct S3 with no cache; proposed future720p output not assumed."
+}

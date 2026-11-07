@@ -8,18 +8,21 @@ import (
 )
 
 type providerPostPolicy struct {
-	Rooms           int    `json:"town_hall_room_limit"`
-	Weight          int    `json:"promotional_weight"`
-	DirectMessaging bool   `json:"direct_messaging"`
-	Recommended     bool   `json:"recommended"`
-	Search          bool   `json:"town_hall_search"`
-	Posts           int    `json:"post_limit"`
-	Images          int    `json:"max_images"`
-	Videos          int    `json:"max_videos"`
-	VideoSeconds    int    `json:"max_video_seconds"`
-	TownHall        bool   `json:"town_hall"`
-	Visibility      string `json:"visibility"`
-	Combined        bool   `json:"combined_limit"`
+	Rooms              int    `json:"town_hall_room_limit"`
+	Weight             int    `json:"promotional_weight"`
+	DirectMessaging    bool   `json:"direct_messaging"`
+	Recommended        bool   `json:"recommended"`
+	Search             bool   `json:"town_hall_search"`
+	Posts              int    `json:"post_limit"`
+	Images             int    `json:"max_images"`
+	Videos             int    `json:"max_videos"`
+	VideoSeconds       int    `json:"max_video_seconds"`
+	ProviderVideos     int    `json:"max_provider_videos,omitempty"`
+	VideoBytes         int64  `json:"max_video_bytes,omitempty"`
+	VideoUploadsPaused bool   `json:"video_uploads_paused,omitempty"`
+	TownHall           bool   `json:"town_hall"`
+	Visibility         string `json:"visibility"`
+	Combined           bool   `json:"combined_limit"`
 }
 
 func postPolicy(tier string) providerPostPolicy {
@@ -101,6 +104,24 @@ func planPostPolicy(code string, limit int) providerPostPolicy {
 	p := postPolicy(providerPlanTier(code))
 	if providerPlanTier(code) == "" && limit > 0 {
 		p.Posts = limit
+	}
+	return p
+}
+
+// Database policy overrides only current upload benefits; legacy custom post limits remain.
+func mergedPlanPolicy(code string, limit int, raw []byte) providerPostPolicy {
+	p := planPostPolicy(code, limit)
+	var current providerPostPolicy
+	if json.Unmarshal(raw, &current) == nil {
+		if providerPlanTier(code) != "" {
+			p = current
+		} else {
+			p.Videos = current.Videos
+			p.VideoSeconds = current.VideoSeconds
+			p.VideoBytes = current.VideoBytes
+			p.ProviderVideos = current.ProviderVideos
+			p.VideoUploadsPaused = current.VideoUploadsPaused
+		}
 	}
 	return p
 }

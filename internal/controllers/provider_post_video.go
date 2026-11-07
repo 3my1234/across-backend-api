@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"io"
 	"math"
 	"net/http"
@@ -83,16 +82,6 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.ErrForbidden
 	}
-	policy, err := m.postPolicy(c.Context(), provider)
-	if err != nil {
-		return fiber.NewError(503, "Your plan could not be checked. Please retry.")
-	}
-	if policy.Videos == 0 {
-		return fiber.NewError(403, "Upgrade to Gold or Diamond to upload videos.")
-	}
-	if _, err = exec.LookPath("ffprobe"); err != nil {
-		return fiber.NewError(503, "Video verification is temporarily unavailable. Please try again later.")
-	}
 	var payload struct {
 		Key string `json:"key"`
 	}
@@ -100,9 +89,33 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 	key, e := url.PathUnescape(payload.Key)
-	if e != nil || !strings.HasPrefix(key, "private/providers/"+provider+"/video-pending/") || strings.Contains(key, "..") {
+	if e != nil || !strings.HasPrefix(key, "private/video-pending/"+provider+"/") || strings.Contains(key, "..") {
 		return fiber.NewError(422, "Choose a video uploaded through your own provider account.")
 	}
+	ticket, e := m.claimProviderVideo(c.Context(), provider, key)
+	if e != nil {
+		c.Set("Retry-After", "5")
+		return e
+	}
+	if ticket.complete {
+		return c.JSON(fiber.Map{"url": ticket.url, "duration_seconds": ticket.duration})
+	}
+	defer m.releaseProviderVideo(key)
+	policy, err := m.postPolicy(c.Context(), provider)
+	if err != nil {
+		return fiber.NewError(503, "Your plan could not be checked. Please retry.")
+	}
+	if policy.VideoUploadsPaused {
+		c.Set("Retry-After", "60")
+		return fiber.NewError(503, "Video uploads are temporarily paused. Your published videos remain available.")
+	}
+	if policy.Videos == 0 {
+		return fiber.NewError(403, "Upgrade to Gold to upload videos.")
+	}
+	if _, err = exec.LookPath("ffprobe"); err != nil {
+		return fiber.NewError(503, "Video verification is temporarily unavailable. Please try again later.")
+	}
+
 	if m.s3 == nil || !m.s3.Configured() {
 		return fiber.NewError(503, "Video storage is unavailable.")
 	}
@@ -119,7 +132,10 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if e != nil {
 		return fiber.ErrInternalServerError
 	}
-	client := &http.Client{Timeout: 65 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := m.videoClient
+	if client == nil {
+		client = &http.Client{Timeout: 65 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, signed, nil)
 	res, e := client.Do(request)
 	if e != nil {
@@ -136,7 +152,7 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	defer os.Remove(file.Name())
 	defer file.Close()
 	size, e := io.Copy(file, io.LimitReader(res.Body, maxPostVideoBytes+1))
-	if e != nil || size <= 0 || size > maxPostVideoBytes {
+	if e != nil || size <= 0 || size > maxPostVideoBytes || size != ticket.size {
 		return fiber.NewError(422, "Upload a complete MP4 video no larger than 50 MB.")
 	}
 	probeCtx, stop := context.WithTimeout(ctx, 10*time.Second)
@@ -145,9 +161,12 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if e != nil {
 		return fiber.NewError(422, e.Error())
 	}
+	if policy.VideoSeconds < 1 || duration > float64(policy.VideoSeconds) || (policy.VideoBytes > 0 && size > policy.VideoBytes) {
+		return fiber.NewError(422, fmt.Sprintf("Choose a video within your current plan limits: %d seconds and %d bytes.", policy.VideoSeconds, policy.VideoBytes))
+	}
 	// Publish a fresh object whose PUT URL is never given to the uploader. The
 	// temporary upload cannot be overwritten to bypass an earlier verification.
-	verifiedKey := "user-uploads/providers/" + provider + "/video/" + uuid.NewString() + ".mp4"
+	verifiedKey := providerVerifiedVideoKey(provider, ticket)
 	put, e := m.s3.PresignPut(verifiedKey, "video/mp4", time.Minute)
 	if e != nil {
 		return fiber.ErrInternalServerError
@@ -166,8 +185,11 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if published.StatusCode < 200 || published.StatusCode >= 300 {
 		return fiber.NewError(503, "The verified video could not be saved. Please retry.")
 	}
-	public := m.s3.ObjectURL(verifiedKey)
-	if _, e = m.db.Exec(ctx, `INSERT INTO provider_post_video_assets(url,provider_id,duration_seconds,size_bytes) VALUES($1,$2::uuid,$3,$4)`, public, provider, duration, size); e != nil {
+	public, e := m.s3.VideoObjectURL(verifiedKey)
+	if e != nil {
+		return fiber.NewError(503, "Video links are not configured.")
+	}
+	if e = m.finishProviderVideo(ctx, provider, key, public, duration, size); e != nil {
 		return fiber.NewError(503, "The video was checked but could not be registered. Please retry.")
 	}
 	// The original candidate is no longer needed. Its stale PUT link cannot

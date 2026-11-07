@@ -76,6 +76,7 @@ func TestSubscriptionTransferCheckoutAndVerifiedEntitlement(t *testing.T) {
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", user); return c.Next() })
 	app.Post("/checkout", controller.SubscriptionCheckout)
+	installLaunchVideoBenefitsTest(t, db)
 	app.Get("/plans", controller.ListPlans)
 	plansRes, err := app.Test(httptest.NewRequest("GET", "/plans", nil))
 	if err != nil {

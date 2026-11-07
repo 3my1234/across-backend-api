@@ -27,14 +27,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.27.3'}
+      - name: Install real video verification tools for bounded correctness tests
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - name: Check offline budgets
+        run: python3 scripts/test_launch_budget.py
       - name: Verify release regressions against real disposable PostgreSQL
         run: |
           set -o pipefail
-          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db ./internal/migrations | tee reconciliation-tests.log
+          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db ./internal/migrations ./internal/config ./internal/storage | tee reconciliation-tests.log
           python3 - <<'PY'
           from pathlib import Path
           s=Path('reconciliation-tests.log').read_text()
-          for name in ('TestAsyncMessageFanoutBackpressureRollsBackMessage','TestAsyncMessageFanoutFailedJobIsolationAndRecovery','TestAsyncMessageFanoutSnapshotRollbackAndRetries','TestAsyncMessageFanoutAtomicPageFailureAndRecovery','TestAsyncMessageFanoutRecipientSizesAndConcurrentWorkers','TestAsyncProviderFanoutTransactionScopeAndMemberSnapshot','TestAsyncMessageFanoutFairPagesAndCompletedRetention','TestAsyncMessageFanoutHTTPMessageAndRetryCommitTogether','TestCatalogueDestinationOffersMatchLegacy','TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestSharedMessageMetadataRollbackAndRetry','TestNotificationSenderFastPathMatchesLegacy','TestNotificationSenderFastPathKeepsDurableDeliveryAtomic','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
+          for name in ('TestLaunchVideoPolicyPreservesPublishedAndRejectsNewDiamond','TestLaunchVideoPolicyAtomicMixedProviderQuota','TestLaunchVideoPolicyMatrixAndConfigurableDiamond','TestLaunchVideoReservationLimitsRecoveryAndIdempotentCompletion','TestLaunchVideoDeliveryRedirectNeverProxiesBytes','TestLaunchVideoActualVerificationAndCompletionRetry','TestSizedVideoUploadSignatureBindsExactLength','TestAsyncMessageFanoutBackpressureRollsBackMessage','TestAsyncMessageFanoutFailedJobIsolationAndRecovery','TestAsyncMessageFanoutSnapshotRollbackAndRetries','TestAsyncMessageFanoutAtomicPageFailureAndRecovery','TestAsyncMessageFanoutRecipientSizesAndConcurrentWorkers','TestAsyncProviderFanoutTransactionScopeAndMemberSnapshot','TestAsyncMessageFanoutFairPagesAndCompletedRetention','TestAsyncMessageFanoutHTTPMessageAndRetryCommitTogether','TestCatalogueDestinationOffersMatchLegacy','TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestSharedMessageMetadataRollbackAndRetry','TestNotificationSenderFastPathMatchesLegacy','TestNotificationSenderFastPathKeepsDurableDeliveryAtomic','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
               assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
           for name in ('TestRoomWriteQueueCancellationAndIndependentRooms','TestRoomWriteQueueBacklogBound','TestRoomWriteQueueDeadlineReturnsRetryBeforeDatabase','TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity'):
               assert '--- PASS: '+name+' ' in s, 'Room scheduling regression did not execute: '+name
@@ -42,7 +46,7 @@ jobs:
       - name: Race-check room scheduling and real database retry isolation
         run: |
           go test -race -count=1 ./internal/workers ./internal/config
-          go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*)$'
+          go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*|TestLaunchVideoPolicyAtomicMixedProviderQuota|TestLaunchVideoReservationLimitsRecoveryAndIdempotentCompletion)$'
       - name: Measure actual conditional polling handler and SQL cost
         env: {POLL_COST_LOCAL: 'true'}
         run: |

@@ -34,6 +34,7 @@ type ProviderMarketplaceController struct {
 	db              *pgxpool.Pool
 	cfg             config.Config
 	paymentProvider paymentProvider
+	videoClient     *http.Client
 	s3              *storage.S3
 	gatewayMu       sync.Mutex
 	gatewayItems    []gatewaySubscription
@@ -269,6 +270,7 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 		return fiber.ErrForbidden
 	}
 	var req struct {
+		FileSize int64  `json:"file_size"`
 		PostID   string `json:"post_id"`
 		PostKind string `json:"post_kind"`
 		Filename string `json:"filename"`
@@ -313,9 +315,20 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 		key = storage.SafeKey("private/providers/"+providerID+"/verification", req.Filename)
 	}
 	if purpose == "post_video" {
-		key = storage.SafeKey("private/providers/"+providerID+"/video-pending", req.Filename)
+		key = storage.SafeKey("private/video-pending/"+providerID, req.Filename)
 	}
-	uploadURL, err := m.s3.PresignPut(key, mime, 15*time.Minute)
+	var uploadURL string
+	if purpose == "post_video" {
+		uploadURL, err = m.s3.PresignPutSized(key, mime, 15*time.Minute, req.FileSize)
+		if err != nil {
+			return fiber.NewError(422, "Supply the video file_size before uploading.")
+		}
+		if err = m.reserveProviderVideo(c.Context(), providerID, key, req.FileSize); err != nil {
+			return err
+		}
+	} else {
+		uploadURL, err = m.s3.PresignPut(key, mime, 15*time.Minute)
+	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1534,7 +1547,7 @@ func (m *ProviderMarketplaceController) ReportListing(c *fiber.Ctx) error {
 }
 
 func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
-	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,listing_limit,features,flutterwave_plan_id IS NOT NULL FROM provider_subscription_plans WHERE is_active=true ORDER BY amount_ngn,id`)
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,listing_limit,features,flutterwave_plan_id IS NOT NULL,provider_tier_benefits(CASE code WHEN 'provider-monthly' THEN 'bronze' WHEN 'provider-growth' THEN 'silver' WHEN 'provider-business' THEN 'diamond' WHEN 'provider-diamond' THEN 'gold' ELSE '' END) FROM provider_subscription_plans WHERE is_active=true ORDER BY amount_ngn,id`)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1544,14 +1557,14 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		var id, code, name, desc string
 		var amount float64
 		var limit int
-		var features []byte
+		var features, policyJSON []byte
 		var cardAvailable bool
-		if err := rows.Scan(&id, &code, &name, &desc, &amount, &limit, &features, &cardAvailable); err != nil {
+		if err := rows.Scan(&id, &code, &name, &desc, &amount, &limit, &features, &cardAvailable, &policyJSON); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		var f map[string]any
 		_ = json.Unmarshal(features, &f)
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "entitlements_version": 1, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerTierLabel(providerPlanTier(code)), "post_policy": planPostPolicy(code, limit), "period_prices": providerPeriodPrices(amount, cardAvailable)})
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "entitlements_version": 1, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerTierLabel(providerPlanTier(code)), "post_policy": mergedPlanPolicy(code, limit, policyJSON), "period_prices": providerPeriodPrices(amount, cardAvailable)})
 	}
 	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true, "post_policy": postPolicy("")}, "transfer_months": []int{1, 3, 6, 12}})
 }
@@ -2195,7 +2208,7 @@ func (m *ProviderMarketplaceController) AdminCancelGatewaySubscription(c *fiber.
 }
 
 func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
-	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,billing_interval,listing_limit,flutterwave_plan_id,is_active,created_at,updated_at FROM provider_subscription_plans ORDER BY is_active DESC,amount_ngn,id`)
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,code,name,description,amount_ngn,billing_interval,listing_limit,flutterwave_plan_id,is_active,created_at,updated_at,provider_tier_benefits(CASE code WHEN 'provider-monthly' THEN 'bronze' WHEN 'provider-growth' THEN 'silver' WHEN 'provider-business' THEN 'diamond' WHEN 'provider-diamond' THEN 'gold' ELSE '' END) FROM provider_subscription_plans ORDER BY is_active DESC,amount_ngn,id`)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -2208,11 +2221,12 @@ func (m *ProviderMarketplaceController) AdminListPlans(c *fiber.Ctx) error {
 		var flutterwavePlanID *int64
 		var active bool
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &code, &name, &description, &amount, &interval, &listingLimit, &flutterwavePlanID, &active, &createdAt, &updatedAt); err != nil {
+		var policyJSON []byte
+		if err := rows.Scan(&id, &code, &name, &description, &amount, &interval, &listingLimit, &flutterwavePlanID, &active, &createdAt, &updatedAt, &policyJSON); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		yearly, savings := providerSubscriptionPrice(amount, 12)
-		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": description, "amount_ngn": amount, "yearly_amount_ngn": yearly, "yearly_savings_ngn": savings, "yearly_discount_percent": providerYearlyDiscountPercent, "billing_interval": interval, "listing_limit": listingLimit, "post_policy": planPostPolicy(code, listingLimit), "badge_tier": providerPlanTier(code), "flutterwave_plan_id": flutterwavePlanID, "is_active": active, "created_at": createdAt, "updated_at": updatedAt})
+		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": description, "amount_ngn": amount, "yearly_amount_ngn": yearly, "yearly_savings_ngn": savings, "yearly_discount_percent": providerYearlyDiscountPercent, "billing_interval": interval, "listing_limit": listingLimit, "post_policy": mergedPlanPolicy(code, listingLimit, policyJSON), "badge_tier": providerPlanTier(code), "flutterwave_plan_id": flutterwavePlanID, "is_active": active, "created_at": createdAt, "updated_at": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
 		return fiber.ErrInternalServerError
