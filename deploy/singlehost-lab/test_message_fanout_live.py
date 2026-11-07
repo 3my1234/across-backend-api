@@ -34,3 +34,19 @@ class LiveFanoutTests(unittest.TestCase):
             with patch('message_fanout_live.require_target'),patch('message_fanout_live.observe',return_value=observed),patch('message_fanout_live.sql',return_value='{}'):
                 with self.assertRaises(ValueError):finish(base,approval)
             self.assertEqual(json.loads((base/'message-fanout-ledger.json').read_text())['failed'],1)
+
+    def test_completed_summary_uuid_survives_original_coordinator_rotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);(base/'exchange').mkdir();completed='12345678-1234-4234-8234-123456789012'
+            (base/'exchange/summary.json').write_text(json.dumps({'run_id':completed}))
+            observed={'failed':0,'pending':0,'jobs':1,'max_completed_lag_seconds':1}
+            ledger={'expected_jobs':1,'expected_notifications':2,'actual_notifications':2,'expected_native':2,'missing_jobs':0,'missing_notifications':0,'payload_mismatches':0,'missing_native':0,'missing_web':0}
+            with patch('message_fanout_live.require_target'),patch('message_fanout_live.observe',return_value=observed),patch('message_fanout_live.sql',return_value=json.dumps(ledger)) as query:
+                result=finish(base,{'message_fanout':metadata()})
+                self.assertEqual(result['stage_run_id'],completed)
+                self.assertIn("'"+completed+"'::text",query.call_args.args[1])
+                self.assertNotIn('run_id::text',query.call_args.args[1])
+            (base/'exchange/summary.json').write_text(json.dumps({'run_id':"bad' SQL"}))
+            with patch('message_fanout_live.require_target'),patch('message_fanout_live.observe',return_value=observed),patch('message_fanout_live.sql') as query:
+                with self.assertRaises(ValueError):finish(base,{'message_fanout':metadata()})
+                query.assert_not_called()

@@ -1,5 +1,5 @@
 """Reviewed durable worker overlay for owned synthetic qualification resources only."""
-import hashlib,json,time
+import hashlib,json,time,uuid
 from pathlib import Path
 from api_artifact import SOURCE
 from database_patch import require_target
@@ -50,7 +50,12 @@ def finish(base,approval):
         observed=observe(base)
         if observed['failed'] or observed['pending']==0 or time.monotonic()>deadline:break
         time.sleep(.5)
-    ledger=json.loads(sql(base,LEDGER_SQL));report=dict(**observed,**ledger,external_delivery_tested=False)
+    # The original coordinator rotates the active run UUID after reconciliation.
+    # Use its already-uploaded completed summary, never the next stage identity.
+    summary=base/'exchange/summary.json'
+    stage_run=str(uuid.UUID(json.loads(summary.read_text())['run_id'])) if summary.is_file() else None
+    statement=LEDGER_SQL if stage_run is None else LEDGER_SQL.replace('run_id::text',"'"+stage_run+"'::text")
+    ledger=json.loads(sql(base,statement));report=dict(**observed,**ledger,stage_run_id=stage_run,external_delivery_tested=False)
     # Save failure evidence before asserting acceptance, including on partial stages.
     (base/'message-fanout-ledger.json').write_text(json.dumps(report))
     require_ledger('async',observed,ledger);return report
