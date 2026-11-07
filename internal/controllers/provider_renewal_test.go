@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func TestSubscriptionRenewalCancellationAndNextPlan(t *testing.T) {
 	if _, err = db.Exec(ctx, string(sql)); err != nil {
 		t.Fatal(err)
 	}
+	leaseSQL, e := os.ReadFile(filepath.Join("..", "..", "migrations", "114_provider_renewal_operation_lease.sql"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.Exec(ctx, string(leaseSQL)); e != nil {
+		t.Fatal(e)
+	}
 	owner, provider, basic, growth, subscription := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	exec := func(query string, args ...any) {
 		t.Helper()
@@ -50,11 +58,15 @@ func TestSubscriptionRenewalCancellationAndNextPlan(t *testing.T) {
 	exec(`INSERT INTO provider_subscriptions(id,provider_id,plan_id,status,billing_mode,customer_email,starts_at,current_period_end) VALUES($1,$2,$3,'active','recurring','owner@example.test',now()-interval '1 day',now()+interval '29 days')`, subscription, provider, basic)
 	exec(`INSERT INTO provider_subscription_payments(subscription_id,flutterwave_transaction_id) VALUES($1,'1001')`, subscription)
 	exec(`UPDATE provider_subscriptions SET gateway_plan_id=123 WHERE false`) // immutable snapshot is tested below on a new row.
+	var gatewayHook func(*http.Request)
 	cancelled := map[string]bool{}
 	puts := 0
 	failVerify := false
 	wrongPlan := false
 	client := &http.Client{Transport: paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if gatewayHook != nil {
+			gatewayHook(req)
+		}
 		body := `{"status":"success","data":[]}`
 		if req.Method == http.MethodGet {
 			if req.URL.Query().Get("transaction_id") != "1001" || req.URL.Query().Get("email") != "owner@example.test" {
@@ -106,7 +118,46 @@ func TestSubscriptionRenewalCancellationAndNextPlan(t *testing.T) {
 	if err = db.QueryRow(ctx, `SELECT current_period_end FROM provider_subscriptions WHERE id=$1`, subscription).Scan(&originalEnd); err != nil {
 		t.Fatal(err)
 	}
-	status, data := call("POST", "/renewal", `{"next_plan_id":"`+growth+`"}`)
+	// A stalled gateway must hold zero pool connections. Another API replica
+	// must still reject the same-provider renewal and replacement checkout.
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	gatewayHook = func(req *http.Request) { once.Do(func() { close(entered); <-proceed }) }
+	type reply struct {
+		status int
+		data   map[string]any
+	}
+	done := make(chan reply, 1)
+	go func() {
+		status, data := call("POST", "/renewal", `{"next_plan_id":"`+growth+`"}`)
+		done <- reply{status, data}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("gateway not reached")
+	}
+	if acquired := db.Stat().AcquiredConns(); acquired != 0 {
+		t.Errorf("gateway retained %d DB connections", acquired)
+	}
+	var probe int
+	if err = db.QueryRow(ctx, `SELECT 1`).Scan(&probe); err != nil {
+		t.Error(err)
+	}
+	if status, _ := call("POST", "/renewal", `{}`); status != 409 {
+		t.Errorf("parallel replica renewal accepted: %d", status)
+	}
+	if status, _ := call("POST", "/checkout", `{}`); status != 409 {
+		t.Errorf("checkout bypassed pending cancellation: %d", status)
+	}
+	// An old API updating preferences must not bypass the durable lease.
+	if _, err = db.Exec(ctx, `UPDATE provider_renewal_preferences SET renewal_status='uncertain' WHERE provider_id=$1::uuid`, provider); err == nil {
+		t.Error("old API bypassed active lease")
+	}
+	close(proceed)
+	result := <-done
+	gatewayHook = nil
+	status, data := result.status, result.data
 	if status != 200 || data["renewal_status"] != "stopped" || puts != 2 {
 		t.Fatalf("schedule: %d %+v puts%d", status, data, puts)
 	}
