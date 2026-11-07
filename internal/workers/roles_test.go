@@ -67,8 +67,15 @@ func TestInvalidSelectionStartsNothing(t *testing.T) {
 func TestSelectedMonitorIgnoresDisabledLoopsAndDetectsStall(t *testing.T) {
 	roles, _ := (config.Config{}).WorkerRoleNames()
 	all, err := NewMonitorForRoles(roles)
-	if err != nil || len(all.last) != len(loopLimits) {
+	if err != nil || len(all.last) != len(roles) || len(all.last)+1 != len(loopLimits) {
 		t.Fatal("consumer/health role inventories differ")
+	}
+	if _, enabled := NewMonitor().last["media"]; enabled {
+		t.Fatal("default monitor expects an optional encoder")
+	}
+	media, mediaErr := NewMonitorForRoles([]string{"media"})
+	if mediaErr != nil || len(media.last) != 1 {
+		t.Fatal("dedicated encoder lacks its own health monitor")
 	}
 	m, err := NewMonitorForRoles([]string{"push", "push_receipts"})
 	if err != nil {

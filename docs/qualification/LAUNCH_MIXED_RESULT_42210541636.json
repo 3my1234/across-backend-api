@@ -1,0 +1,233 @@
+{
+  "workflow": 42210541636,
+  "test_source": "1572457aaac0253e57217026b045962453b6d651",
+  "api_source": "395ef241b9a35be9712cb6fc7d107bfe8be85f38",
+  "api_sha256": "c8aa65b6d9618a4a8698616b0370d045d94dd8d1077041051e4ebeb502863c63",
+  "passed": true,
+  "cleanup_completed": true,
+  "planned_sessions": 20,
+  "planned_seconds": 180,
+  "http_requests_including_setup": 1956,
+  "overall_latency": {
+    "med": 3.7951915,
+    "p(95)": 37.85726159999998,
+    "p(99)": 69.85386849000001,
+    "max": 105.210844,
+    "min": 0.532667
+  },
+  "unexpected_http_error_rate": 0,
+  "controlled_overload_rate": 0,
+  "catalogue_gateway_cache": {
+    "MISS": {
+      "count": 42,
+      "p95_gateway_total_ms": 85,
+      "max_ms": 105
+    },
+    "HIT": {
+      "count": 148,
+      "p95_gateway_total_ms": 2,
+      "max_ms": 8
+    }
+  },
+  "townhall_offer_rooms": {
+    "76076831-be78-420f-ab0f-fc8e74561e48": 120
+  },
+  "resource_samples": 29,
+  "max_sampled_lock_waiters": 0,
+  "container_cpu_peak_percent_one_core": {
+    "postgres-1": 19.12,
+    "redis-1": 3.36,
+    "gateway-1": 0.68,
+    "seed-1": 0.0,
+    "api1-1": 10.6,
+    "lifecycle-1": 0.0,
+    "queue-check-1": 0.0,
+    "notification-provider-1": 0.0,
+    "api2-1": 4.98,
+    "exporter-1": 0.0,
+    "verifier-1": 0.0,
+    "notification-worker-1": 0.0
+  },
+  "container_memory_peak_display": {
+    "postgres-1": "251.7MiB / 3GiB",
+    "redis-1": "5.355MiB / 128MiB",
+    "gateway-1": "9.992MiB / 128MiB",
+    "seed-1": "476KiB / 512MiB",
+    "api1-1": "44.82MiB / 512MiB",
+    "lifecycle-1": "376KiB / 256MiB",
+    "queue-check-1": "360KiB / 256MiB",
+    "notification-provider-1": "0B / 0B",
+    "api2-1": "43.68MiB / 512MiB",
+    "exporter-1": "384KiB / 256MiB",
+    "verifier-1": "356KiB / 256MiB",
+    "notification-worker-1": "0B / 0B"
+  },
+  "cgroup_memory_peak_bytes": {
+    "cohoste5b5cafeb72d41f4single.slice": 2148376576,
+    "cohoste5b5cafeb72d41f4single-app.slice": 108994560,
+    "cohoste5b5cafeb72d41f4single-db.slice": 2048147456
+  },
+  "cgroup_sample_cpu_p95_percent_one_core": {
+    "cohoste5b5cafeb72d41f4single.slice": 18.633898613973905,
+    "cohoste5b5cafeb72d41f4single-app.slice": 7.31818984746536,
+    "cohoste5b5cafeb72d41f4single-db.slice": 11.929936610646848
+  },
+  "limitations": [
+    "Free shared GitHub runner, not VPS capacity",
+    "Only20sessions and2presence providers",
+    "No external email/push/device delivery or payment journey",
+    "Resource sampling does not rule out short lock waits"
+  ],
+  "per_operation_latency": {
+    "successful_latency{op:driver_presence}": {
+      "min": 4.041858,
+      "med": 4.758178,
+      "p(95)": 6.622506,
+      "p(99)": 7.265750000000001,
+      "max": 7.426561
+    },
+    "successful_latency{op:support_history}": {
+      "min": 1.956422,
+      "med": 2.485523,
+      "p(95)": 4.722981999999999,
+      "p(99)": 4.881886,
+      "max": 4.921612
+    },
+    "successful_latency{op:catalogue}": {
+      "min": 1.223396,
+      "med": 1.7681765,
+      "p(95)": 76.97361259999998,
+      "p(99)": 87.31093288999993,
+      "max": 105.210844
+    },
+    "successful_latency{op:inbox}": {
+      "med": 6.749613,
+      "p(95)": 12.803928999999997,
+      "p(99)": 27.145210199999674,
+      "max": 43.734484,
+      "min": 4.073365
+    },
+    "successful_latency{op:admin_overview}": {
+      "min": 2.79513,
+      "med": 3.071247,
+      "p(95)": 7.146921,
+      "p(99)": 7.610965,
+      "max": 7.726976
+    },
+    "successful_latency{op:hall_send}": {
+      "max": 35.006506,
+      "min": 3.871893,
+      "med": 6.4713,
+      "p(95)": 9.86804405,
+      "p(99)": 22.52156382999991
+    },
+    "successful_latency{op:market_history}": {
+      "p(95)": 5.045952,
+      "p(99)": 6.726903400000004,
+      "max": 8.107279,
+      "min": 2.548847,
+      "med": 3.366346
+    },
+    "successful_latency{op:receipts}": {
+      "min": 2.18799,
+      "med": 2.6350315,
+      "p(95)": 4.201234299999991,
+      "p(99)": 10.83992806999987,
+      "max": 17.655821
+    },
+    "successful_latency{op:driver_state}": {
+      "p(95)": 3.780082399999999,
+      "p(99)": 3.9656220799999993,
+      "max": 4.012007,
+      "min": 2.223273,
+      "med": 2.714655
+    },
+    "successful_latency{op:session}": {
+      "max": 6.056437,
+      "min": 3.877729,
+      "med": 4.4300855,
+      "p(95)": 5.522666349999999,
+      "p(99)": 5.949682869999999
+    },
+    "successful_latency{op:hall_offer}": {
+      "min": 6.562158,
+      "med": 7.459,
+      "p(95)": 13.526456599999989,
+      "p(99)": 22.341824959999997,
+      "max": 22.622403
+    },
+    "successful_latency{op:service_detail}": {
+      "med": 3.586477,
+      "p(95)": 4.712312,
+      "p(99)": 6.7602637600000115,
+      "max": 9.063266,
+      "min": 0.532667
+    },
+    "successful_latency{op:product_detail}": {
+      "min": 0.604832,
+      "med": 4.1596,
+      "p(95)": 8.043511,
+      "p(99)": 11.089406,
+      "max": 11.288306
+    },
+    "successful_latency{op:nearby}": {
+      "p(99)": 10.376680839999974,
+      "max": 13.109796,
+      "min": 1.346114,
+      "med": 4.521002,
+      "p(95)": 8.664651399999999
+    },
+    "successful_latency{op:driver_offline}": {
+      "min": 1.764311,
+      "med": 2.577638,
+      "p(95)": 3.3096322999999996,
+      "p(99)": 3.3746984600000003,
+      "max": 3.390965
+    },
+    "successful_latency{op:login}": {
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "min": 0
+    },
+    "successful_latency{op:market_send}": {
+      "max": 70.043966,
+      "min": 5.492951,
+      "med": 6.550549,
+      "p(95)": 12.387450599999994,
+      "p(99)": 36.845499599999506
+    },
+    "successful_latency{op:hall_history}": {
+      "min": 1.608092,
+      "med": 2.838324,
+      "p(95)": 6.924064499999999,
+      "p(99)": 10.248759509999983,
+      "max": 12.61551
+    },
+    "successful_latency{op:services}": {
+      "min": 0.706807,
+      "med": 1.130926,
+      "p(95)": 45.048195649999975,
+      "p(99)": 56.76542054999997,
+      "max": 68.81169
+    }
+  },
+  "measured_requests_offered": 1912,
+  "write_inventory": {
+    "offered": 319,
+    "acknowledged": 319,
+    "stored": 319,
+    "missing": 0,
+    "duplicates": 0,
+    "unknown": 0,
+    "unconfirmed_committed": 0
+  },
+  "driver_transitions": {
+    "presence_updates": 11,
+    "offline": 2,
+    "providers": 2,
+    "last_states_reconciled": true
+  },
+  "notification_delivery_scope": "Durable notification/push rows and small queue preflight; no mixed-run worker drain or real device/email/push delivery"
+}

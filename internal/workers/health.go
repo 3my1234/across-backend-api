@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"across/backend/internal/config"
 	"context"
 	"errors"
 	"sync"
@@ -17,6 +18,8 @@ type Monitor struct {
 }
 
 var loopLimits = map[string]time.Duration{
+	"media":          5 * time.Minute,
+	"message_fanout": 30 * time.Second,
 	// A 25-message SMTP batch can take nearly five minutes at its timeout
 	// limits. Settlement batches can make up to 100 twenty-second requests.
 	"driver_expiry": 3 * time.Minute, "town_hall_expiry": 2 * time.Minute, "web_push": 2 * time.Minute, "email": 10 * time.Minute, "push": 2 * time.Minute, "push_receipts": 2 * time.Minute,
@@ -25,10 +28,7 @@ var loopLimits = map[string]time.Duration{
 }
 
 func NewMonitor() *Monitor {
-	roles := make([]string, 0, len(loopLimits))
-	for name := range loopLimits {
-		roles = append(roles, name)
-	}
+	roles, _ := (config.Config{}).WorkerRoleNames()
 	m, _ := NewMonitorForRoles(roles)
 	return m
 }

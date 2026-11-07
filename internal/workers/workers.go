@@ -24,6 +24,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 	}
 	// Existing implementations and durable claim/idempotency semantics unchanged.
 	runners := map[string]func(context.Context){
+		"media":            func(ctx context.Context) { runMediaLoop(ctx, db, cfg) },
 		"web_push":         func(ctx context.Context) { runWebPushLoop(ctx, db, cfg) },
 		"email":            func(ctx context.Context) { runEmailLoop(ctx, db, cfg) },
 		"push":             func(ctx context.Context) { runPushLoop(ctx, db) },
@@ -33,6 +34,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 		"settlements":      func(ctx context.Context) { runSettlementReconciliationLoop(ctx, db, cfg) },
 		"play_billing":     func(ctx context.Context) { runPlayBillingLoop(ctx, db) },
 		"town_hall_expiry": func(ctx context.Context) { runTownHallExpiryLoop(ctx, db) },
+		"message_fanout":   func(ctx context.Context) { runMessageFanoutLoop(ctx, db) },
 		"driver_expiry":    func(ctx context.Context) { runDriverExpiryLoop(ctx, db) },
 	}
 	if err := runSelected(ctx, roles, runners); err != nil {
@@ -131,7 +133,7 @@ func runPushReceiptLoop(ctx context.Context, db *pgxpool.Pool) {
 	for {
 		select {
 		case <-ticker.C:
-			if _, err := services.RunPushReceiptBatch(ctx, db, client); err != nil {
+			if _, err := services.RunPushReceiptDrain(ctx, db, client); err != nil {
 				log.Printf("push receipt worker error: %v", err)
 			}
 			heartbeat(ctx, "push_receipts")
@@ -205,6 +207,25 @@ func runWebPushLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 		if count > 0 {
 			log.Printf("browser push worker: submitted %d deliveries", count)
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runMediaLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := controllers.RunImageMediaJob(ctx, db, cfg, nil); err != nil {
+			log.Printf("image processing cycle failed; durable retry retained")
+		}
+		if err := controllers.RunVideoMediaJob(ctx, db, cfg, nil); err != nil {
+			log.Printf("video processing cycle failed; durable retry retained")
+		}
+		heartbeat(ctx, "media")
 		select {
 		case <-ctx.Done():
 			return

@@ -1,0 +1,30 @@
+{
+  "Rules": [
+    {
+      "ID": "atl-video-pending-only-review-before-applying",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "private/video-pending/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    },
+    {
+      "ID": "atl-image-pending-only-review-before-applying",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "private/image-pending/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

@@ -151,6 +151,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)
+	v1.Get("/public/videos/view/*", marketplaceController.PublicProviderVideo)
 	// Keep a terminating 404 rather than allowing the path to fall through to
 	// authenticated route middleware. Controller also guards direct use.
 	v1.Post("/dev/login", dev.Login)
@@ -186,6 +187,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/business-overview", catalogOnly, admin.BusinessOverview)
 	adminRoutes.Get("/subscribers", catalogOnly, admin.Subscribers)
 	adminRoutes.Get("/ops/queue-health", catalogOnly, ops.QueueHealth)
+	adminRoutes.Get("/ops/video-queue-health", catalogOnly, ops.VideoQueueHealth)
 	adminRoutes.Get("/ops/runtime", superOnly, func(c *fiber.Ctx) error {
 		c.Set("Cache-Control", "private, no-store")
 		var httpMetrics map[string]any
@@ -193,7 +195,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 			httpMetrics = runtimeSnapshots[0]()
 		}
 		pool := db.Stat()
-		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds()}})
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds(), "acquire_count": pool.AcquireCount(), "empty_acquire_wait_ms_total": pool.EmptyAcquireWaitTime().Milliseconds()}})
 	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id", superOnly, admin.UpdateAdminAccess)
@@ -363,7 +365,11 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/me/subscription-checkout", marketplaceController.SubscriptionCheckout)
 	authed.Get("/providers/me/subscription-renewal", marketplaceController.ProviderRenewalStatus)
 	authed.Get("/providers/me/post-policy", marketplaceController.ProviderPostPolicy)
+	authed.Post("/providers/me/images/complete", marketplaceController.CompleteProviderImage)
+	authed.Get("/providers/me/images/status", marketplaceController.ProviderImageStatus)
 	authed.Post("/providers/me/videos/complete", marketplaceController.CompletePostVideo)
+	authed.Get("/providers/me/videos/status", marketplaceController.ProviderVideoStatus)
+	authed.Get("/providers/me/videos", marketplaceController.ListProviderVideos)
 	authed.Post("/providers/me/subscription-renewal", marketplaceController.ProviderManageRenewal)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
 	authed.Post("/providers/me/subscription-checkout/cancel", payments.CancelUnpaidProviderCheckout)

@@ -78,6 +78,7 @@ func TestAdminPlanVerificationHandlesUnlinkedTiers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	installLaunchVideoBenefitsTest(t, db)
 	calls := 0
 	client := &http.Client{Transport: paymentRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++

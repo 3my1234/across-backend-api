@@ -8,7 +8,7 @@ import (
 // WorkerRoleNames selects existing durable consumers, not new queues or copies
 // of business logic. Blank retains the existing all-consumer deployment.
 func (c Config) WorkerRoleNames() ([]string, error) {
-	all := []string{"web_push", "email", "push", "push_receipts", "auto_confirm", "batch_closure", "settlements", "town_hall_expiry", "driver_expiry", "play_billing"}
+	all := []string{"web_push", "email", "push", "push_receipts", "auto_confirm", "batch_closure", "settlements", "town_hall_expiry", "driver_expiry", "play_billing", "message_fanout"}
 	raw := strings.ToLower(strings.TrimSpace(c.WorkerRoles))
 	if raw == "" || raw == "all" {
 		return all, nil
@@ -17,6 +17,7 @@ func (c Config) WorkerRoleNames() ([]string, error) {
 	for _, name := range all {
 		allowed[name] = true
 	}
+	allowed["media"] = true // Explicit-only: never start expensive encoding via the legacy all selection.
 	seen := make(map[string]bool)
 	roles := []string{}
 	for _, entry := range strings.Split(raw, ",") {
@@ -27,6 +28,9 @@ func (c Config) WorkerRoleNames() ([]string, error) {
 		}
 		seen[name] = true
 		roles = append(roles, name)
+	}
+	if seen["media"] && len(roles) != 1 {
+		return nil, errors.New("media requires a dedicated worker process")
 	}
 	return roles, nil
 }

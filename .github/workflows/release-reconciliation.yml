@@ -1,0 +1,72 @@
+name: Isolated release reconciliation
+on:
+  push:
+    branches: [experiment/release-reconciliation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regressions-and-poll-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_USER: lab, POSTGRES_PASSWORD: lab-disposable-only, POSTGRES_DB: capacity_lab}
+        ports: ['5432:5432']
+        options: >-
+          --cpus 2 --memory 1g --memory-swap 1g
+          --health-cmd "pg_isready -U lab -d capacity_lab"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      DATABASE_URL: postgres://lab:lab-disposable-only@127.0.0.1:5432/capacity_lab?sslmode=disable
+      SETTLEMENT_TEST_LOCAL: 'true'
+      RECEIPT_TEST_LOCAL: 'true'
+      MIGRATION_REVIEW_LOCAL: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.27.3'}
+      - name: Install real video verification tools for bounded correctness tests
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - name: Check offline budgets
+        run: python3 scripts/test_launch_budget.py
+      - name: Verify release regressions against real disposable PostgreSQL
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers ./internal/services ./internal/middleware ./internal/workers ./internal/routes ./internal/db ./internal/migrations ./internal/config ./internal/storage | tee reconciliation-tests.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('reconciliation-tests.log').read_text()
+          for name in ('TestProviderImageSignaturePixelBoundsAndExif','TestProviderImageQuotaPreservationAndOwnership','TestProviderImageActualOrientationAlphaAndNoUpscale','TestProviderImageActualDurableWorkerAndVariants','TestDurableVideoFailureRetriesAreBounded','TestDurableVideoClaimsGlobalBoundRecoveryAndExhaustion','TestDurableVideoEnqueueBoundAndOwnerStatus','TestDurableVideoActualWorkerTranscodesAndPublishesOnce','TestMediaWorkerMustBeExplicitAndDedicated','TestLaunchVideoPolicyPreservesPublishedAndRejectsNewDiamond','TestLaunchVideoPolicyAtomicMixedProviderQuota','TestLaunchVideoPolicyMatrixAndConfigurableDiamond','TestLaunchVideoReservationLimitsRecoveryAndIdempotentCompletion','TestLaunchVideoDeliveryRedirectNeverProxiesBytes','TestLaunchVideoActualVerificationAndCompletionRetry','TestSizedVideoUploadSignatureBindsExactLength','TestAsyncMessageFanoutBackpressureRollsBackMessage','TestAsyncMessageFanoutFailedJobIsolationAndRecovery','TestAsyncMessageFanoutSnapshotRollbackAndRetries','TestAsyncMessageFanoutAtomicPageFailureAndRecovery','TestAsyncMessageFanoutRecipientSizesAndConcurrentWorkers','TestAsyncProviderFanoutTransactionScopeAndMemberSnapshot','TestAsyncMessageFanoutFairPagesAndCompletedRetention','TestAsyncMessageFanoutHTTPMessageAndRetryCommitTogether','TestCatalogueDestinationOffersMatchLegacy','TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestSharedMessageMetadataRollbackAndRetry','TestNotificationSenderFastPathMatchesLegacy','TestNotificationSenderFastPathKeepsDurableDeliveryAtomic','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
+              assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
+          for name in ('TestRoomWriteQueueCancellationAndIndependentRooms','TestRoomWriteQueueBacklogBound','TestRoomWriteQueueDeadlineReturnsRetryBeforeDatabase','TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity'):
+              assert '--- PASS: '+name+' ' in s, 'Room scheduling regression did not execute: '+name
+          PY
+      - name: Race-check room scheduling and real database retry isolation
+        run: |
+          go test -race -count=1 ./internal/workers ./internal/config
+          go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*|TestLaunchVideoPolicyAtomicMixedProviderQuota|TestLaunchVideoReservationLimitsRecoveryAndIdempotentCompletion|TestDurableVideoClaimsGlobalBoundRecoveryAndExhaustion|TestDurableVideoEnqueueBoundAndOwnerStatus)$'
+      - name: Measure actual conditional polling handler and SQL cost
+        env: {POLL_COST_LOCAL: 'true'}
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers -run '^TestPollingCostActualHandlers$' | tee polling-cost.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('polling-cost.log').read_text()
+          assert s.count('POLL_COST_RESULT ')==16, 'Incomplete polling measurement'
+          assert '--- PASS: TestPollingCostActualHandlers ' in s
+          PY
+
+      - name: Measure matched notification critical section without claiming HTTP capacity
+        env: {FANOUT_PROFILE_LOCAL: 'true'}
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers -run '^TestAsyncMessageFanoutMatchedCriticalSection$' | tee message-fanout-profile.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('message-fanout-profile.log').read_text()
+          assert s.count('MESSAGE_FANOUT_PROFILE ')==1
+          assert '--- PASS: TestAsyncMessageFanoutMatchedCriticalSection ' in s
+          PY
