@@ -1,8 +1,8 @@
 """Pinned optimized API overlay and running-executable identity; no deployments."""
 import hashlib,json
 
-SOURCE='8b7ebe7d0efe80e045ed1bfd886f742a0f12220a'
-REGRESSION_RUN=42343898317
+SOURCE='d26d3450b8d18352fb1f62bb5d288251e2d63423'
+REGRESSION_RUN=42358436357
 
 def build_args(destination):
     return ['go','build','-buildvcs=false','-trimpath','-ldflags=-s -w -I /lib/ld-musl-x86_64.so.1','-o',str(destination),'./cmd/api']

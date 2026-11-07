@@ -81,6 +81,9 @@ def main():
         try:
             call(['docker','run','--rm','--network','none','-e','CGO_ENABLED=0','-e','GOOS=linux','-e','GOARCH=amd64',
                 '-v',str(release)+':/release:ro','-v',str(base)+':/out','-w','/release','singlehost-verifier-builder:local',*api_build_args('/out/api.bin')],timeout=180)
+            if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+                from message_fanout_replay import build_worker
+                build_worker(release,base)
         finally:call(['git','-c','safe.directory='+str(root),'worktree','remove','--force',str(release)])
         (base/'api.bin').chmod(0o555)
         artifact=api_manifest(base/'api.bin');(base/'api-artifact.json').write_text(json.dumps(artifact,indent=2))
@@ -93,6 +96,9 @@ def main():
         if args.foundation and pairs==10:
             for service in doc['services'].values():
                 if 'LAB_ACTOR_PAIRS' in service.get('environment',{}):service['environment']['LAB_ACTOR_PAIRS']='10'
+        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            from message_fanout_replay import configure
+            configure(doc,base)
         (base/'compose.runtime.json').write_text(json.dumps(doc,indent=2))
         (base/'compose.json').write_text(json.dumps(doc,indent=2))
         (output/'compose.json').write_text(json.dumps(doc,indent=2))
@@ -150,6 +156,9 @@ def main():
             from rehearse_snapshot import exercise as snapshot_replay
             result['snapshot']=snapshot_replay(root,base,output,sentinel)
             result['reviewed_database_patch']=apply_database_patch(base)
+        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            from message_fanout_replay import apply_patch
+            result['message_fanout_patch']=apply_patch(base)
         print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
         # This command emits bearer fixtures. Capture privately, never in public evidence.
         exec_lab(base,'exporter','prepare-sessions')
@@ -173,6 +182,9 @@ def main():
         (output/'api-running.json').write_text(json.dumps(running,indent=2))
         from queue_probe import exercise as queue_probe
         queue_probe(lambda text:sql(base,text),lambda:exec_lab(base,'queue-check','queue-check',output/'queue-check.jsonl'))
+        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            from message_fanout_replay import start_worker
+            result['message_fanout_worker']=start_worker(base)
         raw=exec_lab(base,'exporter','export');fixtures=json.loads(raw)
         if fixtures.get('origin')!='http://gateway:8080' or fixtures.get('marker')!='disposable-compose-only':raise ValueError('fixture origin/identity mismatch')
         exchange=base/'exchange';(exchange/'fixtures.json').write_bytes(raw)
@@ -201,6 +213,9 @@ def main():
                 while not stopped.is_set():
                     try:
                         record=dict(utc=time.time(),resources=observations(base),database=sql(base,"SELECT json_build_object('clients',count(*),'active',count(*) FILTER(WHERE state='active'),'lock_waiters',count(*) FILTER(WHERE wait_event_type='Lock')) FROM pg_stat_activity WHERE backend_type='client backend'"))
+                        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+                            from message_fanout_replay import observe
+                            record['message_fanout']=observe(base)
                         stream.write(json.dumps(record)+'\n');stream.flush()
                     except Exception as error:
                         stream.write(json.dumps(dict(observation_error=type(error).__name__))+'\n');stream.flush()
@@ -223,6 +238,12 @@ def main():
         if not application_failures:
             gate=subprocess.run(['node',str(root/'deploy/cohost-lab/stage_gate.mjs'),str(output/'summary.json'),str(output/'reconciliation.jsonl'),profile,str(target)])
             if gate.returncode:application_failures.append('original stage gate failed')
+        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            from message_fanout_replay import finish
+            try:
+                result['message_fanout_ledger']=finish(base,output)
+            except Exception as error:
+                application_failures.append('message fanout ledger: '+str(error))
         result['planned_smoke_sessions']=target;result['planned_smoke_seconds']=180 if args.launch_checkpoint else 45;result['application_failures']=application_failures
         result['write_reconciliation_passed']=reconciliation_passed
         result['effective_cgroups_after_seed']=verify_limits(base)
