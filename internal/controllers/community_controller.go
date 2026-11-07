@@ -76,11 +76,23 @@ func communityID(c *fiber.Ctx, key string) (string, error) {
 	}
 	return id, nil
 }
+func messageNotificationError(c *fiber.Ctx, err error) error {
+	var p *pgconn.PgError
+	if asPG(err, &p) && p.Code == "P0503" {
+		c.Set("Retry-After", "2")
+		c.Set("Cache-Control", "no-store")
+	}
+	return communityError(err)
+}
+
 func communityError(err error) error {
 	if quota := providerCapacityError(err); quota != nil {
 		return quota
 	}
 	var p *pgconn.PgError
+	if asPG(err, &p) && p.Code == "P0503" {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Messages are busy. Retry shortly with the same message reference.")
+	}
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
 	}
@@ -689,7 +701,7 @@ func (s *CommunityController) Send(c *fiber.Ctx) error {
 	}
 	if fresh {
 		if err = s.notifyRoom(c.Context(), tx, room, actor, mid, "New chat message", input.Body); err != nil {
-			return communityError(err)
+			return messageNotificationError(c, err)
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
@@ -742,6 +754,15 @@ func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, a
 	// triggers still create each recipient's durable delivery records.
 	data, err := marshalNotificationData(map[string]any{"view": "messages", "chat_room_id": room, "sender_user_id": actor})
 	if err != nil {
+		return err
+	}
+	if s.market != nil && s.market.cfg.AsyncMessageNotifications {
+		_, err = tx.Exec(ctx, `INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data)
+SELECT 'shared-chat:'||$3::text,coalesce(array_agg(p.user_id ORDER BY p.user_id),'{}'::uuid[]),
+'social_message',$4::text,'Open your chat to read the message.',$5::jsonb
+FROM chat_participants p WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid
+AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))
+ON CONFLICT(event_key) DO NOTHING`, room, actor, message, title, data)
 		return err
 	}
 	var cursor *string

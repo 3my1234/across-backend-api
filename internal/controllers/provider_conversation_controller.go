@@ -413,6 +413,12 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 		return fiber.ErrInternalServerError
 	}
 	defer tx.Rollback(c.Context())
+	if m.cfg.AsyncMessageNotifications {
+		if _, err = tx.Exec(c.Context(), `SELECT set_config('app.async_message_fanout','on',true)`); err != nil {
+			return fiber.ErrInternalServerError
+		}
+	}
+
 	messageID, savedAt, fresh, err := insertConversationMessage(c.Context(), tx, writeID, senderType, userID, message)
 	if err != nil {
 		return err
@@ -422,7 +428,22 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	}
 	if fresh && !provider {
 		if err = queueProviderActivityTx(c.Context(), tx, providerID, listingID, "conversation_message", map[string]any{"conversation_id": threadID, "listing_title": listingTitle, "product_id": productID, "message": body, "sender_user_id": userID}); err != nil {
+			if m.cfg.AsyncMessageNotifications {
+				return messageNotificationError(c, err)
+			}
 			return fiber.ErrInternalServerError
+		}
+	}
+
+	if fresh && provider && m.cfg.AsyncMessageNotifications {
+		payload, err := marshalNotificationData(map[string]any{"conversation_id": threadID, "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": listingTitle, "sender_user_id": userID, "sender_is_provider": true})
+		if err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if _, err = tx.Exec(c.Context(), `INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data)
+VALUES('buyer-provider-message:'||$1::text,ARRAY[$2::uuid],'marketplace_message','New provider message',$3,$4::jsonb)
+ON CONFLICT(event_key) DO NOTHING`, messageID.String(), buyerID, body, payload); err != nil {
+			return messageNotificationError(c, err)
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
@@ -430,9 +451,9 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	}
 	notifyCtx, cancelNotify := context.WithTimeout(c.Context(), 2*time.Second)
 	defer cancelNotify()
-	if fresh && provider {
+	if fresh && provider && !m.cfg.AsyncMessageNotifications {
 		_ = CreateNotificationOnce(notifyCtx, m.db, buyerID, "", nil, "marketplace_message", "New provider message", body, map[string]any{"conversation_id": threadID, "listing_id": listingID, "product_id": productID, "provider_id": providerID, "listing_title": listingTitle, "sender_user_id": userID, "sender_is_provider": true}, "buyer-provider-message:"+messageID.String())
-	} else if fresh {
+	} else if fresh && !provider {
 		m.queueProviderActivityEmail(notifyCtx, providerID, "New buyer message", body, "provider-message:"+messageID.String())
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": messageID, "sender_type": senderType, "body": body, "created_at": savedAt, "media_urls": m.chatMediaURLs(message.MediaKeys), "location": message.Location})
