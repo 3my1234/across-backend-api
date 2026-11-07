@@ -20,6 +20,9 @@ class SingleHostRunner(Runner):
             if stage!=STAGES[0]:raise ValueError('diagnostic cannot advance beyond20 sessions')
             self.ssh('main','diagnostic-start',timeout=25)
         self.progress('stage '+stage[0]+' (planned '+str(stage[2])+' sessions)',lambda:super(SingleHostRunner,self).measure(stage))
+        if 'message_fanout' in self.approval:
+            ledger=json.loads(self.ssh('main','message-fanout-finish',timeout=40))
+            (self.output/stage[0]/'message-fanout-ledger.json').write_text(json.dumps(ledger,indent=2))
         summary=json.loads((self.output/stage[0]/'summary.json').read_text());metrics=summary['metrics']
         values=lambda name:metrics.get(name,{}).get('values',{})
         print(json.dumps(dict(stage=stage[0],all_original_stage_gates_passed=True,planned_sessions=stage[2],
@@ -28,6 +31,9 @@ class SingleHostRunner(Runner):
             successful_latency_ms=values('successful_latency'))),flush=True)
 
     def notifications(self):
+        if 'message_fanout' in self.approval:
+            ledger=json.loads(self.ssh('main','message-fanout-finish',timeout=40))
+            (self.output/'message-fanout-ledger.json').write_text(json.dumps(ledger,indent=2))
         self.progress('durable notification drain and delayed receipt verification',lambda:super(SingleHostRunner,self).notifications())
 
     def prepare(self):
@@ -72,6 +78,10 @@ class SingleHostRunner(Runner):
         self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
         from queue_probe import exercise as queue_probe
         queue_probe(self.sql,lambda:self.lab('queue-check','queue-check',self.output/'queue-check.jsonl'))
+        if 'message_fanout' in self.approval:
+            running=json.loads(self.ssh('main','message-fanout-start',timeout=40))
+            if running.get('running_worker_verified') is not True or any(running.get(k)!=v for k,v in self.approval['message_fanout'].items()):raise ValueError('running durable worker unverified')
+            (self.output/'message-fanout-running.json').write_text(json.dumps(running,indent=2))
         print('API readiness, lifecycle and isolated queue-recovery preflight passed. Starting staged application traffic.',flush=True)
 
     def start(self):
@@ -104,6 +114,11 @@ class SingleHostRunner(Runner):
         except BaseException as error:self.error=RuntimeError('single-host telemetry: '+str(error))
 
     def cleanup(self):
+        if 'message_fanout' in self.approval:
+            try:
+                ledger=self.ssh('main','message-fanout-finish',timeout=40)
+                (self.output/'final-message-fanout-ledger.json').write_bytes(ledger)
+            except Exception as error:(self.output/'message-fanout-final-error.txt').write_text(str(error))
         try:self.ssh('main','observations-full',destination=self.output/'final-observations.json')
         except Exception as error:(self.output/'observation-error.txt').write_text(str(error))
         self.stop.set()

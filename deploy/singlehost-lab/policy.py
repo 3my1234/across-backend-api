@@ -16,6 +16,9 @@ def validate(approval,now=None):
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current approval required')
     if approval.get('execution_mode','staged500') not in ('staged500','diagnostic20'):raise ValueError('unknown execution mode')
     if approval.get('stages')!=[list(stage) for stage in STAGES]:raise ValueError('original stage sequence required')
+    if 'message_fanout' in approval:
+        from message_fanout_live import validate as validate_fanout
+        validate_fanout(approval)
     if 'database_patch' in approval:
         from database_patch import metadata
         expected_patch=metadata();actual_patch=approval['database_patch']

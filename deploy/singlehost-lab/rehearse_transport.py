@@ -15,6 +15,9 @@ def exercise(root,base,output,sentinel):
         compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),image_archive_sha256='a'*64,verifier_sha256=hashlib.sha256((base/'verifier.bin').read_bytes()).hexdigest(),snapshot_sha256=json.loads((output/'fixture.json').read_text())['sha256'] if (output/'fixture.json').exists() else 'f'*64)
     from database_patch import metadata
     approval['database_patch']=metadata()
+    if os.environ.get('LIVE_FANOUT_PACKAGE')=='true':
+        from message_fanout_live import metadata as fanout_metadata
+        approval['message_fanout']=fanout_metadata()
     approval['execution_mode']='diagnostic20'
     approval.update(json.loads((base/'api-artifact.json').read_text()))
     (base/'approval.json').write_text(json.dumps(approval));(base/'approval.json').chmod(0o600)
@@ -117,6 +120,8 @@ def exercise(root,base,output,sentinel):
         # and journal inventory must not be attributed to this staged replay.
         runner.sql('UPDATE capacity_lab_session_run SET run_id=gen_random_uuid();')
         runner.service('notification-provider')
+        if 'message_fanout' in approval:
+            report=json.loads(ssh('message-fanout-start'));result['durable_worker_identity_over_restricted_ssh_passed']=report.get('running_worker_verified') is True
         runner.measure(STAGES[0])
         report=json.loads(ssh('observations-full'))
         diagnostic=report.get('bounded_transaction_diagnostic',{})

@@ -89,6 +89,8 @@ def main():
         artifact=api_manifest(base/'api.bin');(base/'api-artifact.json').write_text(json.dumps(artifact,indent=2))
         result.update(artifact)
         shutil.copyfile(base/'api.bin',output/'api.bin');shutil.copyfile(base/'api-artifact.json',output/'api-artifact.json')
+        if os.environ.get('MESSAGE_FANOUT_REPLAY'):
+            shutil.copyfile(base/'worker.bin',output/'worker.bin')
         doc=json.loads(call(['node',str(root/'deploy/singlehost-lab/render.cjs'),str(base/'render.json')]))
         if os.environ.get('BROWSING_PROFILE')=='true':
             for service in doc['services'].values():
@@ -158,7 +160,10 @@ def main():
             result['reviewed_database_patch']=apply_database_patch(base)
         if os.environ.get('MESSAGE_FANOUT_REPLAY'):
             from message_fanout_replay import apply_patch
-            result['message_fanout_patch']=apply_patch(base)
+            if os.environ.get('LIVE_FANOUT_PACKAGE')=='true':
+                from message_fanout_live import apply,metadata
+                apply(base,{'message_fanout':metadata()});result['message_fanout_patch']=metadata()
+            else:result['message_fanout_patch']=apply_patch(base)
         print('Seed counts/schema verified; preparing private synthetic sessions',flush=True)
         # This command emits bearer fixtures. Capture privately, never in public evidence.
         exec_lab(base,'exporter','prepare-sessions')
@@ -184,7 +189,10 @@ def main():
         queue_probe(lambda text:sql(base,text),lambda:exec_lab(base,'queue-check','queue-check',output/'queue-check.jsonl'))
         if os.environ.get('MESSAGE_FANOUT_REPLAY'):
             from message_fanout_replay import start_worker
-            result['message_fanout_worker']=start_worker(base)
+            if os.environ.get('LIVE_FANOUT_PACKAGE')=='true':
+                from message_fanout_live import start,metadata
+                result['message_fanout_worker']=start(base,{'message_fanout':metadata()})
+            else:result['message_fanout_worker']=start_worker(base)
         raw=exec_lab(base,'exporter','export');fixtures=json.loads(raw)
         if fixtures.get('origin')!='http://gateway:8080' or fixtures.get('marker')!='disposable-compose-only':raise ValueError('fixture origin/identity mismatch')
         exchange=base/'exchange';(exchange/'fixtures.json').write_bytes(raw)

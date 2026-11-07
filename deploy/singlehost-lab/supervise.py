@@ -58,6 +58,9 @@ def job(base):
     if 'api_sha256' in approval:
         from api_artifact import validate_files
         validate_files(base,approval)
+    if 'message_fanout' in approval:
+        from message_fanout_live import validate_files as validate_worker
+        validate_worker(base)
     require_live_fixture(json.loads((base/'compose.json').read_text()))
     if (base/'supervisor.json').exists() or (base/'cleanup.complete').exists():raise ValueError('refuse duplicate/closed execution')
     from stage_host import validate_networks
@@ -115,6 +118,9 @@ def job(base):
         if 'database_patch' in approval:
             from database_patch import apply as apply_database_patch
             guard_ready(base);apply_database_patch(base);guard_ready(base)
+        if 'message_fanout' in approval:
+            from message_fanout_live import apply as apply_fanout
+            guard_ready(base);apply_fanout(base,approval);guard_ready(base)
         metadata=json.loads((base/'supervisor.json').read_text());metadata['phase']='waiting-for-generator';write_json(base/'supervisor.json',metadata)
         (base/'setup.ready').write_text(str(time.time()))
         print(json.dumps(dict(singlehost_setup='ready',run=base.name,load_started=False)),flush=True)
@@ -172,6 +178,9 @@ def access(base,command):
         if 'database_patch' not in approval:raise ValueError('Database patch was not approved')
         from database_patch import verify as verify_database_patch
         print(json.dumps(verify_database_patch(base)));return
+    if command in ('message-fanout-start','message-fanout-finish'):
+        from message_fanout_live import start,finish
+        print(json.dumps((start if command.endswith('start') else finish)(base,approval)));return
     if command=='api-identity':
         from api_artifact import verify_running
         print(json.dumps(verify_running(base,approval)));return

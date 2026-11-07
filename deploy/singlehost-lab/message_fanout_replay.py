@@ -20,8 +20,9 @@ def build_worker(release,base):
     from verifier_build import validate_binary
     validate_binary(base/'worker.bin');(base/'worker.bin').chmod(0o555)
 
-def configure(doc,base):
-    arm=mode()
+def configure(doc,base,arm=None):
+    arm=mode() if arm is None else arm
+    if arm not in ('inline','async'):raise ValueError('explicit inline/async configuration required')
     for name in ('api1','api2'):
         doc['services'][name]['environment']['ASYNC_MESSAGE_NOTIFICATIONS']='true' if arm=='async' else 'false'
     worker=copy.deepcopy(doc['services']['api1'])
