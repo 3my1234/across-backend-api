@@ -73,7 +73,7 @@ at that observation time; this is not an ongoing health guarantee.
 | Pool budget | internal/db/db.go; deploy/launch/connection-budget.example.json | Actual deployed processes/read pools/max_connections/admin reserve; example is not installed config | Calculator yes; inventory read-only |
 | Polling/realtime | Conditional history, foreground/no-overlap polling, durable DB messages | Keep polling. No measured case for a launch WebSocket/Redis-GEO rewrite.100screens at5sec offer20reads/sec; actual mixed replay used15sec, not5sec | Client/regression checks yes |
 | Media allowances/costs | migration111, provider_video_reservation.go, launch_budget.py | Owner selected stricter NEW uploads with old media retained. Actual bucket region/rates/FX/Cloudflare contract and S3 exact-length PUT/device playback acceptance remain | Policy/model tests yes |
-| Full image pipeline | Existing portable image MIME/size/avatar limits; upload_controller.go | Complete signature/dimension/orientation/resize/thumbnail/EXIF and async publish validation are NOT established; do not claim WebP/thumbnail pipeline exists | Implementation/tests yes |
+| Provider image pipeline | Migration113, provider_image_processing.go; Linux validation42399983916 PASS | Opt-in new-upload pipeline verified for signature/pixel bounds, EXIF orientation, no upscaling, transparency, three variants, ownership and durable publication. Keep flags off until client rollout, lifecycle and worker resource review. Recent-image recovery UI and thumbnail adoption across feed surfaces remain outstanding | Yes |
 | Video pipeline | Opt-in durable720p/30FPS H264/AAC processing, thumbnail, fenced claims, bounded dedicated worker and recent-job recovery implemented | Exact-source Linux FFmpeg/race validation and real S3/device/resource acceptance remain distinct; feature stays OFF until owner-approved rollout | Nonproduction tests yes |
 | Media cleanup | Only new pending lifecycle proposal prepared | Reference-aware orphan/superseded-object/version-retention review; no broad deletion or lifecycle replacement | Dry-run code/tests yes; actual rules approval |
 | Payments/subscriptions | Existing gateway authenticity, checkout expected amount, receipt/idempotency tests | Exact candidate regressions plus real payment-provider catalog/webhook/reconciliation acceptance; no payment succeeded merely because UI said so | Mock/local tests yes; real provider signoff separate |
@@ -115,3 +115,27 @@ thumbnail and once-only publication test in42397214229, but the whole run failed
 worker monitor inventory assertion. The monitor has been corrected to distinguish
 explicit-only media from the11default consumers; a fresh exact-source check is required.
 No failed run is relabelled as a successful release or capacity qualification.
+
+
+## Consolidated review checkpoint
+
+Backend application source4dde05a passed complete Linux/PostgreSQL16/FFmpeg,
+correctness and race validation in run42399983916. Mobile c11f1ed passed both
+PR checks (42400105824,42400105885), including TypeScript and50 provider suites.
+Portal17bd9b8 passed all three checks (42400125307,42400125344,42400125384).
+Draft PRs: backend87, mobile62, portal57. None is merged or deployed.
+
+Linux amd64 API, worker and migrator review binaries were built from4dde05a with
+CGO disabled, trimmed paths and embedded source revision. Files and SHA256 manifest
+are retained outside Git at qualification/launch-release/. No VPS package was
+uploaded or live operator started. Subsequent documentation/budget-only changes
+are separately verified with the five budget tests; they do not change those binaries.
+The media budget now counts three stored image variants/PUTs and uses16MiB as a
+conservative combined-image bound. This is illustrative, not a measured bill.
+
+Decision: reviewable release candidate; production launch approval remains blocked
+on actual release inventory and backup/rollback verification, payment-provider and
+subscription acceptance, real SES/push delivery, signed store binaries and device
+acceptance. Image processing stays disabled until its rollout prerequisites above
+are satisfied. No supported concurrent-user number is asserted. Do not resume the
+closed load-test campaign or silently enable processing to bypass these gates.

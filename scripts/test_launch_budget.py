@@ -23,6 +23,15 @@ class BudgetTests(unittest.TestCase):
   self.assertEqual(after['video_cache_hit_rate'],0)
   self.assertEqual(before['components_usd']['cdn_egress'],after['components_usd']['cdn_egress'])
   self.assertLess(after['monthly_media_usd'],before['monthly_media_usd'])
+ def test_all_variants_count_in_storage_and_puts_not_every_view(self):
+  cfg=json.loads((ROOT/'deploy/launch/media-cost.example.json').read_text())
+  before=media_budget(cfg)['scenarios'][0]
+  cfg['usage']['image_variants']=1
+  cfg['usage']['image_stored_bytes']=cfg['usage']['image_bytes']
+  after=media_budget(cfg)['scenarios'][0]
+  self.assertGreater(before['stored_gb'],after['stored_gb'])
+  self.assertGreater(before['components_usd']['puts'],after['components_usd']['puts'])
+  self.assertEqual(before['delivered_gb'],after['delivered_gb'])
  def test_bad_inputs_rejected_instead_of_silent_underestimate(self):
   cfg=json.loads((ROOT/'deploy/launch/media-cost.example.json').read_text())
   for key,value in [('gold',-.1),('free',.4)]:

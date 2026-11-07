@@ -62,16 +62,18 @@ def media_budget(config):
         number(use[key], key)
     if use["videos_per_gold_provider"] > 5 or use["video_view_fraction"] > 1:
         raise ValueError("video usage exceeds the proposed launch policy")
+    image_variants = integer(use.get("image_variants",1), "image variants", 1)
+    image_stored_bytes = number(use.get("image_stored_bytes",use["image_bytes"]), "stored image variant bytes")
     prices = {"free": 0, "bronze": 500, "silver": 1000, "diamond": 2000, "gold": 5000}
     rows = []
     for count in config["provider_counts"]:
         integer(count, "providers", 1)
         images = count * use["images_per_provider"]
         videos = count * shares["gold"] * use["videos_per_gold_provider"]
-        stored_gb = (images*use["image_bytes"] + videos*use["video_bytes"]) / 1e9
+        stored_gb = (images*image_stored_bytes + videos*use["video_bytes"]) / 1e9
         stored_gb *= 1 + use["temporary_storage_fraction"]
         replacements = use["monthly_replacements_per_asset"]
-        puts = (images + videos) * replacements
+        puts = (images*image_variants + videos) * replacements
         encode_hours = videos * replacements * use["encoding_seconds_per_video"] / 3600
         for workload in config["viewing_scenarios"]:
             views = count * number(workload["asset_views_per_provider_month"], "views")
