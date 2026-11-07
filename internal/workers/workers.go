@@ -219,6 +219,9 @@ func runMediaLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
+		if err := controllers.RunImageMediaJob(ctx, db, cfg, nil); err != nil {
+			log.Printf("image processing cycle failed; durable retry retained")
+		}
 		if err := controllers.RunVideoMediaJob(ctx, db, cfg, nil); err != nil {
 			log.Printf("video processing cycle failed; durable retry retained")
 		}

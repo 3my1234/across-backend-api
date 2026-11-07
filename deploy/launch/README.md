@@ -124,3 +124,21 @@ Sources checked7Nov2026: https://aws.amazon.com/s3/pricing/ ;
 https://www.cloudflare.com/service-specific-terms-application-services/ ;
 https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/ .
 Cloudflare Free/Pro/Business CDN terms do not grant unrestricted external video delivery.
+
+
+Provider images (review candidate, not deployed)
+
+Migration113 and ASYNC_IMAGE_PROCESSING add owner-scoped durable processing of new
+listing, logo and banner uploads. Existing published images remain unchanged.
+The dedicated media worker validates signatures and decoded dimensions, corrects
+EXIF orientation, strips metadata, preserves aspect ratio without upscaling and
+produces a WebP display image,400px WebP thumbnail and JPEG/PNG fallback. All
+three outputs are verified before atomic registration. Display images are bounded
+to1600px (logos512px); inputs10MiB and40million pixels, outputs16MiB total.
+The same global encoder lease keeps video and image conversion sequential.
+The database image_processing_required flag must stay false until all upload
+clients are released and worker/storage/lifecycle settings have been reviewed.
+Private image-pending lifecycle rules are a proposal, not an applied bucket rule.
+Actual storage estimates must count all three variants; processing does not prove
+an AWS bill or a production storage ceiling. Image recovery after a polling timeout
+and thumbnail selection across all browsing surfaces remain release-review items.

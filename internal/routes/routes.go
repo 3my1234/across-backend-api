@@ -365,6 +365,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/providers/me/subscription-checkout", marketplaceController.SubscriptionCheckout)
 	authed.Get("/providers/me/subscription-renewal", marketplaceController.ProviderRenewalStatus)
 	authed.Get("/providers/me/post-policy", marketplaceController.ProviderPostPolicy)
+	authed.Post("/providers/me/images/complete", marketplaceController.CompleteProviderImage)
+	authed.Get("/providers/me/images/status", marketplaceController.ProviderImageStatus)
 	authed.Post("/providers/me/videos/complete", marketplaceController.CompletePostVideo)
 	authed.Get("/providers/me/videos/status", marketplaceController.ProviderVideoStatus)
 	authed.Get("/providers/me/videos", marketplaceController.ListProviderVideos)

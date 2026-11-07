@@ -317,8 +317,20 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 	if purpose == "post_video" {
 		key = storage.SafeKey("private/video-pending/"+providerID, req.Filename)
 	}
+	imageProcessing := m.cfg.AsyncImageProcessing && (purpose == "listing" || purpose == "logo" || purpose == "banner")
+	if imageProcessing {
+		key = storage.SafeKey("private/image-pending/"+providerID, req.Filename)
+	}
 	var uploadURL string
-	if purpose == "post_video" {
+	if imageProcessing {
+		uploadURL, err = m.s3.PresignPutSized(key, mime, 15*time.Minute, req.FileSize)
+		if err != nil {
+			return fiber.NewError(422, "Supply the image file_size before uploading.")
+		}
+		if err = m.reserveProviderImage(c.Context(), providerID, key, purpose, mime, req.FileSize); err != nil {
+			return err
+		}
+	} else if purpose == "post_video" {
 		uploadURL, err = m.s3.PresignPutSized(key, mime, 15*time.Minute, req.FileSize)
 		if err != nil {
 			return fiber.NewError(422, "Supply the video file_size before uploading.")
@@ -331,6 +343,9 @@ func (m *ProviderMarketplaceController) PresignProviderUpload(c *fiber.Ctx) erro
 	}
 	if err != nil {
 		return fiber.ErrInternalServerError
+	}
+	if imageProcessing {
+		return c.JSON(fiber.Map{"upload_url": uploadURL, "key": key, "expires_in": 900, "processing_required": true})
 	}
 	return c.JSON(fiber.Map{"upload_url": uploadURL, "view_url": m.s3.ObjectURL(key), "key": key, "expires_in": 900})
 }

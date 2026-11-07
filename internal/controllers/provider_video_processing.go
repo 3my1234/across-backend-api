@@ -120,6 +120,12 @@ type videoMediaJob struct {
 }
 
 func claimVideoMediaJob(ctx context.Context, db *pgxpool.Pool) (videoMediaJob, bool, error) {
+	return claimMediaJob(ctx, db, "provider_video_uploads")
+}
+func claimMediaJob(ctx context.Context, db *pgxpool.Pool, table string) (videoMediaJob, bool, error) {
+	if table != "provider_video_uploads" && table != "provider_image_uploads" {
+		return videoMediaJob{}, false, errors.New("unsupported media queue")
+	}
 	var job videoMediaJob
 	job.token = uuid.NewString()
 	tx, err := db.Begin(ctx)
@@ -137,10 +143,10 @@ func claimVideoMediaJob(ctx context.Context, db *pgxpool.Pool) (videoMediaJob, b
 	if err != nil {
 		return job, false, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE provider_video_uploads SET state='failed',error_code='retry_exhausted',lease_until=NULL WHERE processing_mode='background' AND state='processing' AND lease_until<=clock_timestamp() AND attempts>=3`); err != nil {
+	if _, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET state='failed',error_code='retry_exhausted',lease_until=NULL WHERE processing_mode='background' AND state='processing' AND lease_until<=clock_timestamp() AND attempts>=3`, pgx.Identifier{table}.Sanitize())); err != nil {
 		return job, false, err
 	}
-	err = tx.QueryRow(ctx, `WITH next AS(SELECT key FROM provider_video_uploads WHERE processing_mode='background' AND attempts<3 AND ((state='queued' AND available_at<=clock_timestamp()) OR (state='processing' AND lease_until<=clock_timestamp())) ORDER BY created_at,key FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE provider_video_uploads u SET state='processing',claim_token=$1::uuid,lease_until=clock_timestamp()+interval '4 minutes',attempts=attempts+1 FROM next WHERE u.key=next.key RETURNING u.key,u.provider_id::text,u.size_bytes,u.attempts`, job.token).Scan(&job.key, &job.provider, &job.size, &job.attempts)
+	err = tx.QueryRow(ctx, fmt.Sprintf(`WITH next AS(SELECT key FROM %s WHERE processing_mode='background' AND attempts<3 AND ((state='queued' AND available_at<=clock_timestamp()) OR (state='processing' AND lease_until<=clock_timestamp())) ORDER BY created_at,key FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE %s u SET state='processing',claim_token=$1::uuid,lease_until=clock_timestamp()+interval '4 minutes',attempts=attempts+1 FROM next WHERE u.key=next.key RETURNING u.key,u.provider_id::text,u.size_bytes,u.attempts`, pgx.Identifier{table}.Sanitize(), pgx.Identifier{table}.Sanitize()), job.token).Scan(&job.key, &job.provider, &job.size, &job.attempts)
 	if err == pgx.ErrNoRows {
 		if _, e := tx.Exec(ctx, `UPDATE provider_video_launch_policy SET worker_token=NULL,worker_lease_until=NULL WHERE singleton AND worker_token=$1::uuid`, job.token); e != nil {
 			return job, false, e

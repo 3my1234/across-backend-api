@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 )
 
 const maxImageProxyBytes = 20 << 20
+
+var processedProviderImageKey = regexp.MustCompile(`^user-uploads/providers/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(listing|logo|banner)/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(display\.(jpg|png)\.webp|thumbnail\.webp|fallback\.(jpg|png))$`)
 
 var publicMediaClient = func() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -220,6 +223,9 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 			}
 		}
 		c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
+		if processedProviderImageKey.MatchString(key) {
+			c.Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		c.Status(resp.StatusCode)
 		streamed = true
 		body := &publicMediaBody{ReadCloser: resp.Body, cancel: cancel}
@@ -272,6 +278,9 @@ func (u *UploadController) PublicImageView(c *fiber.Ctx) error {
 		}
 	}
 	c.Set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
+	if processedProviderImageKey.MatchString(key) {
+		c.Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
 	c.Status(resp.StatusCode)
 	return c.Send(data)
 }

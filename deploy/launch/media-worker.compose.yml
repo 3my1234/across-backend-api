@@ -8,6 +8,7 @@ services:
       APP_ENV: production
       WORKER_ROLES: media
       ASYNC_VIDEO_PROCESSING: "true"
+      ASYNC_IMAGE_PROCESSING: "true"
       RUN_INLINE_WORKERS: "false"
       RUN_MIGRATIONS: "false"
       DB_MAX_CONNS: "2"
