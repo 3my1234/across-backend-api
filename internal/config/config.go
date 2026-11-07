@@ -47,6 +47,7 @@ type Config struct {
 	DatabaseReadMinConns          int
 	RedisPoolSize                 int
 	RedisMinIdleConns             int
+	AsyncMessageNotifications     bool
 	RunInlineWorkers              bool
 	RunMigrations                 bool
 	RateLimitPerMinute            int
@@ -148,6 +149,7 @@ func Load() Config {
 		DatabaseReadMinConns:          envInt("DB_READ_MIN_CONNS", 2),
 		RedisPoolSize:                 envInt("REDIS_POOL_SIZE", 64),
 		RedisMinIdleConns:             envInt("REDIS_MIN_IDLE_CONNS", 4),
+		AsyncMessageNotifications:     envBool("ASYNC_MESSAGE_NOTIFICATIONS", false),
 		RunInlineWorkers:              envBool("RUN_INLINE_WORKERS", true),
 		RunMigrations:                 envBool("RUN_MIGRATIONS", true),
 		RateLimitPerMinute:            envInt("RATE_LIMIT_PER_MINUTE", 600),

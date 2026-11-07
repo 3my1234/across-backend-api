@@ -33,6 +33,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 		"settlements":      func(ctx context.Context) { runSettlementReconciliationLoop(ctx, db, cfg) },
 		"play_billing":     func(ctx context.Context) { runPlayBillingLoop(ctx, db) },
 		"town_hall_expiry": func(ctx context.Context) { runTownHallExpiryLoop(ctx, db) },
+		"message_fanout":   func(ctx context.Context) { runMessageFanoutLoop(ctx, db) },
 		"driver_expiry":    func(ctx context.Context) { runDriverExpiryLoop(ctx, db) },
 	}
 	if err := runSelected(ctx, roles, runners); err != nil {

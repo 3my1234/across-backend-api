@@ -34,13 +34,13 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('reconciliation-tests.log').read_text()
-          for name in ('TestCatalogueDestinationOffersMatchLegacy','TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestSharedMessageMetadataRollbackAndRetry','TestNotificationSenderFastPathMatchesLegacy','TestNotificationSenderFastPathKeepsDurableDeliveryAtomic','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
+          for name in ('TestAsyncMessageFanoutSnapshotRollbackAndRetries','TestAsyncMessageFanoutAtomicPageFailureAndRecovery','TestAsyncMessageFanoutRecipientSizesAndConcurrentWorkers','TestAsyncProviderFanoutTransactionScopeAndMemberSnapshot','TestAsyncMessageFanoutFairPagesAndCompletedRetention','TestAsyncMessageFanoutHTTPMessageAndRetryCommitTogether','TestCatalogueDestinationOffersMatchLegacy','TestServiceDiscoveryRepeatedFiltersAndCursorAvoidGenericPlan','TestSharedMessageMetadataRollbackAndRetry','TestNotificationSenderFastPathMatchesLegacy','TestNotificationSenderFastPathKeepsDurableDeliveryAtomic','TestCommunityFanoutAtomicPrivateAndDeduplicated','TestCommunityFanoutBoundariesConcurrentRetriesAndFailure','TestBusinessHistoryBoundedMergeMatchesOriginal','TestInboxBoundedPageMatchesLegacyAndPlans','TestReceiptConcurrentClaimCrashRecoveryAndFencing','TestReceiptEligibilityDrainAndBoundedRequests','TestReceiptMigrationReleaseRollback'):
               assert '--- PASS: '+name+' ' in s, 'Required test did not execute successfully: '+name
           for name in ('TestRoomWriteQueueCancellationAndIndependentRooms','TestRoomWriteQueueBacklogBound','TestRoomWriteQueueDeadlineReturnsRetryBeforeDatabase','TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity'):
               assert '--- PASS: '+name+' ' in s, 'Room scheduling regression did not execute: '+name
           PY
       - name: Race-check room scheduling and real database retry isolation
-        run: go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*)$'
+        run: go test -race -count=1 ./internal/controllers -run '^(TestRoomWriteQueue.*|TestCommunityHotRoomQueuePreservesPoolAndRetryAtomicity|TestSharedMessageMetadataRollbackAndRetry|TestNotificationSenderFastPath.*|TestAsyncMessageFanout.*|TestAsyncProviderFanout.*)$'
       - name: Measure actual conditional polling handler and SQL cost
         env: {POLL_COST_LOCAL: 'true'}
         run: |
@@ -51,4 +51,16 @@ jobs:
           s=Path('polling-cost.log').read_text()
           assert s.count('POLL_COST_RESULT ')==16, 'Incomplete polling measurement'
           assert '--- PASS: TestPollingCostActualHandlers ' in s
+          PY
+
+      - name: Measure matched notification critical section without claiming HTTP capacity
+        env: {FANOUT_PROFILE_LOCAL: 'true'}
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/controllers -run '^TestAsyncMessageFanoutMatchedCriticalSection$' | tee message-fanout-profile.log
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('message-fanout-profile.log').read_text()
+          assert s.count('MESSAGE_FANOUT_PROFILE ')==1
+          assert '--- PASS: TestAsyncMessageFanoutMatchedCriticalSection ' in s
           PY

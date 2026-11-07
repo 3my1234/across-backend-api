@@ -744,6 +744,15 @@ func (s *CommunityController) notifyRoom(ctx context.Context, tx pgx.Tx, room, a
 	if err != nil {
 		return err
 	}
+	if s.market != nil && s.market.cfg.AsyncMessageNotifications {
+		_, err = tx.Exec(ctx, `INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data)
+SELECT 'shared-chat:'||$3::text,coalesce(array_agg(p.user_id ORDER BY p.user_id),'{}'::uuid[]),
+'social_message',$4::text,'Open your chat to read the message.',$5::jsonb
+FROM chat_participants p WHERE p.room_id=$1::uuid AND p.state='active' AND p.user_id<>$2::uuid
+AND NOT EXISTS(SELECT 1 FROM social_blocks b WHERE (b.blocker_id=p.user_id AND b.blocked_id=$2::uuid) OR (b.blocked_id=p.user_id AND b.blocker_id=$2::uuid))
+ON CONFLICT(event_key) DO NOTHING`, room, actor, message, title, data)
+		return err
+	}
 	var cursor *string
 	for {
 		var last *string
