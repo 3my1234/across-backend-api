@@ -218,3 +218,43 @@ func TestDurableVideoActualWorkerTranscodesAndPublishesOnce(t *testing.T) {
 		t.Fatal("completed job did object work twice", err, calls)
 	}
 }
+
+func TestDurableVideoFailureRetriesAreBounded(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("CI requires real invalid-file verification")
+	}
+	ctx := context.Background()
+	db := durableVideoDB(t)
+	_, provider, _ := tierProvider(t, db, "provider-diamond")
+	cfg := config.Config{AsyncVideoProcessing: true, PublicBaseURL: "https://api.example.test", AWSRegion: "eu-north-1", AWSAccessKeyID: "synthetic", AWSSecretAccessKey: "synthetic", S3BucketName: "synthetic"}
+	m := &ProviderMarketplaceController{db: db}
+	key := "private/video-pending/" + provider + "/bad.mp4"
+	if err := m.reserveProviderVideo(ctx, provider, key, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE provider_video_uploads SET state='queued',processing_mode='background' WHERE key=$1`, key); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: mediaRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method != "GET" {
+			t.Fatal("invalid source published or prematurely deleted")
+		}
+		return &http.Response{StatusCode: 200, ContentLength: 4, Body: io.NopCloser(bytes.NewBufferString("junk")), Header: make(http.Header)}, nil
+	})}
+	for i := 0; i < 3; i++ {
+		if err := RunVideoMediaJob(ctx, db, cfg, client); err == nil {
+			t.Fatal("invalid video succeeded")
+		}
+		if _, err := db.Exec(ctx, `UPDATE provider_video_uploads SET available_at=now()-interval '1 second' WHERE key=$1`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var state, phase string
+	var attempts, assets int
+	if err := db.QueryRow(ctx, `SELECT state,attempts,error_code,(SELECT count(*) FROM provider_post_video_assets) FROM provider_video_uploads WHERE key=$1`, key).Scan(&state, &attempts, &phase, &assets); err != nil || state != "failed" || attempts != 3 || phase != "verification_and_encoding" || assets != 0 {
+		t.Fatal("retry/rollback failure", err, state, attempts, phase, assets)
+	}
+	if err := RunVideoMediaJob(ctx, db, cfg, client); err != nil {
+		t.Fatal("terminal failure retried", err)
+	}
+}

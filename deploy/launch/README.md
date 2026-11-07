@@ -11,7 +11,7 @@ are assumptions, not installed inventory, live prices, exchange rates or bills.
 2. Deploy compatible mobile/PWA clients with `file_size` video metadata first.
    Old clients can continue core operations but cannot request NEW video uploads
    without that metadata. Existing published video URLs remain readable.
-3. Apply the reviewed missing schema migrations through 111 using the separate
+3. Apply the reviewed missing schema migrations through 112 using the separate
    migration command; never run API replicas as automatic migrators. Review the
    new indexes' effect and migration lock budget before production approval.
 4. Deploy the API/worker images built from the reviewed release SHA. The optional
@@ -59,26 +59,49 @@ cleanup is approved.
 ## Media delivery and outstanding processing
 
 New stable video URLs use `/api/v1/public/videos/view/...`. The handler verifies asset
-registration and redirects to a one-minute signed S3 URL with `private, no-store`.
+registration and redirects to a five-minute signed S3 URL with `private, no-store`.
 Video bytes go from S3 to the viewer, avoiding API proxy CPU and assumptions about
 standard Cloudflare video CDN eligibility. S3 transfer remains chargeable. The actual
 bucket/Cloudflare routing and Range playback need owner infrastructure acceptance.
 Old published URLs remain unchanged. Public image CDN behavior is unchanged.
 
-This is verification plus upload-cost protection, NOT the requested complete 720p
-transcoding/thumbnail pipeline. The existing endpoint still performs bounded ffprobe
-verification in the API, does not downscale 4K, and does not compress all uploaded
-images. A durable, separately CPU-limited FFmpeg worker with verified output and safe
-cleanup is a remaining media deliverable; do not advertise it as complete or enable
-large-scale paid-video onboarding based on this patch. Do not improvise another API
-thread running unrestricted transcoding. Existing click-to-play behavior is retained.
+The opt-in `ASYNC_VIDEO_PROCESSING=true` path now queues durable video jobs.
+Migration112 adds fenced claims, a global one-encoder lease, at most10queued/inflight
+jobs, three bounded attempts and status recovery. `WORKER_ROLES=media` is explicit-only;
+legacy `all` workers do not start an encoder. The media worker must be separate, at
+most2DBconnections, with the reviewed0.5CPU/512MiB/pids64/tmpfs192MiB constraints.
+These are proposed limits, not an approved production resource allocation.
+
+The worker does not hold a database transaction while doing network/FFmpeg work.
+A180-second job deadline is shorter than its240-second claim lease. Failed phases are
+recorded without signed URLs or message content. Output H264/AAC MP4 is bounded to720p,
+30FPS,16MiB with fast-start metadata, and decoded before publication. Portrait/landscape
+aspect ratio is preserved. Compliant inputs are remuxed rather than re-encoded. AJPEG
+thumbnail is generated at400px maximum. Both objects must upload before the atomic
+asset/ticket completion. Claim tokens fence stale publishers. Source deletion is only
+after commit; old/public objects are not destructively cleaned up.
+
+Mobile/PWA support202status responses, bounded GET-only polling and a recent-upload
+list to recover after closing the screen. The synchronous legacy path remains when
+the feature is OFF. Existing completed tickets can be replayed after a plan changes.
+Do not roll back to a binary predating background-ticket awareness while jobs remain;
+turn off NEW production first, keep a compatible API/status route and let consumers
+finish committed jobs. Never roll back by dropping queues/schema.
+
+`/api/v1/admin/ops/video-queue-health` uses the existing catalog-admin authorization;
+it reports aggregate counts, lease state, failure/age attention flags, not asset keys.
+Wire external alert receipt before enabling in production. This source work does not
+prove real S3/Cloudflare/account permissions, real-device playback, long-run encoder
+headroom or a complete image-processing pipeline. Public-provider image compression,
+orientation, thumbnail generation and EXIF stripping remain separate work; do not
+claim those are implemented because the video test succeeds.
 
 ## Connection budget
 
 Run `python scripts/launch_budget.py connections deploy/launch/connection-budget.example.json`.
-The example totals 24 application connections + 6 other clients + 10 emergency/admin
-connections = 40. It assumes two API replicas at8, general worker4, fanout worker2 and
-migration2, no distinct read pool. It MUST be replaced by actual process inventory and
+The example totals 26 application connections + 6 other clients + 10 emergency/admin
+connections = 42. It assumes two API replicas at8, general worker4, fanout worker2, optional dedicated media
+worker2 and migration2, no distinct read pool. It MUST be replaced by actual process inventory and
 PostgreSQL max_connections before production signoff. Other applications sharing the
 same PostgreSQL cluster count; Coolify's separate PostgreSQL cluster does not.
 A distinct read pool counts in addition to the primary pool. Do not add PgBouncer or

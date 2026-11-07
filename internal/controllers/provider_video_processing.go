@@ -162,11 +162,12 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 	if err != nil || !found {
 		return err
 	}
+	phase := "policy"
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if result != nil {
-			_, _ = db.Exec(ctx, `UPDATE provider_video_uploads SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,error_code='processing_failed',lease_until=NULL,available_at=clock_timestamp()+attempts*interval '10 seconds' WHERE key=$1 AND claim_token=$2::uuid AND state='processing'`, job.key, job.token)
+			_, _ = db.Exec(ctx, `UPDATE provider_video_uploads SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,error_code=$3,lease_until=NULL,available_at=clock_timestamp()+attempts*interval '10 seconds' WHERE key=$1 AND claim_token=$2::uuid AND state='processing'`, job.key, job.token, phase)
 		}
 		_, _ = db.Exec(ctx, `UPDATE provider_video_launch_policy SET worker_token=NULL,worker_lease_until=NULL WHERE singleton AND worker_token=$1::uuid`, job.token)
 	}()
@@ -191,6 +192,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 	input := filepath.Join(directory, "input.mp4")
 	output := filepath.Join(directory, "output.mp4")
 	poster := filepath.Join(directory, "poster.jpg")
+	phase = "input_download"
 	signed, err := m.s3.ObjectGetURL(job.key, time.Minute)
 	if err != nil {
 		return err
@@ -215,6 +217,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 	if copyErr != nil || size != job.size || size > maxPostVideoBytes {
 		return errors.New("input size mismatch")
 	}
+	phase = "verification_and_encoding"
 	if err = processLaunchVideo(ctx, input, output, poster, policy.VideoSeconds); err != nil {
 		return err
 	}
@@ -228,6 +231,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 	}
 	videoKey := providerVerifiedVideoKey(job.provider, providerVideoTicket{assetID: job.token})
 	posterKey := "user-uploads/providers/" + job.provider + "/video-thumbnails/" + job.token + ".jpg"
+	phase = "output_upload"
 	for _, asset := range []struct{ path, key, mime string }{{output, videoKey, "video/mp4"}, {poster, posterKey, "image/jpeg"}} {
 		if err = putProcessedMedia(ctx, client, m.s3, asset.path, asset.key, asset.mime); err != nil {
 			return err
@@ -246,6 +250,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 		return err
 	}
 	thumbnail := m.s3.ObjectURL(posterKey)
+	phase = "atomic_publication"
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return err
@@ -255,7 +260,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 		return err
 	}
 	var permitted bool
-	err = tx.QueryRow(ctx, `SELECT COALESCE((provider_current_benefits($1::uuid)->>'max_videos')::int>0,false) AND NOT uploads_paused AND $2::double precision<=max_seconds FROM provider_video_launch_policy WHERE singleton`, job.provider, duration).Scan(&permitted)
+	err = tx.QueryRow(ctx, `SELECT COALESCE((provider_current_benefits($1::uuid)->>'max_videos')::int>0,false) AND NOT uploads_paused AND $2::double precision<=max_seconds AND $3::bigint<=max_upload_bytes FROM provider_video_launch_policy WHERE singleton`, job.provider, duration, info.Size()).Scan(&permitted)
 	if err != nil {
 		return err
 	}
@@ -381,7 +386,7 @@ func processLaunchVideo(ctx context.Context, input, output, poster string, maxSe
 				compliant = false
 			}
 			found = true
-			if stream.Width < 1 || stream.Height < 1 || int64(stream.Width)*int64(stream.Height) > 35000000 {
+			if stream.Width < 1 || stream.Height < 1 || stream.Width > 8192 || stream.Height > 8192 || int64(stream.Width)*int64(stream.Height) > 35000000 {
 				return errors.New("video dimensions exceed decode bound")
 			}
 			if stream.Codec != "h264" || stream.PixelFormat != "yuv420p" || min(stream.Width, stream.Height) > 720 || max(stream.Width, stream.Height) > 1280 || rationalFPS(stream.FPS) > 30 {

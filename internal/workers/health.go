@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"across/backend/internal/config"
 	"context"
 	"errors"
 	"sync"
@@ -27,10 +28,7 @@ var loopLimits = map[string]time.Duration{
 }
 
 func NewMonitor() *Monitor {
-	roles := make([]string, 0, len(loopLimits))
-	for name := range loopLimits {
-		roles = append(roles, name)
-	}
+	roles, _ := (config.Config{}).WorkerRoleNames()
 	m, _ := NewMonitorForRoles(roles)
 	return m
 }

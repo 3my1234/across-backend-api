@@ -36,7 +36,7 @@ at that observation time; this is not an ongoing health guarantee.
   optimization missing from this candidate despite PR85 still being open.
   Current main30b0b68 is its ancestor. No ordinary dirty checkout was reset.
 - Mobile baselineb54e675 includes mainee7546c and stable message IDs/Retry-After.
-- PWA/admin baseline2d92f84 is preserved on a separate worktree; original tmp files
+- PWA/admin latest main068ff62 was merged into the separate candidate, preserving newer billing and tier work; original tmp files
   remain untouched. New work is on named launch-readiness branches in all3repos.
 - Production image/config/schema versions are not inferred from local HEAD or CI.
   They require the existing owner-approved deployment inventory/signoff process.
@@ -74,7 +74,7 @@ at that observation time; this is not an ongoing health guarantee.
 | Polling/realtime | Conditional history, foreground/no-overlap polling, durable DB messages | Keep polling. No measured case for a launch WebSocket/Redis-GEO rewrite.100screens at5sec offer20reads/sec; actual mixed replay used15sec, not5sec | Client/regression checks yes |
 | Media allowances/costs | migration111, provider_video_reservation.go, launch_budget.py | Owner selected stricter NEW uploads with old media retained. Actual bucket region/rates/FX/Cloudflare contract and S3 exact-length PUT/device playback acceptance remain | Policy/model tests yes |
 | Full image pipeline | Existing portable image MIME/size/avatar limits; upload_controller.go | Complete signature/dimension/orientation/resize/thumbnail/EXIF and async publish validation are NOT established; do not claim WebP/thumbnail pipeline exists | Implementation/tests yes |
-| Full video pipeline | Bounded existing ffprobe verification, new quotas/leases/delivery | Dedicated CPU-limited durable720p/30FPS H264/AAC transcoding/thumbnail/recovery pipeline is NOT implemented. Do not claim original4K files are compressed | Implementation/tests yes |
+| Video pipeline | Opt-in durable720p/30FPS H264/AAC processing, thumbnail, fenced claims, bounded dedicated worker and recent-job recovery implemented | Exact-source Linux FFmpeg/race validation and real S3/device/resource acceptance remain distinct; feature stays OFF until owner-approved rollout | Nonproduction tests yes |
 | Media cleanup | Only new pending lifecycle proposal prepared | Reference-aware orphan/superseded-object/version-retention review; no broad deletion or lifecycle replacement | Dry-run code/tests yes; actual rules approval |
 | Payments/subscriptions | Existing gateway authenticity, checkout expected amount, receipt/idempotency tests | Exact candidate regressions plus real payment-provider catalog/webhook/reconciliation acceptance; no payment succeeded merely because UI said so | Mock/local tests yes; real provider signoff separate |
 | Store billing | Existing Play-native flow and iOS purchase guard in mobile candidate | Actual Play product mapping/test purchase/account credentials; Apple review of digital provider benefits vs physical goods. Physical checkout exemption does not automatically exempt digital listing upgrades | Source tests yes; account/device acceptance separate |
@@ -88,7 +88,7 @@ at that observation time; this is not an ongoing health guarantee.
 
 **Not yet approved for public production rollout.** This checkpoint supplies concrete
 source corrections; it does not complete the attached21-part launch assignment.
-Finish the explicit media-processing deliverables and operational/store acceptance
+Finish the remaining image-processing deliverables and operational/store acceptance
 above, or obtain an explicit product decision to defer those features while retaining
 existing paid media. Do not declare video processing complete because verification
 passes. A controlled launch cannot be justified solely by disposable100-session results.
@@ -105,3 +105,13 @@ https://support.google.com/googleplay/android-developer/answer/9858738 ;
 https://developer.apple.com/app-store/review/guidelines/ .
 Store policy application is an engineering assessment; actual account/market exceptions
 and review approval are not assumed.
+
+
+## Validation checkpoint
+
+5abd51c passed exact-source PostgreSQL16, actual FFmpeg verification and race checks
+in42385450546. New durable processing at7be4c5f passed its actual1080p-to720p,
+thumbnail and once-only publication test in42397214229, but the whole run failed a
+worker monitor inventory assertion. The monitor has been corrected to distinguish
+explicit-only media from the11default consumers; a fresh exact-source check is required.
+No failed run is relabelled as a successful release or capacity qualification.

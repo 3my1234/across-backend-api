@@ -27,6 +27,12 @@
       "instances": 1,
       "primary_max": 2,
       "separate_read_pool": false
+    },
+    {
+      "name": "optional dedicated media worker",
+      "instances": 1,
+      "primary_max": 2,
+      "separate_read_pool": false
     }
   ]
 }

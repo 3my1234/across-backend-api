@@ -281,7 +281,7 @@ func TestLaunchVideoDeliveryRedirectNeverProxiesBytes(t *testing.T) {
 		}
 		if path == key {
 			u, e := url.Parse(resp.Header.Get("Location"))
-			if e != nil || resp.StatusCode != 302 || u.Host != "synthetic.s3.eu-north-1.amazonaws.com" || u.Query().Get("X-Amz-Expires") != "60" || resp.Header.Get("Cache-Control") != "private, no-store" {
+			if e != nil || resp.StatusCode != 302 || u.Host != "synthetic.s3.eu-north-1.amazonaws.com" || u.Query().Get("X-Amz-Expires") != "300" || resp.Header.Get("Cache-Control") != "private, no-store" {
 				t.Fatal("incorrect redirect", resp.StatusCode, resp.Header)
 			}
 		} else if resp.StatusCode != 404 {

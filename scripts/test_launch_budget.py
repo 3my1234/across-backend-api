@@ -7,9 +7,9 @@ ROOT=Path(__file__).resolve().parents[1]
 class BudgetTests(unittest.TestCase):
  def test_pool_totals_include_replicas_other_clients_reserve_and_read_pool(self):
   cfg=json.loads((ROOT/'deploy/launch/connection-budget.example.json').read_text())
-  self.assertEqual(connection_budget(cfg)['required_connections'],40)
+  self.assertEqual(connection_budget(cfg)['required_connections'],42)
   cfg['services'][0].update(separate_read_pool=True,read_max=8)
-  self.assertEqual(connection_budget(cfg)['required_connections'],56)
+  self.assertEqual(connection_budget(cfg)['required_connections'],58)
   cfg['postgres_max_connections']=50
   self.assertFalse(connection_budget(cfg)['fits'])
  def test_unverified_inventory_never_qualifies_production(self):

@@ -29,7 +29,7 @@ func (m *ProviderMarketplaceController) PublicProviderVideo(c *fiber.Ctx) error 
 	if !registered {
 		return fiber.ErrNotFound
 	}
-	signed, err := m.s3.ObjectGetURL(key, time.Minute)
+	signed, err := m.s3.ObjectGetURL(key, 5*time.Minute)
 	if err != nil {
 		return fiber.ErrServiceUnavailable
 	}
