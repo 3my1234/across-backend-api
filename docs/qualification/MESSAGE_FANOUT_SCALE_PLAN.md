@@ -94,8 +94,16 @@ selected `message_fanout` consumer, budget its connections/CPU, and monitor pend
 job count, oldest age, retries and cursor progress. Durable storage alone is not
 backpressure: sustained arrival above drain throughput must trigger admission
 control or increased verified worker capacity before disk/latency limits breach.
-Backlog admission/alert wiring is not implemented by this candidate; the flag
-must stay disabled until those controls and the mixed replay are verified.
+The candidate rejects new jobs transactionally with retryable HTTP 503 and
+Retry-After when the oldest eligible pending job exceeds 10 seconds (policy
+configurable from 1 to 3,600 seconds). No message is acknowledged on rejection.
+This age guard is not a strict row-count or disk cap. Workers warn on five-second
+lag or retained failed jobs. After five failed pages, a job is held with failed_at
+for repair, preserving its cursor and recipients while healthy jobs continue.
+After repairing the cause, an operator can clear failed_at and reset attempts
+and available_at for the exact failed event; do not delete or recreate it.
+Alert routing and operational recovery still require release verification.
+The flag must stay disabled until the mixed replay and notification ledger pass.
 
 Then compare baseline/candidate mixed traffic offline at 100 sessions under the
 same caps. Require unchanged client/per-feature latency gates, zero unexpected

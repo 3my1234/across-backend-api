@@ -491,7 +491,7 @@ func (s *CommunityController) HallOffer(c *fiber.Ctx) error {
 	}
 	if fresh {
 		if err = s.notifyRoom(c.Context(), tx, id, actor, message, "New Town Hall offer", body); err != nil {
-			return communityError(err)
+			return messageNotificationError(c, err)
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
@@ -616,7 +616,7 @@ func (s *CommunityController) HallChoose(c *fiber.Ctx) error {
 	}
 	if fresh {
 		if err = s.notifyRoom(c.Context(), tx, direct, actor, mid, "A buyer selected your offer", summary); err != nil {
-			return communityError(err)
+			return messageNotificationError(c, err)
 		}
 	}
 	_, err = tx.Exec(c.Context(), `UPDATE chat_rooms SET context=context||jsonb_build_object('selected_offer_id',$2::text,'selected_dm_id',$3::text) WHERE id=$1::uuid`, id, in.Offer, direct)

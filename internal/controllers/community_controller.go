@@ -76,11 +76,23 @@ func communityID(c *fiber.Ctx, key string) (string, error) {
 	}
 	return id, nil
 }
+func messageNotificationError(c *fiber.Ctx, err error) error {
+	var p *pgconn.PgError
+	if asPG(err, &p) && p.Code == "P0503" {
+		c.Set("Retry-After", "2")
+		c.Set("Cache-Control", "no-store")
+	}
+	return communityError(err)
+}
+
 func communityError(err error) error {
 	if quota := providerCapacityError(err); quota != nil {
 		return quota
 	}
 	var p *pgconn.PgError
+	if asPG(err, &p) && p.Code == "P0503" {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Messages are busy. Retry shortly with the same message reference.")
+	}
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
 	}
@@ -689,7 +701,7 @@ func (s *CommunityController) Send(c *fiber.Ctx) error {
 	}
 	if fresh {
 		if err = s.notifyRoom(c.Context(), tx, room, actor, mid, "New chat message", input.Body); err != nil {
-			return communityError(err)
+			return messageNotificationError(c, err)
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {

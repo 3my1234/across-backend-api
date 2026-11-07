@@ -13,13 +13,42 @@ CREATE TABLE message_notification_jobs (
  available_at timestamptz NOT NULL DEFAULT now(),
  created_at timestamptz NOT NULL DEFAULT now(),
  completed_at timestamptz,
+ failed_at timestamptz,
  last_error text,
  CHECK(next_recipient<=cardinality(recipient_ids))
 );
 CREATE INDEX message_notification_jobs_ready ON message_notification_jobs(available_at,created_at,event_key)
- WHERE completed_at IS NULL;
+ WHERE completed_at IS NULL AND failed_at IS NULL;
 CREATE INDEX message_notification_jobs_completed ON message_notification_jobs(completed_at)
  WHERE completed_at IS NOT NULL;
+CREATE INDEX message_notification_jobs_age ON message_notification_jobs(created_at)
+ WHERE completed_at IS NULL AND failed_at IS NULL;
+
+CREATE INDEX message_notification_jobs_failed ON message_notification_jobs(failed_at) WHERE failed_at IS NOT NULL;
+
+CREATE TABLE message_notification_policy (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+ max_backlog_age_seconds integer NOT NULL DEFAULT 10 CHECK(max_backlog_age_seconds BETWEEN 1 AND 3600)
+);
+INSERT INTO message_notification_policy DEFAULT VALUES;
+
+-- Indexed age admission, not a serialized global counter or a per-request
+-- COUNT of the queue. Never acknowledge another message when notification work
+-- is already beyond the configured lag budget. The parent's message tx rolls
+-- back on this error. Existing event retries remain idempotent.
+CREATE FUNCTION bound_message_notification_backlog() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE oldest timestamptz; max_age integer;
+BEGIN
+ IF EXISTS(SELECT 1 FROM message_notification_jobs WHERE event_key=NEW.event_key) THEN RETURN NEW; END IF;
+ SELECT max_backlog_age_seconds INTO max_age FROM message_notification_policy WHERE singleton;
+ SELECT created_at INTO oldest FROM message_notification_jobs WHERE completed_at IS NULL AND failed_at IS NULL ORDER BY created_at LIMIT 1;
+ IF oldest<clock_timestamp()-make_interval(secs=>coalesce(max_age,10)) THEN
+  RAISE EXCEPTION 'Message notifications are busy; retry with the same message reference' USING ERRCODE='P0503';
+ END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER message_notification_backlog_guard BEFORE INSERT ON message_notification_jobs
+ FOR EACH ROW EXECUTE FUNCTION bound_message_notification_backlog();
 
 -- Preserve the provider activity row synchronously. Only its per-member native
 -- notification fan-out is deferred when the API explicitly opts this tx in.

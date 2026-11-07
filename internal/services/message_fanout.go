@@ -11,6 +11,15 @@ import (
 
 const MessageFanoutBatchSize = 64
 
+// MessageFanoutLag is an indexed queue-head observation; it does not scan all
+// pending payloads. A stuck job remains observable even during retry backoff.
+func MessageFanoutLag(ctx context.Context, db *pgxpool.Pool) (float64, error) {
+	var seconds float64
+	err := db.QueryRow(ctx, `SELECT coalesce((SELECT greatest(0,extract(epoch FROM clock_timestamp()-created_at))::float8
+FROM message_notification_jobs WHERE completed_at IS NULL AND failed_at IS NULL ORDER BY created_at LIMIT 1),0)`).Scan(&seconds)
+	return seconds, err
+}
+
 // RunMessageFanoutBatch commits notifications, their existing durable delivery
 // triggers and the recipient cursor together. A crash rolls the entire page
 // back. SKIP LOCKED lets replicas claim other jobs without waiting on this one.
@@ -27,7 +36,7 @@ func RunMessageFanoutBatch(ctx context.Context, db *pgxpool.Pool) (bool, error) 
 	var key string
 	var cursor int
 	err = tx.QueryRow(ctx, `SELECT event_key,next_recipient
-FROM message_notification_jobs WHERE completed_at IS NULL AND available_at<=now()
+FROM message_notification_jobs WHERE completed_at IS NULL AND failed_at IS NULL AND available_at<=now()
 ORDER BY available_at,created_at,event_key FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&key, &cursor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -60,7 +69,7 @@ WHERE event_key=$1`, key, cursor, MessageFanoutBatchSize)
 		retry, stopRetry := context.WithTimeout(parent, time.Second)
 		defer stopRetry()
 		_, _ = db.Exec(retry, `UPDATE message_notification_jobs SET attempts=attempts+1,
-available_at=now()+least(60,attempts+1)*interval '1 second',last_error='notification page failed'
+available_at=now()+least(60,attempts+1)*interval '1 second',failed_at=CASE WHEN attempts+1>=5 THEN now() END,last_error='notification page failed'
 WHERE event_key=$1 AND next_recipient=$2 AND completed_at IS NULL`, key, cursor)
 	}
 	return true, err
@@ -75,4 +84,12 @@ func PruneCompletedMessageFanout(ctx context.Context, db *pgxpool.Pool) error {
  SELECT event_key FROM message_notification_jobs WHERE completed_at<now()-interval '7 days'
  ORDER BY completed_at,event_key FOR UPDATE SKIP LOCKED LIMIT 256)`)
 	return err
+}
+
+// Failed jobs remain durable for operator recovery, but must not block unrelated
+// rooms or be silently omitted from notification correctness/health checks.
+func MessageFanoutHasFailures(ctx context.Context, db *pgxpool.Pool) (bool, error) {
+	var failed bool
+	err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM message_notification_jobs WHERE failed_at IS NOT NULL)`).Scan(&failed)
+	return failed, err
 }

@@ -329,3 +329,92 @@ INSERT INTO chat_participants(room_id,user_id,role,state) VALUES($2,$3,'buyer','
 		t.Fatal("peer notification missing after drain", err)
 	}
 }
+
+func TestAsyncMessageFanoutBackpressureRollsBackMessage(t *testing.T) {
+	db, sender := asyncFanoutDB(t)
+	ctx := context.Background()
+	room, peer, ref := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	_, err := db.Exec(ctx, `INSERT INTO users(id,full_name) VALUES($1,'Peer');
+INSERT INTO chat_rooms(id,kind,owner_user_id,title) VALUES($2,'town_hall',$3,'Synthetic');
+INSERT INTO chat_participants(room_id,user_id,role,state) VALUES($2,$3,'buyer','active'),($2,$1,'member','active');
+INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data,created_at)
+VALUES('old-backlog','{}','social_message','Test','Generic','{}',now()-interval '20 seconds')`, pgx.QueryExecModeSimpleProtocol, peer, room, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := NewCommunityController(db, config.Config{AsyncMessageNotifications: true})
+	app := fiber.New()
+	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", sender); return c.Next() })
+	app.Post("/rooms/:conversation_id/messages", controller.Send)
+	post := func() int {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/rooms/"+room+"/messages", strings.NewReader(`{"message":"Hello","client_message_id":"`+ref+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req, 10000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 503 && (resp.Header.Get("Retry-After") != "2" || resp.Header.Get("Cache-Control") != "no-store") {
+			t.Fatal("busy response lacks safe retry metadata")
+		}
+		return resp.StatusCode
+	}
+	if status := post(); status != 503 {
+		t.Fatal("backlog accepted another message", status)
+	}
+	var clean bool
+	if err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM chat_messages)=0 AND (SELECT count(*) FROM message_notification_jobs)=1`).Scan(&clean); err != nil || !clean {
+		t.Fatal("busy response committed a phantom message/job", err)
+	}
+	drainFanout(t, db)
+	if status := post(); status != 201 {
+		t.Fatal("same reference could not resume after backlog drained", status)
+	}
+	drainFanout(t, db)
+	if err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM chat_messages)=1 AND (SELECT count(*) FROM notifications)=1`).Scan(&clean); err != nil || !clean {
+		t.Fatal("recovery duplicated/lost work", err)
+	}
+}
+
+func TestAsyncMessageFanoutFailedJobIsolationAndRecovery(t *testing.T) {
+	db, sender := asyncFanoutDB(t)
+	ctx := context.Background()
+	_, err := db.Exec(ctx, `INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data)
+VALUES('poison',ARRAY[$1::uuid],'social_message','Test','Generic','{"poison":true}');
+CREATE FUNCTION poison_page() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.data->>'poison'='true' THEN RAISE EXCEPTION 'injected poison job'; END IF;RETURN NEW;END $$;
+CREATE TRIGGER reject_poison BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION poison_page()`, pgx.QueryExecModeSimpleProtocol, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err = services.RunMessageFanoutBatch(ctx, db); err == nil {
+			t.Fatal("poison job unexpectedly succeeded")
+		}
+		if _, err = db.Exec(ctx, `UPDATE message_notification_jobs SET available_at=now()`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var failed bool
+	if err = db.QueryRow(ctx, `SELECT failed_at IS NOT NULL AND completed_at IS NULL AND next_recipient=0 AND attempts=5 FROM message_notification_jobs`).Scan(&failed); err != nil || !failed {
+		t.Fatal("failed job was discarded or retried without bound", err)
+	}
+	_, err = db.Exec(ctx, `UPDATE message_notification_jobs SET created_at=now()-interval '1 day';
+INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data) VALUES('healthy',ARRAY[$1::uuid],'social_message','Test','Generic','{}')`, pgx.QueryExecModeSimpleProtocol, sender)
+	if err != nil {
+		t.Fatal("failed room blocked unrelated admission", err)
+	}
+	drainFanout(t, db)
+	if failed, err = services.MessageFanoutHasFailures(ctx, db); err != nil || !failed {
+		t.Fatal("failed job disappeared from monitoring", err)
+	}
+	_, err = db.Exec(ctx, `DROP TRIGGER reject_poison ON notifications;UPDATE message_notification_jobs SET failed_at=NULL,attempts=0,available_at=now() WHERE event_key='poison'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainFanout(t, db)
+	var complete bool
+	if err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM notifications)=2 AND (SELECT count(*) FROM message_notification_jobs WHERE completed_at IS NULL)=0`).Scan(&complete); err != nil || !complete {
+		t.Fatal("operator recovery lost or duplicated work", err)
+	}
+}

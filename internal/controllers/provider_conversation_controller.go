@@ -428,6 +428,9 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 	}
 	if fresh && !provider {
 		if err = queueProviderActivityTx(c.Context(), tx, providerID, listingID, "conversation_message", map[string]any{"conversation_id": threadID, "listing_title": listingTitle, "product_id": productID, "message": body, "sender_user_id": userID}); err != nil {
+			if m.cfg.AsyncMessageNotifications {
+				return messageNotificationError(c, err)
+			}
 			return fiber.ErrInternalServerError
 		}
 	}
@@ -440,7 +443,7 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 		if _, err = tx.Exec(c.Context(), `INSERT INTO message_notification_jobs(event_key,recipient_ids,type,title,body,data)
 VALUES('buyer-provider-message:'||$1::text,ARRAY[$2::uuid],'marketplace_message','New provider message',$3,$4::jsonb)
 ON CONFLICT(event_key) DO NOTHING`, messageID.String(), buyerID, body, payload); err != nil {
-			return fiber.ErrInternalServerError
+			return messageNotificationError(c, err)
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
