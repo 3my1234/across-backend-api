@@ -24,6 +24,7 @@ func Run(ctx context.Context, db *pgxpool.Pool, cfg config.Config, caches ...*re
 	}
 	// Existing implementations and durable claim/idempotency semantics unchanged.
 	runners := map[string]func(context.Context){
+		"media":            func(ctx context.Context) { runMediaLoop(ctx, db, cfg) },
 		"web_push":         func(ctx context.Context) { runWebPushLoop(ctx, db, cfg) },
 		"email":            func(ctx context.Context) { runEmailLoop(ctx, db, cfg) },
 		"push":             func(ctx context.Context) { runPushLoop(ctx, db) },
@@ -206,6 +207,22 @@ func runWebPushLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 		if count > 0 {
 			log.Printf("browser push worker: submitted %d deliveries", count)
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runMediaLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := controllers.RunVideoMediaJob(ctx, db, cfg, nil); err != nil {
+			log.Printf("video processing cycle failed; durable retry retained")
+		}
+		heartbeat(ctx, "media")
 		select {
 		case <-ctx.Done():
 			return

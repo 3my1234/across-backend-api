@@ -92,6 +92,9 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if e != nil || !strings.HasPrefix(key, "private/video-pending/"+provider+"/") || strings.Contains(key, "..") {
 		return fiber.NewError(422, "Choose a video uploaded through your own provider account.")
 	}
+	if m.cfg.AsyncVideoProcessing {
+		return m.queueProviderVideo(c, provider, key)
+	}
 	ticket, e := m.claimProviderVideo(c.Context(), provider, key)
 	if e != nil {
 		c.Set("Retry-After", "5")
@@ -99,6 +102,9 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	}
 	if ticket.complete {
 		return c.JSON(fiber.Map{"url": ticket.url, "duration_seconds": ticket.duration})
+	}
+	if ticket.background {
+		return m.queueProviderVideo(c, provider, key)
 	}
 	defer m.releaseProviderVideo(key)
 	policy, err := m.postPolicy(c.Context(), provider)

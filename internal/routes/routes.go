@@ -187,6 +187,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/business-overview", catalogOnly, admin.BusinessOverview)
 	adminRoutes.Get("/subscribers", catalogOnly, admin.Subscribers)
 	adminRoutes.Get("/ops/queue-health", catalogOnly, ops.QueueHealth)
+	adminRoutes.Get("/ops/video-queue-health", catalogOnly, ops.VideoQueueHealth)
 	adminRoutes.Get("/ops/runtime", superOnly, func(c *fiber.Ctx) error {
 		c.Set("Cache-Control", "private, no-store")
 		var httpMetrics map[string]any
@@ -365,6 +366,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Get("/providers/me/subscription-renewal", marketplaceController.ProviderRenewalStatus)
 	authed.Get("/providers/me/post-policy", marketplaceController.ProviderPostPolicy)
 	authed.Post("/providers/me/videos/complete", marketplaceController.CompletePostVideo)
+	authed.Get("/providers/me/videos/status", marketplaceController.ProviderVideoStatus)
+	authed.Get("/providers/me/videos", marketplaceController.ListProviderVideos)
 	authed.Post("/providers/me/subscription-renewal", marketplaceController.ProviderManageRenewal)
 	authed.Post("/providers/me/subscription-confirm", payments.ConfirmProviderSubscription)
 	authed.Post("/providers/me/subscription-checkout/cancel", payments.CancelUnpaidProviderCheckout)

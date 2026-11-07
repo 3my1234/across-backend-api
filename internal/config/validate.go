@@ -35,6 +35,12 @@ func (c Config) Validate(role string) error {
 	if role != "api" && role != "worker" && role != "migrate" {
 		add("service role must be api, worker or migrate")
 	}
+	if role == "worker" && strings.ToLower(strings.TrimSpace(c.WorkerRoles)) == "media" && (c.DatabaseMaxConns > 2 || !c.AsyncVideoProcessing) {
+		add("media requires ASYNC_VIDEO_PROCESSING=true and DB_MAX_CONNS<=2")
+	}
+	if role == "api" && c.AsyncVideoProcessing && c.RunInlineWorkers {
+		add("ASYNC_VIDEO_PROCESSING requires a separate media worker")
+	}
 	if role == "worker" || (role == "api" && c.RunInlineWorkers) {
 		if _, err := c.WorkerRoleNames(); err != nil {
 			add(err.Error())

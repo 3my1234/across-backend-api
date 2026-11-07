@@ -17,6 +17,7 @@ type Monitor struct {
 }
 
 var loopLimits = map[string]time.Duration{
+	"media":          5 * time.Minute,
 	"message_fanout": 30 * time.Second,
 	// A 25-message SMTP batch can take nearly five minutes at its timeout
 	// limits. Settlement batches can make up to 100 twenty-second requests.

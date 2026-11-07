@@ -27,3 +27,19 @@ func TestWorkerRoleSelection(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaWorkerMustBeExplicitAndDedicated(t *testing.T) {
+	roles, err := (Config{WorkerRoles: "media"}).WorkerRoleNames()
+	if err != nil || len(roles) != 1 || roles[0] != "media" {
+		t.Fatal(err, roles)
+	}
+	if _, err = (Config{WorkerRoles: "media,email"}).WorkerRoleNames(); err == nil {
+		t.Fatal("encoding mixed into latency-sensitive consumers")
+	}
+	if (Config{AppEnv: "test", WorkerRoles: "media", DatabaseMaxConns: 3, AsyncVideoProcessing: true}).Validate("worker") == nil {
+		t.Fatal("oversized media pool accepted")
+	}
+	if (Config{AppEnv: "test", WorkerRoles: "media", DatabaseMaxConns: 2}).Validate("worker") == nil {
+		t.Fatal("disabled media processing started")
+	}
+}

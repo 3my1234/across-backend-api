@@ -53,6 +53,7 @@ func (m *ProviderMarketplaceController) reserveProviderVideo(ctx context.Context
 }
 
 type providerVideoTicket struct {
+	background   bool
 	assetID, url string
 	size         int64
 	duration     float64
@@ -68,7 +69,7 @@ func (m *ProviderMarketplaceController) claimProviderVideo(ctx context.Context, 
 	defer tx.Rollback(ctx)
 	var state string
 	var expired, leased bool
-	err = tx.QueryRow(ctx, `SELECT asset_id::text,size_bytes,state,COALESCE(url,''),COALESCE(duration_seconds,0),expires_at<=clock_timestamp(),COALESCE(lease_until>clock_timestamp(),false) FROM provider_video_uploads WHERE key=$1 AND provider_id=$2::uuid FOR UPDATE`, key, provider).Scan(&ticket.assetID, &ticket.size, &state, &ticket.url, &ticket.duration, &expired, &leased)
+	err = tx.QueryRow(ctx, `SELECT asset_id::text,size_bytes,state,COALESCE(url,''),COALESCE(duration_seconds,0),expires_at<=clock_timestamp(),COALESCE(lease_until>clock_timestamp(),false),COALESCE(to_jsonb(provider_video_uploads)->>'processing_mode','inline')='background' FROM provider_video_uploads WHERE key=$1 AND provider_id=$2::uuid FOR UPDATE`, key, provider).Scan(&ticket.assetID, &ticket.size, &state, &ticket.url, &ticket.duration, &expired, &leased, &ticket.background)
 	if err == pgx.ErrNoRows {
 		return ticket, fiber.NewError(422, "Request a new video upload authorization.")
 	}
@@ -77,6 +78,9 @@ func (m *ProviderMarketplaceController) claimProviderVideo(ctx context.Context, 
 	}
 	if state == "complete" {
 		ticket.complete = true
+		return ticket, nil
+	}
+	if ticket.background {
 		return ticket, nil
 	}
 	if leased {

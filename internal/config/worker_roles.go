@@ -17,6 +17,7 @@ func (c Config) WorkerRoleNames() ([]string, error) {
 	for _, name := range all {
 		allowed[name] = true
 	}
+	allowed["media"] = true // Explicit-only: never start expensive encoding via the legacy all selection.
 	seen := make(map[string]bool)
 	roles := []string{}
 	for _, entry := range strings.Split(raw, ",") {
@@ -27,6 +28,9 @@ func (c Config) WorkerRoleNames() ([]string, error) {
 		}
 		seen[name] = true
 		roles = append(roles, name)
+	}
+	if seen["media"] && len(roles) != 1 {
+		return nil, errors.New("media requires a dedicated worker process")
 	}
 	return roles, nil
 }
