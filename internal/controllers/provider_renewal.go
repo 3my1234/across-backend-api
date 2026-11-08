@@ -67,40 +67,37 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), 40*time.Second)
 	defer cancel()
-	conn, err := m.db.Acquire(ctx)
+	// Hold the shared checkout advisory lock only while reserving this operation.
+	// The durable lease keeps replicas coordinated while the network uses no DB slot.
+	tx, err := m.db.Begin(ctx)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	defer tx.Rollback(context.Background())
 	var locked bool
-	defer func() {
-		if !locked {
-			conn.Release()
-			return
-		}
-		releaseCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
-		defer done()
-		if _, unlockErr := conn.Exec(releaseCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, "provider-renewal:"+providerID); unlockErr != nil {
-			raw := conn.Hijack()
-			_ = raw.Close(releaseCtx)
-			return
-		}
-		conn.Release()
-	}()
-	if err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, "provider-renewal:"+providerID).Scan(&locked); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "provider-renewal:"+providerID).Scan(&locked); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if !locked {
-		return fiber.NewError(409, "A renewal change is already in progress. Check its status before retrying.")
+		return renewalOperationBusy()
 	}
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$1::uuid AND operation_expires_at>clock_timestamp())`, providerID).Scan(&busy); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	if busy {
+		return renewalOperationBusy()
+	}
+	operation := uuid.NewString()
 	var pending bool
-	if err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='pending')`, providerID).Scan(&pending); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='pending')`, providerID).Scan(&pending); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if pending {
 		return fiber.NewError(409, "Check your pending payment before changing renewal settings.")
 	}
 	var paidThrough *time.Time
-	if err = conn.QueryRow(ctx, `SELECT MAX(current_period_end) FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now()`, providerID).Scan(&paidThrough); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT MAX(current_period_end) FROM provider_subscriptions WHERE provider_id=$1::uuid AND status='active' AND current_period_end>now()`, providerID).Scan(&paidThrough); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if req.NextPlanID != "" {
@@ -108,7 +105,7 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 			return fiber.NewError(409, "Your paid period has ended. Choose the plan and complete checkout instead.")
 		}
 		var valid bool
-		if err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscription_plans WHERE id=$1::uuid AND is_active AND amount_ngn>0)`, req.NextPlanID).Scan(&valid); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscription_plans WHERE id=$1::uuid AND is_active AND amount_ngn>0)`, req.NextPlanID).Scan(&valid); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if !valid {
@@ -117,14 +114,19 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 	}
 	// Store the request even if the gateway becomes unavailable. Never label an
 	// uncertain cancellation as stopped, nor modify the paid subscription status.
-	if _, err = conn.Exec(ctx, `INSERT INTO provider_renewal_preferences(provider_id,renewal_status,updated_by)
- VALUES($1::uuid,'uncertain',$2::uuid) ON CONFLICT(provider_id) DO UPDATE SET renewal_status='uncertain',updated_by=EXCLUDED.updated_by,updated_at=now()`, providerID, userID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO provider_renewal_preferences(provider_id,renewal_status,updated_by,operation_token,operation_expires_at)
+ VALUES($1::uuid,'uncertain',$2::uuid,$3::uuid,clock_timestamp()+interval '2 minutes') ON CONFLICT(provider_id) DO UPDATE SET renewal_status='uncertain',updated_by=EXCLUDED.updated_by,operation_token=EXCLUDED.operation_token,operation_expires_at=EXCLUDED.operation_expires_at,updated_at=now()`, providerID, userID, operation); err != nil {
 		return fiber.ErrInternalServerError
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	// Even a failed/ambiguous gateway response leaves renewal_status=uncertain.
+	defer releaseRenewalOperation(m.db, providerID, operation)
 	fail := func(message string) error {
 		return fiber.NewError(502, message+" Paid access is unchanged. Check renewal status and retry.")
 	}
-	rows, err := conn.Query(ctx, `SELECT s.id::text,s.customer_email,COALESCE(s.gateway_plan_id,p.flutterwave_plan_id),
+	rows, err := m.db.Query(ctx, `SELECT s.id::text,s.customer_email,COALESCE(s.gateway_plan_id,p.flutterwave_plan_id),
  (SELECT receipt.flutterwave_transaction_id FROM provider_subscription_payments receipt WHERE receipt.subscription_id=s.id ORDER BY receipt.paid_at,receipt.flutterwave_transaction_id LIMIT 1)
  FROM provider_subscriptions s JOIN provider_subscription_plans p ON p.id=s.plan_id
  WHERE s.provider_id=$1::uuid AND s.billing_mode='recurring' AND EXISTS(SELECT 1 FROM provider_subscription_payments receipt WHERE receipt.subscription_id=s.id)
@@ -155,7 +157,7 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 		return fail("Your billing history needs Support review before cancellation can be confirmed.")
 	}
 	var untracked bool
-	if err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND s.billing_mode='recurring' AND s.status='active' AND s.current_period_end>now() AND NOT EXISTS(SELECT 1 FROM provider_subscription_payments receipt WHERE receipt.subscription_id=s.id))`, providerID).Scan(&untracked); err != nil {
+	if err = m.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=$1::uuid AND s.billing_mode='recurring' AND s.status='active' AND s.current_period_end>now() AND NOT EXISTS(SELECT 1 FROM provider_subscription_payments receipt WHERE receipt.subscription_id=s.id))`, providerID).Scan(&untracked); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	if untracked {
@@ -178,9 +180,9 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 		}
 	}
 	for id := range targets {
-		tag, e := conn.Exec(ctx, `INSERT INTO provider_renewal_cancellations(gateway_subscription_id,provider_id,requested_by,status)
-  VALUES($1,$2::uuid,$3::uuid,'requested') ON CONFLICT(gateway_subscription_id) DO UPDATE SET status='requested',updated_at=now()
-  WHERE provider_renewal_cancellations.provider_id=EXCLUDED.provider_id`, id, providerID, userID)
+		tag, e := m.db.Exec(ctx, `INSERT INTO provider_renewal_cancellations(gateway_subscription_id,provider_id,requested_by,status)
+  SELECT $1,$2::uuid,$3::uuid,'requested' WHERE EXISTS(SELECT 1 FROM provider_renewal_preferences WHERE provider_id=$2::uuid AND operation_token=$4::uuid AND operation_expires_at>clock_timestamp()) ON CONFLICT(gateway_subscription_id) DO UPDATE SET status='requested',updated_at=now()
+  WHERE provider_renewal_cancellations.provider_id=EXCLUDED.provider_id`, id, providerID, userID, operation)
 		if e != nil {
 			return fiber.ErrInternalServerError
 		}
@@ -198,17 +200,14 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 			return fail("Cancellation was requested but Flutterwave has not confirmed that renewal stopped.")
 		}
 	}
-	if _, err = conn.Exec(ctx, `UPDATE provider_renewal_cancellations SET status='confirmed',updated_at=now() WHERE provider_id=$1::uuid AND status<>'confirmed'`, providerID); err != nil {
-		return fiber.ErrInternalServerError
-	}
 	var next any
 	var effective any
 	if req.NextPlanID != "" {
 		next = req.NextPlanID
 		effective = paidThrough
 	}
-	if _, err = conn.Exec(ctx, `UPDATE provider_renewal_preferences SET renewal_status='stopped',next_plan_id=$2::uuid,change_at=$3,updated_at=now() WHERE provider_id=$1::uuid`, providerID, next, effective); err != nil {
-		return fiber.ErrInternalServerError
+	if err = completeRenewalOperation(ctx, m.db, providerID, userID, operation, next, effective); err != nil {
+		return err
 	}
 	m.gatewayMu.Lock()
 	m.gatewayExpiry = time.Time{}

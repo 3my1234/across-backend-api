@@ -43,6 +43,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	if cfg.AppEnv == "production" || cfg.AppEnv == "staging" {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := db.VerifyProviderRenewalSchema(checkCtx, store.PG)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	app := fiber.New(fiber.Config{
 		AppName:      "Across API",
 		ServerHeader: "Across",
