@@ -80,7 +80,8 @@ def main():
         for ident in containers+[sentinel]:
             if exists(ident):call(['docker','rm','-f',ident])
         names=['deploy/native-lab/'+p.name for p in Path(__file__).parent.glob('*.py') if not p.name.startswith('test_')]
-        names+=['deploy/native-lab/render.cjs','deploy/cohost-lab/trial_runner.py']
+        names+=['deploy/native-lab/render.cjs','deploy/singlehost-lab/message_fanout_replay.py']
+        names+=['deploy/cohost-lab/'+p.name for p in (SOURCE/'deploy/cohost-lab').glob('*.py') if not p.name.startswith('test_')]
         report['code_hashes']={n:hashlib.sha256((SOURCE/n).read_bytes()).hexdigest() for n in sorted(names)}
         atomic(output/'native-lifecycle.json',report)
     print(json.dumps(report,indent=2))

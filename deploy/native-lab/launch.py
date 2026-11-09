@@ -19,12 +19,16 @@ def commands(script,config,run,coordinator=None,cleanup=None,peer_task=None,life
     return prefix,peer,job
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('action',choices=('start','status','stop'));p.add_argument('config',type=Path);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('start','status','stop'));p.add_argument('config',type=Path);p.add_argument('--approve-trial',action='store_true');a=p.parse_args()
     config=load(a.config);prefix,peer,job=commands(Path(__file__).with_name('native.py'),a.config,config['run'])
     if a.action=='status':
         subprocess.run(['systemctl','status','--no-pager',prefix+'-job',prefix+'-peer'],check=False)
+        for name in ('progress.json','result.json','native-cleanup.json'):
+            path=Path(config['main_base'])/name
+            if path.is_file():print(name+': '+path.read_text())
         return
     if a.action=='stop':subprocess.run(['systemctl','stop',prefix+'-job'],check=True);return
+    if not a.approve_trial:raise ValueError('starting live-host load requires --approve-trial; preparation is not approval')
     for unit in (prefix+'-peer',prefix+'-job'):
         if subprocess.run(['systemctl','is-active','--quiet',unit]).returncode==0:raise ValueError('existing run active; do not duplicate')
     runner=NativeRunner(config)

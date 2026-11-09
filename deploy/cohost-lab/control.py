@@ -21,9 +21,12 @@ def command(manifest,operation):
         connection=[] if manifest['role']=="database" else ['-h','/tunnel','-p','55432']
         return ['docker','exec',ident,'psql',*connection,'-U','lab','-d','capacity_lab','-XAtc',
             "SELECT current_database() || ':' || current_setting('cluster_name')"]
-    if action=="start" and service in ("api1","api2","gateway","notification-worker","notification-provider") and manifest.get("load_authorized") is not True:
+    if action=="binary-identity":
+        if manifest['role']!='main' or service not in ('api1','api2','message-fanout'):raise ValueError('test API/worker identity only')
+        return ['docker','exec',ident,'sha256sum','/proc/1/exe']
+    if action=="start" and service in ("api1","api2","gateway","notification-worker","notification-provider","message-fanout") and manifest.get("load_authorized") is not True:
         raise ValueError("application startup/load not authorized")
-    if action=='start' and service not in ('api1','api2','gateway','notification-worker','notification-provider','seed','exporter','verifier','queue-check','lifecycle','redis','postgres','db-probe'):
+    if action=='start' and service not in ('api1','api2','gateway','notification-worker','notification-provider','message-fanout','seed','exporter','verifier','queue-check','lifecycle','redis','postgres','db-probe'):
         raise ValueError('service startup denied')
     if action in ("start","stop","logs"):
         return ["docker",action,*( ["--time","2"] if action=="stop" else ["--tail","2000"] if action=="logs" else []),ident]
