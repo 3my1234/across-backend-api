@@ -105,14 +105,19 @@ def state(ids):
     return [json.loads(x) for x in rows]
 
 
-def collect_checks(ids,diagnostics):
+def collect_checks(ids,diagnostics,urls=None):
     # Docker inspection and public HTTP are independent checks. Serializing a
     # valid2.5s HTTP observation behind up to3s of inspection can make a healthy
     # completed scan older than the unchanged3s peer freshness limit.
     with ThreadPoolExecutor(max_workers=4) as pool:
         inspection=pool.submit(state,ids)
-        results=list(pool.map(lambda url:probe(url,diagnostics),URLS))
+        results=list(pool.map(lambda url:probe(url,diagnostics),URLS if urls is None else urls))
         return results,inspection.result()
+
+def monitoring_urls(native,now,last_advisory):
+    # Advisory TLS work must not consume the bounded monitor's CPU every scan.
+    # API probes and every safety deadline/counter remain unchanged.
+    return BLOCKING_URLS if native and now-last_advisory<30 else URLS
 
 
 def approved_trial_transition(base,current):
@@ -144,7 +149,7 @@ def main():
     before=cpu();last=time.monotonic();high_cpu=high_io=0
     failures={u:0 for u in BLOCKING_URLS};slow={u:0 for u in BLOCKING_URLS}
     initial_oom=int(next(x.split()[1] for x in Path("/proc/vmstat").read_text().splitlines() if x.startswith("oom_kill ")))
-    next_tick=time.monotonic()+1
+    next_tick=time.monotonic()+1;last_advisory=float('-inf')
     try:
         while True:
             # Target one-second sampling, rather than adding a full second to
@@ -156,7 +161,11 @@ def main():
             high_io=high_io+elapsed if wait>10 else 0
             mem={k:int(v.split()[0])*1024 for k,v in (x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines())}
             probe_details={}
-            results,states=collect_checks(ids+m.get("container_ids",[]),probe_details)
+            if m.get('execution_mode')=='vps-native':
+                urls=monitoring_urls(True,now,last_advisory)
+                if any(url in ADVISORY_URLS for url in urls):last_advisory=now
+                results,states=collect_checks(ids+m.get("container_ids",[]),probe_details,urls)
+            else:results,states=collect_checks(ids+m.get("container_ids",[]),probe_details)
             update_health_counters(results,baseline,failures,slow)
             current=json.loads(a.manifest.read_text())
             if current.get("run")!=m["run"] or current.get("role")!=m["role"] or current.get("production_container_ids")!=ids:

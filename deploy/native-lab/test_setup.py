@@ -37,8 +37,11 @@ class SetupTests(unittest.TestCase):
             (base/'native-origin.json').write_text(json.dumps(dict(created_by='native-manager')))
             command='native-setup '+base64.b64encode(json.dumps(dict(action='cleanup',run=base.name)).encode()).decode()
             stdout=io.StringIO();stderr=io.StringIO()
-            cleanup=types.SimpleNamespace(clean=lambda _:print('Removed exact test key lines.'))
-            with patch.object(entry,'catalog',return_value=dict(role='database')),patch.object(entry,'base_for',return_value=base),patch.object(entry.subprocess,'run'),patch.dict('os.environ',SSH_ORIGINAL_COMMAND=command),patch.dict('sys.modules',operator_setup=cleanup),contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(stderr):
+            def child(args,**kwargs):
+                self.assertEqual(args[-1],'cleanup')
+                self.assertIs(kwargs['stdout'],stderr)
+                print('Removed exact test key lines.',file=kwargs['stdout'])
+            with patch.object(entry,'catalog',return_value=dict(role='database')),patch.object(entry,'base_for',return_value=base),patch.object(entry.subprocess,'run'),patch.object(entry,'call',side_effect=child),patch.dict('os.environ',SSH_ORIGINAL_COMMAND=command),contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(stderr):
                 entry.database_access()
             self.assertTrue(json.loads(stdout.getvalue())['cleanup_confirmed'])
             self.assertIn('Removed exact test key lines.',stderr.getvalue())

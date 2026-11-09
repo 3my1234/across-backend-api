@@ -96,11 +96,9 @@ def database_access():
     if action=='cleanup':
         if base.exists():
             subprocess.run(['systemctl','stop',base.name.replace('-','')+'nativeprepare'],check=False,timeout=30)
-            sys.path.insert(0,str(base/'tools'));from operator_setup import clean
-            # clean() writes human progress; keep the manager's stdout a single
-            # JSON receipt so successful cleanup is not mistaken for failure.
-            import contextlib
-            with contextlib.redirect_stdout(sys.stderr):clean(base)
+            # Redirect the subprocess file descriptor, not only Python print(),
+            # so install_keys and other cleanup children cannot corrupt JSON.
+            call([sys.executable,str(base/'tools/operator_setup.py'),str(base),'cleanup'],timeout=120,stdout=sys.stderr)
         print(json.dumps(dict(cleanup_confirmed=True,run=base.name)));return
     raise ValueError('native manager action denied')
 def main():
