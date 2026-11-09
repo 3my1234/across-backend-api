@@ -133,9 +133,17 @@ def prepare_main(config):
     base=Path(config['main_base']);c=catalog();payload=json.loads((base/'database-payload.json').read_text())
     manager(config,payload,timeout=30)
     stage(base)
-    # The host has no Node installation. Reuse the already-running portal's
-    # pinned runtime image, offline, rather than install software on production.
-    runtime=call(['docker','run','--rm','--network','none','--cpus','.5','--memory','256m','--memory-swap','256m','--pids-limit','64','--label','atlxpres.cohost.run='+base.name,'--cgroup-parent',shared(base.name),'--entrypoint','node',c['gate_image'],'--version'],timeout=30).decode().strip()
+    # The portal is a static web image, not a Node runtime. Cache the verifier
+    # runtime during guarded no-load preparation only; live execution is offline.
+    gate=c.get('gate_image')
+    if not gate:
+        if config.get('live_authorized'):raise ValueError('Node runtime not cached; refuse downloads during live execution')
+        phase(base,'cache verifier runtime')
+        with (base/'node-cache.log').open('wb') as log:call(['docker','pull','node:22-alpine'],timeout=180,stdout=log)
+        gate=call(['docker','image','inspect','node:22-alpine','--format','{{.Id}}']).decode().strip()
+        c['gate_image']=gate;atomic(ROOT/'catalog.json',c)
+    config['gate_image']=gate;atomic(base/'native.json',config)
+    runtime=call(['docker','run','--rm','--network','none','--cpus','.5','--memory','256m','--memory-swap','256m','--pids-limit','64','--label','atlxpres.cohost.run='+base.name,'--cgroup-parent',shared(base.name),'--entrypoint','node',gate,'--version'],timeout=30).decode().strip()
     atomic(base/'gate-runtime.json',dict(image=c['gate_image'],node_version=runtime,network='none'))
     # The k6 image is fetched once during authorized no-load installation only.
     image=c.get('generator_image')

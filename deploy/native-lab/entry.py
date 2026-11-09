@@ -30,6 +30,7 @@ def start(live):
     c=catalog()
     if c['role']!='main':raise ValueError('start on main VPS only')
     if live and not __import__('re').fullmatch('sha256:[a-f0-9]{64}',c.get('generator_image') or ''):raise ValueError('generator cache not prepared; no download during live execution')
+    if live and not __import__('re').fullmatch('sha256:[a-f0-9]{64}',c.get('gate_image') or ''):raise ValueError('verifier runtime not prepared; no download during live execution')
     if (ROOT/'active.json').exists():
         _,old=active()
         if not (old/'cleanup.complete').exists():raise ValueError('previous run not confirmed cleaned; inspect status before another start')
@@ -96,7 +97,10 @@ def database_access():
         if base.exists():
             subprocess.run(['systemctl','stop',base.name.replace('-','')+'nativeprepare'],check=False,timeout=30)
             sys.path.insert(0,str(base/'tools'));from operator_setup import clean
-            clean(base)
+            # clean() writes human progress; keep the manager's stdout a single
+            # JSON receipt so successful cleanup is not mistaken for failure.
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr):clean(base)
         print(json.dumps(dict(cleanup_confirmed=True,run=base.name)));return
     raise ValueError('native manager action denied')
 def main():

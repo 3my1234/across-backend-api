@@ -49,21 +49,24 @@ watchdogs or application workload. Both host-local watchdogs and hard-stop
 reapers must still be installed and verified during actual preparation.
 
 The launcher refuses a missing/mismatched lifecycle proof or prepared-runtime
-receipt. No runtime receipt is supplied with this branch: neither VPS has been
-prepared by this work. In particular, old cleaned-up test directories, credentials
+receipt. No runtime receipt is supplied with source code; actual installation
+must produce it. In particular, old cleaned-up test directories, credentials
 and approvals are not reusable as an active test installation.
 
 After a reviewed package and fresh run configuration are installed on both hosts,
-the main-host console command is the following **template, not a command ready
-to run against the current servers**:
+the stable main-host entry creates a fresh nonce. These commands become usable
+only after the actual two-host no-load rehearsal and cleanup are confirmed:
 
 ```bash
-python3 /root/atlxpres-cohost/RUN/source/deploy/native-lab/launch.py start /root/atlxpres-cohost/RUN/native.json --approve-trial
-python3 /root/atlxpres-cohost/RUN/source/deploy/native-lab/launch.py status /root/atlxpres-cohost/RUN/native.json
+python3 /root/atlxpres-native/source/deploy/native-lab/entry.py start --approve-trial
+python3 /root/atlxpres-native/source/deploy/native-lab/entry.py status
 ```
 
-Use the actual new nonce in place of RUN. `status` reads local units, progress,
-final stage results and cleanup confirmation. `stop` invokes systemd teardown.
+Use `start --prepare-only` for the explicit no-load rehearsal. Node and k6 images
+are cached during guarded preparation, pinned to immutable IDs, and must already
+exist before a live start. The static portal image is not a Node runtime.
+`status` reads local units, progress, final stage results and cleanup confirmation.
+Stopping the exact nonce's coordinator systemd unit invokes teardown.
 The coordinator has a120-minute deadline. Teardown preserves evidence, cleans
 the database side before removing its main-host key and stops only owned test
 resources. An unavailable peer is reported as unconfirmed cleanup; its independent
