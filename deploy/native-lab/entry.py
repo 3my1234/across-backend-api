@@ -1,7 +1,7 @@
 """Linux-only entry points. Start is manual; prepare-only never runs k6."""
 import argparse,base64,datetime,gzip,hashlib,json,os,signal,subprocess,sys,time,uuid
 from pathlib import Path
-from native import atomic,load,execute,cleanup,peer,HERE,SOURCE
+from native import atomic,load,execute,cleanup,stop_generator,peer,HERE,SOURCE
 from setup import ROOT,catalog,base_for,initialize,prepare_main,prepare_database,phase,call,manager
 from launch import commands
 from native_budget import setup as budget_setup
@@ -13,21 +13,17 @@ def active():
 def cleanup_active(config):
     base=Path(config['main_base']);(base/'native-draining').touch()
     # Manager can clean an interrupted setup even before per-run keys exist.
+    warning=stop_generator(config)
     remote_error=None
-    try:manager(config,dict(action='cleanup',run=base.name),timeout=210)
+    try:
+        result=json.loads(manager(config,dict(action='cleanup',run=base.name),timeout=120))
+        if result.get('cleanup_confirmed') is not True:raise RuntimeError('database did not confirm cleanup')
     except Exception as error:remote_error=type(error).__name__
-    from native import NativeRunner
-    runner=NativeRunner(config)
-    from setup import guard
     # Existing cleanup owns immutable IDs, volumes and keys. Stop the generator
     # first through the native ownership check; remote cleanup is idempotent.
-    try:cleanup(config)
-    except Exception:
-        if remote_error:raise RuntimeError('database cleanup unconfirmed: '+remote_error)
-        report=base/'native-cleanup.json'
-        if not (base/'cleanup.complete').exists():raise
-        atomic(report,dict(run=base.name,hosts=dict(database='confirmed',main='confirmed')))
+    cleanup(config,database_confirmed=remote_error is None)
     if remote_error:raise RuntimeError('database manager cleanup unconfirmed: '+remote_error)
+    if warning:raise RuntimeError(warning)
     prefix='atl-native-'+base.name.removeprefix('cohost-')
     subprocess.run(['systemctl','--no-block','stop',prefix+'-peer'],check=False,timeout=10)
 def start(live):
@@ -90,6 +86,9 @@ def database_access():
         unit=op['run'].replace('-','')+'nativeprepare'
         call(['systemd-run','--quiet','--unit',unit,'--property=Type=exec','--property=RuntimeMaxSec=1200','--property=CPUQuota=25%','--property=MemoryMax=256M','--property=KillMode=control-group',sys.executable,str(HERE/'entry.py'),'database-worker',str(base)])
         print(json.dumps(dict(prepare_started=True,load_started=False)));return
+    if base.exists():
+        origin=base/'native-origin.json'
+        if not origin.is_file() or json.loads(origin.read_text()).get('created_by')!='native-manager':raise ValueError('not a run created by this native manager')
     if action=='status':
         path=base/'setup-progress.json'
         print(path.read_text() if path.exists() else json.dumps(dict(ready=False,phase='not started')));return

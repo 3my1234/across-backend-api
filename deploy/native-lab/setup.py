@@ -61,6 +61,7 @@ def initialize(c,run,keys,live,expiry):
     atomic(base/'compose.json',doc)
     request=dict(run=run,role=c['role'],execution_mode='vps-native',images=c['images'],image_source=c['application']['source'],image_archive_sha256=c['archive_sha256'],compose_sha256=hashlib.sha256((base/'compose.json').read_bytes()).hexdigest(),key_expiry_utc=expiry,preinstalled_release_images=([c['images']['api'],c['images']['worker']] if c['role']=='main' else []))
     atomic(base/'request.json',request)
+    atomic(base/'native-origin.json',dict(created_by='native-manager',run=run,role=c['role'],source=c['source_commit']))
     atomic(base/'approval.json',dict(run=run,authorized_setup=True,authorized_image_import=True,load_authorized=False,approved_unix=time.time()))
     trial=dict(timing_policy='http-2s-observer-2.5s-v1',execution_mode='vps-native',run=run,load_authorized=live,fixture_preparation_authorized=True,spending_cap_usd=0,main_cpu=1,main_memory=2684354560,database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,shared_main_memory=4294967296,lifetime_seconds=7200,approved_unix=time.time(),source_commit=c['source_commit'],image_source=c['application']['source'],stages=[list(s) for s in STAGES],client_hashes=client_hashes(base/'source'))
     atomic(base/'trial-approval.json',trial)
@@ -88,6 +89,7 @@ def restore(base,c):
         for block in iter(lambda:stream.read(1024*1024),b''):h.update(block)
     if h.hexdigest()!=meta['sha256'] or dump.stat().st_size!=meta['bytes']:raise ValueError('cached snapshot checksum/size mismatch')
     if sql(base,"SELECT count(*) FROM pg_tables WHERE schemaname='public'")!='0':raise ValueError('restore target must be empty')
+    if sql(base,"SELECT current_setting('server_version_num')::int/10000")!='16':raise ValueError('qualification requires isolated PostgreSQL16')
     m=json.loads((base/'manifest.json').read_text());ident=m['services']['postgres']
     with dump.open('rb') as src,(base/'restore.log').open('wb') as log:
         process=subprocess.Popen(['docker','exec','-i',ident,'pg_restore','-U','lab','-d','capacity_lab','--single-transaction','--exit-on-error','--no-owner','--no-acl'],stdin=src,stdout=log,stderr=log)

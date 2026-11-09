@@ -148,11 +148,17 @@ def main():
     # Record all newly created IDs even if Compose subsequently fails; no broad cleanup.
     try:
         if request.get('execution_mode')=='vps-native' and request['role']=='main':
-            from native_budget import setup,additional_required
+            from native_budget import setup,additional_required,shared,SHARED_MEMORY
             meminfo=Path('/proc/meminfo').read_text().splitlines()
             available=int(next(v.split()[1] for v in meminfo if v.startswith('MemAvailable:')))*1024
-            additional_required(available,0)
-            for command in setup(request['run']):subprocess.run(command,check=True,timeout=30)
+            parent=Path('/sys/fs/cgroup')/shared(request['run'])
+            current=int((parent/'memory.current').read_text()) if parent.exists() else 0
+            additional_required(available,current)
+            if parent.exists():
+                from verify_cgroup import verify_files
+                verify_files(parent,3.5,SHARED_MEMORY,4096)
+            else:
+                for command in setup(request['run']):subprocess.run(command,check=True,timeout=30)
         for command in commands[:3]:
             if not (base/'local.lease').exists() or time.time()-(base/'local.lease').stat().st_mtime>5:
                 raise ValueError('setup watchdog lost; do not create more resources')

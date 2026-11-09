@@ -174,7 +174,16 @@ def peer(config):
         # Both pre-existing local watchdogs/reapers retain independent stop deadlines.
         raise
 
-def cleanup(config):
+def stop_generator(config):
+    found=subprocess.run(['docker','inspect','cohost-generator'],capture_output=True,text=True,timeout=10)
+    if found.returncode==0:
+        item=json.loads(found.stdout)[0]
+        if item['Config'].get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:return 'foreign generator; preserved'
+        subprocess.run(['docker','stop','--timeout','5',item['Id']],check=True,capture_output=True,timeout=20)
+        subprocess.run(['docker','rm',item['Id']],check=True,capture_output=True,timeout=15)
+    return None
+
+def cleanup(config,database_confirmed=False):
     runner=NativeRunner(config);result={}
     (runner.base/'native-draining').touch()
     from native_budget import shared
@@ -187,15 +196,11 @@ def cleanup(config):
         previous=json.loads(saved.read_text())
         if previous.get('run')==config['run'] and previous.get('hosts')==dict(database='confirmed',main='confirmed'):return
     # Never stop a generator owned by a different run, even on coordinator SIGKILL.
-    found=subprocess.run(['docker','inspect','cohost-generator'],capture_output=True,text=True,timeout=10)
-    if found.returncode==0:
-        item=json.loads(found.stdout)[0]
-        if item['Config'].get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:result['generator']='foreign generator; preserved'
-        else:
-            subprocess.run(['docker','stop','--timeout','5',item['Id']],check=True,capture_output=True,timeout=20)
-            subprocess.run(['docker','rm',item['Id']],check=True,capture_output=True,timeout=15)
+    warning=stop_generator(config)
+    if warning:result['generator']=warning
     # Remote cleanup first: main cleanup removes the test-only database identity key.
-    for role in ('database','main'):
+    if database_confirmed:result['database']='confirmed'
+    for role in (('main',) if database_confirmed else ('database','main')):
         try:runner.ssh(role,'cleanup',timeout=180);result[role]='confirmed'
         except Exception as e:result[role]='unconfirmed: '+type(e).__name__
     atomic(Path(config['main_base'])/'native-cleanup.json',dict(run=config['run'],hosts=result))
