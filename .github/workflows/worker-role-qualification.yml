@@ -46,6 +46,10 @@ jobs:
         run: |
           docker pull alpine:3.20
           sudo --preserve-env=GITHUB_ACTIONS python3 deploy/native-lab/lifecycle.py prove "$PWD/native-evidence"
+      - name: Make synthetic no-load evidence readable to the artifact uploader
+        if: always()
+        run: |
+          if [ -d native-evidence ]; then sudo chown -R "$(id -u):$(id -g)" native-evidence; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

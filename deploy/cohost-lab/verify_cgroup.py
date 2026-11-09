@@ -6,7 +6,7 @@ import subprocess
 from safety import validate_inventory
 
 
-def verify_files(directory, cpu, memory):
+def verify_files(directory, cpu, memory, tasks_max=None):
     quota,period=(directory/"cpu.max").read_text().split()
     if quota=="max" or int(period)<=0 or int(quota)/int(period)>cpu:
         raise ValueError("test parent CPU cap absent or excessive")
@@ -17,12 +17,14 @@ def verify_files(directory, cpu, memory):
     weight=(directory/"io.weight").read_text().splitlines()
     if not weight or any(int(line.split()[-1])>10 for line in weight):raise ValueError("test IO weight too high")
     tasks=(directory/"pids.max").read_text().strip()
-    if tasks=="max" or int(tasks)>(2048 if cpu==2 else 512):raise ValueError("test tasks limit absent/excessive")
+    if tasks=="max" or int(tasks)>(tasks_max if tasks_max is not None else 2048 if cpu==2 else 512):raise ValueError("test tasks limit absent/excessive")
 
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("manifest",type=Path);a=ap.parse_args()
     m=json.loads(a.manifest.read_text());role=m.get("role")
+    approval_path=a.manifest.parent/'trial-approval.json'
+    native=approval_path.exists() and json.loads(approval_path.read_text()).get('execution_mode')=='vps-native'
     if role not in ("main","database"):raise ValueError("invalid role")
     ids=m.get("container_ids",[])
     raw=subprocess.check_output(["docker","inspect",*ids],text=True,timeout=10)
@@ -40,7 +42,7 @@ def main():
         if ".." in relative.parts or expected not in relative.parts:raise ValueError("test parent escaped")
         parent=Path('/sys/fs/cgroup').joinpath(*relative.parts[:relative.parts.index(expected)+1])
         verified+=1
-        verify_files(parent,2 if role=="main" else 3,(2684354560 if role=="main" else 3221225472))
+        verify_files(parent,(1 if role=='main' else 2) if native else (2 if role=="main" else 3),(2684354560 if role=="main" else 3221225472),2048 if role=='main' else 512)
     if not verified:raise ValueError("at least one live test cgroup must be verified")
     print(json.dumps(dict(effective_test_parent="verified",role=role,containers=len(records),dedicated_cpu_guarantee=False)))
 

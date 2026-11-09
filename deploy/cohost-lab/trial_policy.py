@@ -9,6 +9,8 @@ def validate(approval,run,now=None):
     expected=dict(timing_policy="http-2s-observer-2.5s-v1",run=run,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,
         main_cpu=2,main_memory=2684354560,database_cpu=3,database_memory=3221225472,
         generator_cpu=2,generator_memory=4294967296,lifetime_seconds=LIFETIME)
+    if approval.get('execution_mode')=='vps-native':
+        expected.update(main_cpu=1,database_cpu=2)
     for key,value in expected.items():
         if type(approval.get(key)) is not type(value) or approval.get(key)!=value:raise ValueError('unreviewed approval field: '+key)
     if not 0<=now-approval.get('approved_unix',0)<=86400:raise ValueError('current explicit trial approval required')

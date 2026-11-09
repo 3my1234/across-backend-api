@@ -45,7 +45,7 @@ def plan(request, compose):
     anchor=run.replace("-","")+role+"anchor.service"
     commands=[
         ["systemd-run","--unit",anchor,"--slice",parent,"/bin/sleep","infinity"],
-        ["systemctl","set-property","--runtime",parent,"CPUQuota="+("200%" if role=="main" else "100%"),
+        ["systemctl","set-property","--runtime",parent,"CPUQuota="+("100%" if role=='main' and request.get('execution_mode')=='vps-native' else "200%" if role=="main" else "100%"),
          "MemoryMax="+("2684354560" if role=="main" else "3221225472"),"MemorySwapMax=0","CPUWeight=10","IOWeight=10",
          "TasksMax="+("2048" if role=="main" else "512")],
         ["docker","compose","-p",compose["name"],"-f","compose.json","create","--no-build","--pull","never"]]

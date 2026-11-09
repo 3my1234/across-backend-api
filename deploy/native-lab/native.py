@@ -55,6 +55,7 @@ class NativeRunner(Runner):
     def __init__(self,config):
         self.native=config;self.base=Path(config['main_base'])
         approval=json.loads((self.base/'trial-approval.json').read_text())
+        if approval.get('execution_mode')!='vps-native':raise ValueError('native1CPU API/2CPU database approval required')
         super().__init__(SOURCE,Path(config['peer_config']),approval,self.base/'results')
     def control_process(self,role,command):
         if role=='main':return [sys.executable,str(HERE/'local.py'),str(self.base),command]

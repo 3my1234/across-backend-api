@@ -44,6 +44,7 @@ def main():
         # The peer outlives the short coordinator deadline, so that case tests
         # the coordinator's RuntimeMaxSec rather than a peer stop.
         peer=[v if v!='--property=RuntimeMaxSec='+str(deadline) else '--property=RuntimeMaxSec=120' for v in peer]
+        peer.insert(1,'--setenv=GITHUB_ACTIONS=true');job.insert(1,'--setenv=GITHUB_ACTIONS=true')
         call(peer);call(job)
         atomic(base/'units.json',dict(prefix=prefix))
         return  # Launching console/client process is now gone.
@@ -73,7 +74,9 @@ def main():
             (base/'journal.txt').write_bytes(call(['journalctl','--no-pager','-u',prefix+'-job','-u',prefix+'-peer']))
         report.update(unrelated_container_preserved=True,passed=True)
     finally:
-        for prefix in units:subprocess.run(['systemctl','stop',prefix+'-job',prefix+'-peer'],check=False,timeout=40)
+        for prefix in units:
+            (output/(prefix+'-journal.txt')).write_bytes(call(['journalctl','--no-pager','-u',prefix+'-job','-u',prefix+'-peer']))
+            subprocess.run(['systemctl','stop',prefix+'-job',prefix+'-peer'],check=False,timeout=40)
         for ident in containers+[sentinel]:
             if exists(ident):call(['docker','rm','-f',ident])
         names=['deploy/native-lab/'+p.name for p in Path(__file__).parent.glob('*.py') if not p.name.startswith('test_')]

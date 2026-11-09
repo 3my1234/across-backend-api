@@ -35,8 +35,8 @@ def activate(base):
     temporary.write_text(json.dumps(m));temporary.chmod(0o600)
     temporary.replace(base/'manifest.json')
     if role=='database':
-        call(['systemctl','set-property','--runtime',prefix+'database.slice','CPUQuota=300%'])
-        call(['docker','update','--cpus','3',m['services']['postgres']])
+        call(['systemctl','set-property','--runtime',prefix+'database.slice','CPUQuota='+str(approval['database_cpu']*100)+'%'])
+        call(['docker','update','--cpus',str(approval['database_cpu']),m['services']['postgres']])
     # Preserve the running observer and its independent sequence: no heartbeat gap.
     # It validates the separate root-owned approval before changing to peer-lease mode.
     call(['python3',str(base/'tools/verify_cgroup.py'),str(base/'manifest.json')])
