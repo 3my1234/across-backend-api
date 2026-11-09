@@ -25,6 +25,7 @@ def load(path,live=True):
     base=Path('/root/atlxpres-cohost')/run
     if path!=base/'native.json' or config.get('main_base')!=str(base):raise ValueError('fixed owned main run directory required')
     if not re.fullmatch(r'(?:[\w./:-]+@)?sha256:[0-9a-f]{64}',config.get('generator_image','')):raise ValueError('immutable generator image required')
+    if not re.fullmatch('sha256:[0-9a-f]{64}',config.get('gate_image','')):raise ValueError('immutable existing Node runtime image required')
     if config.get('generator_ip')!='172.29.248.21':raise ValueError('original trusted synthetic generator address required')
     if config.get('network')!=run+'-main_lab':raise ValueError('owned private generator network required')
     if config.get('stages')!=[list(s) for s in STAGES]:raise ValueError('original stages must remain unchanged')
@@ -75,6 +76,9 @@ class NativeRunner(Runner):
     def generator_parent(self):
         from native_budget import shared
         return ['--cgroup-parent',shared(self.approval['run'])]
+    def stage_gate_command(self,directory,profile,target):
+        from native_budget import shared
+        return ['docker','run','--rm','--name',self.approval['run']+'-gate','--label','atlxpres.cohost.run='+self.approval['run'],'--network','none','--read-only','--cpus','.5','--memory','256m','--memory-swap','256m','--pids-limit','64','--cgroup-parent',shared(self.approval['run']),'--user','0:0','--mount','type=bind,src='+str(SOURCE)+',dst=/source,readonly','--mount','type=bind,src='+str(directory)+',dst=/evidence,readonly','--entrypoint','node',self.native['gate_image'],'/source/deploy/cohost-lab/stage_gate.mjs','/evidence/summary.json','/evidence/reconciliation.jsonl',profile,str(target)]
     def connect_gateway(self):
         # Never bind or target main-host8080: production already owns that port.
         deadline=time.monotonic()+60
@@ -175,13 +179,15 @@ def peer(config):
         raise
 
 def stop_generator(config):
-    found=subprocess.run(['docker','inspect','cohost-generator'],capture_output=True,text=True,timeout=10)
-    if found.returncode==0:
-        item=json.loads(found.stdout)[0]
-        if item['Config'].get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:return 'foreign generator; preserved'
-        subprocess.run(['docker','stop','--timeout','5',item['Id']],check=True,capture_output=True,timeout=20)
-        subprocess.run(['docker','rm',item['Id']],check=True,capture_output=True,timeout=15)
-    return None
+    warnings=[]
+    for name in ('cohost-generator',config['run']+'-gate'):
+        found=subprocess.run(['docker','inspect',name],capture_output=True,text=True,timeout=10)
+        if found.returncode==0:
+            item=json.loads(found.stdout)[0]
+            if item['Config'].get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:warnings.append('foreign generator; preserved');continue
+            subprocess.run(['docker','stop','--timeout','5',item['Id']],check=True,capture_output=True,timeout=20)
+            subprocess.run(['docker','rm',item['Id']],check=True,capture_output=True,timeout=15)
+    return '; '.join(warnings) or None
 
 def cleanup(config,database_confirmed=False):
     runner=NativeRunner(config);result={}

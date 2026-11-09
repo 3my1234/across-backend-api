@@ -63,7 +63,7 @@ def start(live):
     (base/'ssh_config').write_text(peerconf);(base/'ssh_config').chmod(0o600)
     payload=dict(action='prepare',run=run,keys=keys,live=live,expiry=expiry)
     atomic(base/'database-payload.json',payload)
-    config=dict(run=run,main_base=str(base),peer_config=str(base/'peer.conf'),manager_config=str(ROOT/'manager.conf'),generator_image=c['generator_image'],generator_ip='172.29.248.21',network=run+'-main_lab',stages=[list(s) for s in __import__('trial_policy').STAGES],application=c['application'],client_hashes=__import__('trial_policy').client_hashes(SOURCE),code_hashes=proof['code_hashes'],lifecycle_sha256=hashlib.sha256((ROOT/'native-lifecycle.json').read_bytes()).hexdigest(),live_authorized=live)
+    config=dict(run=run,main_base=str(base),peer_config=str(base/'peer.conf'),manager_config=str(ROOT/'manager.conf'),generator_image=c['generator_image'],gate_image=c['gate_image'],generator_ip='172.29.248.21',network=run+'-main_lab',stages=[list(s) for s in __import__('trial_policy').STAGES],application=c['application'],client_hashes=__import__('trial_policy').client_hashes(SOURCE),code_hashes=proof['code_hashes'],lifecycle_sha256=hashlib.sha256((ROOT/'native-lifecycle.json').read_bytes()).hexdigest(),live_authorized=live)
     atomic(base/'native.json',config);(base/'native-lifecycle.json').write_bytes((ROOT/'native-lifecycle.json').read_bytes())
     atomic(ROOT/'active.json',dict(run=run,load_authorized=live))
     for command in budget_setup(run):call(command,timeout=30)

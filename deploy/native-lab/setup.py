@@ -133,6 +133,10 @@ def prepare_main(config):
     base=Path(config['main_base']);c=catalog();payload=json.loads((base/'database-payload.json').read_text())
     manager(config,payload,timeout=30)
     stage(base)
+    # The host has no Node installation. Reuse the already-running portal's
+    # pinned runtime image, offline, rather than install software on production.
+    runtime=call(['docker','run','--rm','--network','none','--cpus','.5','--memory','256m','--memory-swap','256m','--pids-limit','64','--label','atlxpres.cohost.run='+base.name,'--cgroup-parent',shared(base.name),'--entrypoint','node',c['gate_image'],'--version'],timeout=30).decode().strip()
+    atomic(base/'gate-runtime.json',dict(image=c['gate_image'],node_version=runtime,network='none'))
     # The k6 image is fetched once during authorized no-load installation only.
     image=c.get('generator_image')
     if not image:

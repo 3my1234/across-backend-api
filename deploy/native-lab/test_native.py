@@ -67,7 +67,7 @@ class NativeTests(unittest.TestCase):
             with patch.object(native,'NativeRunner',return_value=r),patch.object(native.subprocess,'run',return_value=found) as run:
                 with self.assertRaisesRegex(RuntimeError,'cleanup incomplete'):native.cleanup(dict(run=RUN,main_base=d))
             self.assertEqual([c.args[0] for c in r.ssh.call_args_list],['database','main'])
-            self.assertEqual(run.call_count,1)
+            self.assertEqual(run.call_count,2)
     def test_remote_cleanup_failure_remains_visible(self):
         with tempfile.TemporaryDirectory() as d:
             r=Mock(base=Path(d));r.ssh.side_effect=[subprocess.TimeoutExpired('ssh',180),None]

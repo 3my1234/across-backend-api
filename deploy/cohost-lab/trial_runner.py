@@ -16,6 +16,8 @@ class Runner:
     def generator_image(self):
         return 'grafana/k6:2.3.0'
     def generator_parent(self):return []
+    def stage_gate_command(self,directory,profile,target):
+        return ['node',str(self.root/'deploy/cohost-lab/stage_gate.mjs'),str(directory/'summary.json'),str(directory/'reconciliation.jsonl'),profile,str(target)]
     def ssh(self,role,cmd,timeout=30,input=None,destination=None):
         args=['ssh','-F',str(self.config),'cohost-'+role,cmd]
         if destination is None:return subprocess.check_output(args,input=input,timeout=timeout)
@@ -229,7 +231,7 @@ class Runner:
         except Exception as error:failures.append('actual generator: '+str(error))
         if not failures:
             with (public/'gate.json').open('wb') as gate:
-                subprocess.run(['node',str(self.root/'deploy/cohost-lab/stage_gate.mjs'),str(public/'summary.json'),str(public/'reconciliation.jsonl'),profile,str(target)],check=True,stdout=gate)
+                subprocess.run(self.stage_gate_command(public,profile,target),check=True,stdout=gate)
         if observer.poll() is not None:failures.append('pool observer ended before the full stage/recovery window')
         self.control('main','stop','exporter');self.service('exporter')
         try:observer.wait(timeout=10)
