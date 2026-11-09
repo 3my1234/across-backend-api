@@ -105,12 +105,44 @@ def state(ids):
     return [json.loads(x) for x in rows]
 
 
-def collect_checks(ids,diagnostics,urls=None):
+def docker_connection():
+    import http.client,socket
+    class LocalDocker(http.client.HTTPConnection):
+        def connect(self):
+            self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            self.sock.connect('/var/run/docker.sock')
+    return LocalDocker('localhost',timeout=3)
+
+def native_state(ids):
+    """Read the identical Docker .State without a new Go CLI each second."""
+    import re
+    if not ids or any(not re.fullmatch('[a-f0-9]{64}',i) for i in ids):raise ValueError('invalid fixed container inventory')
+    connection=docker_connection();deadline=time.monotonic()+3;rows=[]
+    try:
+        for ident in ids:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise TimeoutError('Docker inspection exceeded3seconds')
+            connection.timeout=remaining
+            if connection.sock is not None:connection.sock.settimeout(remaining)
+            connection.request('GET','/containers/'+ident+'/json')
+            response=connection.getresponse()
+            if response.status!=200:raise ValueError('Docker inspection unavailable')
+            raw=response.read(1024*1024+1)
+            if len(raw)>1024*1024:raise ValueError('oversized container inspection')
+            row=json.loads(raw)
+            if row.get('Id')!=ident or not isinstance(row.get('State'),dict):raise ValueError('container identity/state mismatch')
+            rows.append(row['State'])
+        if time.monotonic()>deadline:raise TimeoutError('Docker inspection exceeded3seconds')
+        return rows
+    finally:connection.close()
+
+def collect_checks(ids,diagnostics,urls=None,native=False):
     # Docker inspection and public HTTP are independent checks. Serializing a
     # valid2.5s HTTP observation behind up to3s of inspection can make a healthy
     # completed scan older than the unchanged3s peer freshness limit.
     with ThreadPoolExecutor(max_workers=4) as pool:
-        inspection=pool.submit(state,ids)
+        inspection=pool.submit(native_state if native else state,ids)
         results=list(pool.map(lambda url:probe(url,diagnostics),URLS if urls is None else urls))
         return results,inspection.result()
 
@@ -164,7 +196,7 @@ def main():
             if m.get('execution_mode')=='vps-native':
                 urls=monitoring_urls(True,now,last_advisory)
                 if any(url in ADVISORY_URLS for url in urls):last_advisory=now
-                results,states=collect_checks(ids+m.get("container_ids",[]),probe_details,urls)
+                results,states=collect_checks(ids+m.get("container_ids",[]),probe_details,urls,native=True)
             else:results,states=collect_checks(ids+m.get("container_ids",[]),probe_details)
             update_health_counters(results,baseline,failures,slow)
             current=json.loads(a.manifest.read_text())
