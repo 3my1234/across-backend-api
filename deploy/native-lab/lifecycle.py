@@ -100,6 +100,8 @@ def main():
         for anchor in anchors:subprocess.run(['systemctl','stop',anchor],check=False,timeout=30)
         names=['deploy/native-lab/'+p.name for p in Path(__file__).parent.glob('*.py') if not p.name.startswith('test_')]
         names+=['deploy/native-lab/render.cjs','deploy/singlehost-lab/message_fanout_replay.py']
+        names+=['deploy/singlehost-lab/'+n for n in ('snapshot.py','runtime.py','database_patch.py')]
+        names+=['deploy/native-lab/release-migrations/'+p.name for p in (SOURCE/'deploy/native-lab/release-migrations').glob('*.sql')]
         names+=['deploy/cohost-lab/'+p.name for p in (SOURCE/'deploy/cohost-lab').glob('*.py') if not p.name.startswith('test_')]
         report['code_hashes']={n:hashlib.sha256((SOURCE/n).read_bytes()).hexdigest() for n in sorted(names)}
         atomic(output/'native-lifecycle.json',report)

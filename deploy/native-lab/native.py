@@ -200,6 +200,9 @@ def cleanup(config):
         except Exception as e:result[role]='unconfirmed: '+type(e).__name__
     atomic(Path(config['main_base'])/'native-cleanup.json',dict(run=config['run'],hosts=result))
     if any(v!='confirmed' for v in result.values()):raise RuntimeError('cleanup incomplete; preserve evidence; host-local reapers remain independent')
+    from install_ci_bundle import cleanup as socket_cleanup
+    socket_cleanup(runner.base)
+    for name in ('ci-main.key','ci-database.key'):(runner.base/name).unlink(missing_ok=True)
 
 def execute(config):
     runner=NativeRunner(config);validate(runner.approval,config['run'])

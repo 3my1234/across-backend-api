@@ -106,7 +106,13 @@ def main():
     # Import only the exact reviewed archive, under the independent safety guard.
     from image_identity import identities,resolve
     archive=base/'images.tar.gz'
-    aliases=identities(archive,request.get('image_archive_sha256'),set(s['image'] for s in compose['services'].values()))
+    expected=set(s['image'] for s in compose['services'].values())
+    release=set(request.get('preinstalled_release_images',[])) if request.get('execution_mode')=='vps-native' else set()
+    if not release<=expected or any(not re.fullmatch('sha256:[a-f0-9]{64}',i) for i in release):raise ValueError('invalid preinstalled native release identities')
+    aliases=identities(archive,request.get('image_archive_sha256'),expected-release)
+    for image in release:
+        if resolve([image])!=image:raise ValueError('pinned installed release image unavailable; do not pull a substitute')
+        aliases[image]=[image]
     resolved={}
     missing=[]
     for image in sorted({service['image'] for service in compose['services'].values()}):

@@ -33,10 +33,10 @@ def sql(base,text,timeout=180):
     _,ident=postgres(base)
     return call(['docker','exec','-i',ident,'psql','-U','lab','-d','capacity_lab','-XAtq','-v','ON_ERROR_STOP=1'],input=text.encode(),timeout=timeout).decode().strip()
 
-def database_state(base):
+def database_state(base,query=None):
     # All rows, not a sample: unordered sum of per-row hashes plus exact counts.
     # SHA256 protects the transported archive; this inventory checks restoration.
-    raw=sql(base,"""CREATE TEMP TABLE snapshot_inventory(name text,rows bigint,fingerprint text);
+    raw=(query or sql)(base,"""CREATE TEMP TABLE snapshot_inventory(name text,rows bigint,fingerprint text);
 DO $$ DECLARE r record; n bigint; h text; BEGIN
  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename LOOP
  EXECUTE format('SELECT count(*),coalesce(sum(hashtextextended(to_jsonb(t)::text,0)::numeric),0)::text FROM public.%I t',r.tablename) INTO n,h;

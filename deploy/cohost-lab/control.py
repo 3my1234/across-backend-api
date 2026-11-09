@@ -24,7 +24,8 @@ def command(manifest,operation):
     if action=="binary-identity":
         if manifest['role']!='main' or service not in ('api1','api2','message-fanout'):raise ValueError('test API/worker identity only')
         return ['docker','exec',ident,'sha256sum','/proc/1/exe']
-    if action=="start" and service in ("api1","api2","gateway","notification-worker","notification-provider","message-fanout") and manifest.get("load_authorized") is not True:
+    no_load_start=manifest.get('execution_mode')=='vps-native' and manifest.get('runtime_verification_authorized') is True and service in ('api1','api2','gateway','message-fanout')
+    if action=="start" and service in ("api1","api2","gateway","notification-worker","notification-provider","message-fanout") and manifest.get("load_authorized") is not True and not no_load_start:
         raise ValueError("application startup/load not authorized")
     if action=='start' and service not in ('api1','api2','gateway','notification-worker','notification-provider','message-fanout','seed','exporter','verifier','queue-check','lifecycle','redis','postgres','db-probe'):
         raise ValueError('service startup denied')
@@ -50,7 +51,8 @@ def command(manifest,operation):
     elif args[0]=="curl":
         allowed=(["curl","-fsS","--max-time","3","http://gateway:8080/api/v1/ready"],
                  ["curl","-fsS","http://localhost:8081/stats"])
-        if args not in allowed or service not in ("api1","api2","notification-provider"):raise ValueError("test URL only")
+        worker_ready=args==['curl','-fsS','--max-time','3','http://127.0.0.1:9090/api/v1/ready'] and service=='message-fanout'
+        if not worker_ready and (args not in allowed or service not in ("api1","api2","notification-provider")):raise ValueError("test URL only")
     else:raise ValueError("binary denied")
     return ["docker","exec","-i",ident,*args]
 
