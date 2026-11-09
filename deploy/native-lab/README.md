@@ -23,11 +23,23 @@ latency/error/overload gates, generator accounting, write reconciliation, durabl
 fan-out ledger and delayed mocked notification receipts remain in use. Passing a
 ramp is not passing the sustained stage. There is no1,000/10,000/100,000 stage.
 
-The API group retains1CPU/2.5GiB and PostgreSQL2CPU/3GiB. The generator has its
-separate qualified2CPU/4GiB ceiling. The main host must retain2GiB available to
-production even at those test memory ceilings. If those allocations do not fit,
-co-hosting this generator cannot preserve the reviewed safety envelope. Do not
-shrink its qualified memory or remove the reserve to force a start.
+The API subgroup retains1CPU/2.5GiB and PostgreSQL2CPU/3GiB. The generator retains
+its qualified2CPU/4GiB component ceiling. API, generator and coordinator/peer
+processes now share an ADDITIONAL4GiB main-host parent ceiling. They cannot all
+consume their separate maxima simultaneously. This is an explicit, more restrictive
+shared allocation, not a claim that all component maxima fit independently.
+Both host watchdogs/reapers remain outside it. Main admission budgets their full
+256MiB plus the unchanged2GiB production reserve and subtracts already resident
+test memory when calculating additional demand. The supplied6479MiB available
+main-host reading fits this6400MiB initial envelope narrowly; a fresh check is
+still required at installation/start. Database7191MiB available fits its3GiB test
+ceiling plus reserve and monitors. No swap or production configuration changes.
+
+The no-load Linux proof checks actual nested container cgroup membership and
+effective4GiB shared/2.5GiB API limits. Under real load, a shared-parent OOM or
+headroom failure is a resource-constrained test outcome, never a successful
+qualification or proof of an intrinsic backend limit. CPU/memory/latency/error
+and integrity gates remain unchanged.500-session capacity is still unproven.
 
 `lifecycle.py prove` is restricted to disposable Linux CI. It uses real detached
 systemd units and sleeping, isolated containers. It tests launcher exit, TERM,

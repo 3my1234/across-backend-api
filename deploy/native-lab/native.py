@@ -45,7 +45,7 @@ def load(path,live=True):
         if proof.is_symlink() or hashlib.sha256(proof.read_bytes()).hexdigest()!=config.get('lifecycle_sha256'):raise ValueError('pinned Linux lifecycle proof required')
         observed=json.loads(proof.read_text())
         if observed.get('passed') is not True or observed.get('code_hashes')!=config['code_hashes']:raise ValueError('lifecycle proof does not match installed native sources')
-        for name in ('detached','term_cleanup','kill_cleanup','deadline_cleanup','peer_loss_stops_job','unrelated_container_preserved'):
+        for name in ('detached','term_cleanup','kill_cleanup','deadline_cleanup','peer_loss_stops_job','unrelated_container_preserved','shared_budget_verified'):
             if observed.get(name) is not True:raise ValueError('missing lifecycle assertion: '+name)
         # A lifecycle proof alone does not certify the current API, restored DB or peer.
         readiness=json.loads((base/'native-readiness.json').read_text())
@@ -72,6 +72,9 @@ class NativeRunner(Runner):
     def generator_network(self):
         return ['--network',self.native['network'],'--ip',self.native['generator_ip']]
     def generator_image(self):return self.native['generator_image']
+    def generator_parent(self):
+        from native_budget import shared
+        return ['--cgroup-parent',shared(self.approval['run'])]
     def connect_gateway(self):
         # Never bind or target main-host8080: production already owns that port.
         deadline=time.monotonic()+60
@@ -174,6 +177,11 @@ def peer(config):
 def cleanup(config):
     runner=NativeRunner(config);result={}
     (runner.base/'native-draining').touch()
+    from native_budget import shared
+    parent=Path('/sys/fs/cgroup')/shared(config['run'])
+    try:
+        atomic(runner.base/'shared-budget-final.json',{n:(parent/n).read_text() for n in ('memory.max','memory.current','memory.events','cpu.max','cpu.stat')})
+    except OSError:pass  # A removed cgroup is not permission to skip owned cleanup.
     saved=Path(config['main_base'])/'native-cleanup.json'
     if saved.exists() and (runner.base/'cleanup.complete').exists():
         previous=json.loads(saved.read_text())

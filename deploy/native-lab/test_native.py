@@ -5,6 +5,7 @@ import native
 from launch import commands
 from trial_policy import STAGES,validate
 from control import command
+from native_budget import additional_required,shared,SHARED_MEMORY
 import time
 
 RUN='cohost-0123456789abcdef'
@@ -31,11 +32,16 @@ class NativeTests(unittest.TestCase):
         self.assertNotIn('--scope',job);self.assertNotIn('--wait',job)
         with self.assertRaises(ValueError):commands('/root/test/native.py','/root/test/native.json',RUN,lifetime=7201)
     def test_native_retains_reviewed_split_and_unchanged_workload(self):
-        approval=dict(execution_mode='vps-native',timing_policy='http-2s-observer-2.5s-v1',run=RUN,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,main_cpu=1,main_memory=2684354560,database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,lifetime_seconds=7200,approved_unix=time.time(),source_commit='a'*40,stages=[list(s) for s in STAGES])
+        approval=dict(execution_mode='vps-native',timing_policy='http-2s-observer-2.5s-v1',run=RUN,load_authorized=True,fixture_preparation_authorized=True,spending_cap_usd=0,main_cpu=1,main_memory=2684354560,database_cpu=2,database_memory=3221225472,generator_cpu=2,generator_memory=4294967296,shared_main_memory=SHARED_MEMORY,lifetime_seconds=7200,approved_unix=time.time(),source_commit='a'*40,stages=[list(s) for s in STAGES])
         validate(approval,RUN)
         self.assertEqual(STAGES[-1],('sustained-500','sustained',500,1800))
         for key,value in (('main_cpu',2),('database_cpu',3),('generator_memory',2*2**30),('stages',[])):
             with self.subTest(key=key),self.assertRaises(ValueError):validate(dict(approval,**{key:value}),RUN)
+    def test_observed_host_fits_shared_budget_and_existing_usage_not_double_counted(self):
+        additional_required(6479*2**20,0)
+        additional_required((6479-500)*2**20,500*2**20)
+        with self.assertRaises(ValueError):additional_required(6300*2**20,0)
+        with self.assertRaises(ValueError):shared('production')
     def test_prepared_fixture_identity_checked_before_session_writes(self):
         r=self.runner();r.approval=dict(run=RUN);r.sql=Mock(return_value='across_db:production');r.service=Mock();r.lab=Mock()
         with self.assertRaisesRegex(ValueError,'wrong disposable'):r.prepare()

@@ -2,11 +2,12 @@
 import argparse,json,os,subprocess,sys
 from pathlib import Path
 from native import load,NativeRunner
+from native_budget import shared,SHARED_MEMORY,additional_required
 
 def commands(script,config,run,coordinator=None,cleanup=None,peer_task=None,lifetime=7200):
     prefix='atl-native-'+run.removeprefix('cohost-')
     if not 1<=lifetime<=7200:raise ValueError('hard lifetime exceeded')
-    common=['systemd-run','--quiet','--property=Type=exec','--property=Restart=no','--property=RuntimeMaxSec='+str(lifetime),'--property=KillMode=control-group','--property=TasksMax=128']
+    common=['systemd-run','--quiet','--slice='+shared(run),'--property=Type=exec','--property=Restart=no','--property=RuntimeMaxSec='+str(lifetime),'--property=KillMode=control-group','--property=TasksMax=128']
     peer=common+['--unit='+prefix+'-peer','--property=CPUQuota=25%','--property=MemoryMax=128M',*(peer_task or [sys.executable,str(script),'peer',str(config)])]
     task=coordinator or [sys.executable,str(script),'execute',str(config)]
     final=cleanup or [sys.executable,str(script),'cleanup',str(config)]
@@ -35,10 +36,11 @@ def main():
     from trial_policy import validate
     validate(runner.approval,config['run'])
     if (runner.base/'cleanup.complete').exists() or (runner.base/'native-started').exists():raise ValueError('closed/previously launched run; do not reuse')
-    # Generator plus full app allocation and unchanged2GiB production reserve.
+    # Shared ceiling includes API subgroup, generator and coordinator/peer units.
     available=int(next(v.split()[1] for v in Path('/proc/meminfo').read_text().splitlines() if v.startswith('MemAvailable:')))*1024
-    required=runner.approval['generator_memory']+runner.approval['main_memory']+2*2**30
-    if available<required:raise ValueError('insufficient main-host reserve for generator+API allocation; no load started')
+    parent=Path('/sys/fs/cgroup')/shared(config['run'])
+    if (parent/'memory.max').read_text().strip()!=str(SHARED_MEMORY) or (parent/'memory.swap.max').read_text().strip()!='0':raise ValueError('shared native4GiB/no-swap ceiling missing')
+    additional_required(available,int((parent/'memory.current').read_text()))
     network=json.loads(subprocess.check_output(['docker','network','inspect',config['network']]))[0]
     if not network.get('Internal') or network.get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:raise ValueError('owned internal generator network required')
     if subprocess.run(['docker','inspect','cohost-generator'],capture_output=True).returncode==0:raise ValueError('existing generator name; do not replace it')

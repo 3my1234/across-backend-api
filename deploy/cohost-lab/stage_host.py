@@ -36,7 +36,8 @@ def plan(request, compose):
     if not re.fullmatch(r"cohost-[a-f0-9]{16}",run) or role not in ("main","database"):
         raise ValueError("invalid run or role")
     if compose.get("name")!=run+"-"+role:raise ValueError("compose project mismatch")
-    parent=run.replace("-","")+role+".slice"
+    from native_budget import app
+    parent=app(run,role,request.get('execution_mode')=='vps-native')
     for service in compose["services"].values():
         if service.get("labels",{}).get("atlxpres.cohost.run")!=run:raise ValueError("unowned service")
         if service.get("cgroup_parent")!=parent or service.get("build"):raise ValueError("unbounded service")
@@ -93,7 +94,7 @@ def main():
     # A separate setup-only watchdog protects production during NEW resource creation.
     from baseline import validate as validate_baseline
     validate_baseline(json.loads((base/'baseline.json').read_text()),time.time())
-    initial=dict(run=request['run'],role=request['role'],container_ids=[],services={},production_container_ids=production,load_authorized=False)
+    initial=dict(run=request['run'],role=request['role'],execution_mode=request.get('execution_mode','cohost'),container_ids=[],services={},production_container_ids=production,load_authorized=False)
     (base/'manifest.json').write_text(json.dumps(initial));(base/'manifest.json').chmod(0o600)
     guard=request['run'].replace('-','')+request['role']+'guard.service'
     subprocess.run(['systemd-run','--unit',guard,'--property','MemoryMax=128M','--property','CPUQuota=25%',
@@ -140,6 +141,12 @@ def main():
     # Docker daemon image-load work is monitored, not constrained by the CLI's cgroup.
     # Record all newly created IDs even if Compose subsequently fails; no broad cleanup.
     try:
+        if request.get('execution_mode')=='vps-native' and request['role']=='main':
+            from native_budget import setup,additional_required
+            meminfo=Path('/proc/meminfo').read_text().splitlines()
+            available=int(next(v.split()[1] for v in meminfo if v.startswith('MemAvailable:')))*1024
+            additional_required(available,0)
+            for command in setup(request['run']):subprocess.run(command,check=True,timeout=30)
         for command in commands[:3]:
             if not (base/'local.lease').exists() or time.time()-(base/'local.lease').stat().st_mtime>5:
                 raise ValueError('setup watchdog lost; do not create more resources')
@@ -153,7 +160,7 @@ def main():
                 services[row['Config']['Labels']['com.docker.compose.service']]=row['Id']
         volumes=capture(['docker','volume','ls','-q','--filter','label=atlxpres.cohost.run='+request['run']]).splitlines()
         networks=capture(['docker','network','ls','-q','--no-trunc','--filter','label=atlxpres.cohost.run='+request['run']]).splitlines()
-        manifest=dict(run=request['run'],role=request['role'],container_ids=ids,services=services,volumes=volumes,networks=networks,
+        manifest=dict(run=request['run'],role=request['role'],execution_mode=request.get('execution_mode','cohost'),container_ids=ids,services=services,volumes=volumes,networks=networks,
                       production_container_ids=production,load_authorized=False)
         pending=base/'manifest.next';pending.write_text(json.dumps(manifest,indent=2));pending.chmod(0o600);os.replace(pending,base/'manifest.json')
     if not (base/'local.lease').exists() or time.time()-(base/'local.lease').stat().st_mtime>5:raise ValueError('setup guardian lost; refuse startup')

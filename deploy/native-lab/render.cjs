@@ -19,6 +19,7 @@ function render(input) {
     doc.networks.lab.ipam.config[0].ip_range = '172.29.248.128/25';
     // No published port or host networking is needed by the local generator.
     for (const s of Object.values(doc.services)) {
+      s.cgroup_parent=input.run.replaceAll('-','')+'native-main.slice';
       if (s.ports || s.network_mode) throw Error('native services must remain private');
     }
   }

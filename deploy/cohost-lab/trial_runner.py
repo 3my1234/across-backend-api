@@ -15,6 +15,7 @@ class Runner:
         return ['--network','host','--add-host','gateway:127.0.0.1']
     def generator_image(self):
         return 'grafana/k6:2.3.0'
+    def generator_parent(self):return []
     def ssh(self,role,cmd,timeout=30,input=None,destination=None):
         args=['ssh','-F',str(self.config),'cohost-'+role,cmd]
         if destination is None:return subprocess.check_output(args,input=input,timeout=timeout)
@@ -149,7 +150,7 @@ class Runner:
         (suite/'sessions.js').write_text(generated)
         (public/'executed-client.sha256').write_text(expected)
         args=['docker','run','--user','0:0','--label','atlxpres.cohost.run='+self.approval['run'],'--name','cohost-generator',*self.generator_network(),
-            '--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512',
+            '--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512',*self.generator_parent(),
             '-v',str(suite)+':/suite:ro','-v',str(private)+':/exchange',
             '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_AUTH_MODE=established',
             '-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_TARGET='+str(target),'-e','LAB_SESSION_MIX=mixed',

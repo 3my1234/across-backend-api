@@ -68,8 +68,11 @@ def operation(base,action):
         report={name:(base/name).read_text() for name in names if (base/name).is_file()}
         if action=='observations' and 'watchdog.jsonl' in report:report['watchdog.jsonl']='\n'.join(report['watchdog.jsonl'].splitlines()[-20:])
         report['containers']=subprocess.check_output(['docker','stats','--no-stream','--format','{{json .}}',*m['container_ids']],text=True,timeout=15)
-        parent=Path('/sys/fs/cgroup')/(m['run'].replace('-','')+m['role']+'.slice')
+        from native_budget import directory
+        parent=directory(m['run'],m['role'],m.get('execution_mode')=='vps-native')
         report['parent_cgroup']={name:(parent/name).read_text() for name in ('cpu.max','cpu.stat','memory.max','memory.current','memory.events','io.stat')}
+        if m.get('execution_mode')=='vps-native' and m['role']=='main':
+            report['shared_native_cgroup']={name:(parent.parent/name).read_text() for name in ('cpu.max','cpu.stat','memory.max','memory.current','memory.events')}
         print(json.dumps(report))
     else:raise ValueError('trial operation denied')
 

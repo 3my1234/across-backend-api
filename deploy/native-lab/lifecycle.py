@@ -7,6 +7,8 @@ import hashlib,json,os,signal,subprocess,sys,time,uuid
 from pathlib import Path
 from launch import commands
 from native import atomic,SOURCE
+from native_budget import setup,shared,app,SHARED_MEMORY,directory
+from verify_cgroup import verify_files
 
 LABEL='atlxpres.native.proof'
 def call(args,**kwargs):return subprocess.check_output(args,timeout=30,**kwargs)
@@ -28,11 +30,13 @@ def main():
             time.sleep(.2)
     if action=='cleanup':
         base=Path(sys.argv[2]);run=sys.argv[3];ident=sys.argv[4]
-        if exists(ident):
-            row=json.loads(call(['docker','inspect',ident]))[0]
-            if row['Config'].get('Labels',{}).get(LABEL)!=run:raise ValueError('foreign proof container')
-            call(['docker','rm','-f',ident])
-        atomic(base/'cleaned.json',dict(run=run,container_absent=not exists(ident)))
+        owned=json.loads((base/'owned.json').read_text())
+        for container in owned:
+            if exists(container):
+                row=json.loads(call(['docker','inspect',container]))[0]
+                if row['Config'].get('Labels',{}).get(LABEL)!=run:raise ValueError('foreign proof container')
+                call(['docker','rm','-f',container])
+        atomic(base/'cleaned.json',dict(run=run,container_absent=not any(exists(i) for i in owned)))
         return
     if action=='begin':
         base=Path(sys.argv[2]);run=sys.argv[3];ident=sys.argv[4];deadline=int(sys.argv[5])
@@ -53,11 +57,25 @@ def main():
     image=call(['docker','image','inspect','alpine:3.20','--format','{{.Id}}'],text=True).strip()
     sentinel=call(['docker','run','-d','--network','none','--memory','16m','--cpus','.1',image,'sleep','300'],text=True).strip()
     report=dict(passed=False,load_started=False,proof_scope='disposable single-host systemd and owned Docker cleanup; real two-host readiness is separate')
-    units=[];containers=[]
+    units=[];containers=[];anchors=[]
     try:
         for case in ('term','kill','deadline','peer_loss'):
             run='cohost-'+uuid.uuid4().hex[:16];base=output/case;base.mkdir()
-            ident=call(['docker','run','-d','--network','none','--memory','16m','--cpus','.1','--label',LABEL+'='+run,image,'sleep','120'],text=True).strip();containers.append(ident)
+            for command in setup(run):call(command)
+            anchors.append(run.replace('-','')+'nativeanchor.service')
+            anchor=run.replace('-','')+'proofapp.service';anchors.append(anchor)
+            call(['systemd-run','--quiet','--unit',anchor,'--slice',app(run,'main',True),'/bin/sleep','infinity'])
+            call(['systemctl','set-property','--runtime',app(run,'main',True),'MemoryMax=2684354560','MemorySwapMax=0','CPUQuota=100%','CPUWeight=10','IOWeight=10','TasksMax=2048'])
+            ident=call(['docker','run','-d','--network','none','--cgroup-parent',shared(run),'--memory','4g','--memory-swap','4g','--cpus','2','--label',LABEL+'='+run,image,'sleep','120'],text=True).strip();containers.append(ident)
+            api=call(['docker','run','-d','--network','none','--cgroup-parent',app(run,'main',True),'--memory','512m','--cpus','.75','--label',LABEL+'='+run,image,'sleep','120'],text=True).strip();containers.append(api)
+            atomic(base/'owned.json',[ident,api])
+            parent=directory(run,'main',True)
+            verify_files(parent,1,2684354560,2048);verify_files(parent.parent,3.5,SHARED_MEMORY,4096)
+            for container,ancestor in ((ident,shared(run)),(api,app(run,'main',True))):
+                row=json.loads(call(['docker','inspect',container]))[0]
+                membership=Path('/proc/'+str(row['State']['Pid'])+'/cgroup').read_text()
+                if ancestor not in membership:raise ValueError('container escaped its effective shared/app budget')
+            report['shared_budget_verified']=True
             call([sys.executable,str(Path(__file__).resolve()),'begin',str(base),run,ident,'4' if case=='deadline' else '60'])
             prefix=json.loads((base/'units.json').read_text())['prefix'];units.append(prefix)
             wait(lambda:(base/'peer.json').exists() and (base/'worker.json').exists())
@@ -79,6 +97,7 @@ def main():
             subprocess.run(['systemctl','stop',prefix+'-job',prefix+'-peer'],check=False,timeout=40)
         for ident in containers+[sentinel]:
             if exists(ident):call(['docker','rm','-f',ident])
+        for anchor in anchors:subprocess.run(['systemctl','stop',anchor],check=False,timeout=30)
         names=['deploy/native-lab/'+p.name for p in Path(__file__).parent.glob('*.py') if not p.name.startswith('test_')]
         names+=['deploy/native-lab/render.cjs','deploy/singlehost-lab/message_fanout_replay.py']
         names+=['deploy/cohost-lab/'+p.name for p in (SOURCE/'deploy/cohost-lab').glob('*.py') if not p.name.startswith('test_')]

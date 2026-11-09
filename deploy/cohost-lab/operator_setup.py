@@ -32,6 +32,8 @@ def clean(base):
             call(['python3',str(base/'tools/cleanup.py'),str(manifest),'--execute','--remove-disposable-data'])
         call(['python3',str(base/'tools/install_keys.py'),str(base),'--execute','--remove'])
         subprocess.run(['systemctl','stop',prefix+role+'anchor.service'],check=False,timeout=30)
+        if request.get('execution_mode')=='vps-native' and role=='main':
+            subprocess.run(['systemctl','stop',prefix+'nativeanchor.service'],check=False,timeout=30)
         (base/'main-database.key').unlink(missing_ok=True)
         (base/'cleanup.complete').write_text(str(time.time()))
 
@@ -90,7 +92,8 @@ def main():
             elif a.action=='verify':
                 if role!='main':raise ValueError('main verification only')
                 key=base/'main-database.key';key.chmod(0o600)
-                call(['systemd-run','--unit',prefix+'dbtunnel.service','--slice',prefix+'main.slice',
+                from native_budget import app
+                call(['systemd-run','--unit',prefix+'dbtunnel.service','--slice',app(run,'main',r.get('execution_mode')=='vps-native'),
                       '--property','CPUQuota=25%','--property','MemoryMax=64M',
                       '/usr/bin/ssh','-i',str(key),'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',
                       '-o','UserKnownHostsFile='+str(base/'database_known_hosts'),'-o','ExitOnForwardFailure=yes',

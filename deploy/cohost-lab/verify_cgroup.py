@@ -29,7 +29,8 @@ def main():
     ids=m.get("container_ids",[])
     raw=subprocess.check_output(["docker","inspect",*ids],text=True,timeout=10)
     records=json.loads(raw);validate_inventory(m,records)
-    expected=m["run"].replace("-", "")+role+".slice"
+    from native_budget import app,shared,SHARED_MEMORY
+    expected=app(m['run'],role,native)
     verified=0
     for record in records:
         if record.get("HostConfig",{}).get("CgroupParent")!=expected:raise ValueError("configured test parent mismatch")
@@ -43,6 +44,9 @@ def main():
         parent=Path('/sys/fs/cgroup').joinpath(*relative.parts[:relative.parts.index(expected)+1])
         verified+=1
         verify_files(parent,(1 if role=='main' else 2) if native else (2 if role=="main" else 3),(2684354560 if role=="main" else 3221225472),2048 if role=='main' else 512)
+        if native and role=='main':
+            if parent.parent.name!=shared(m['run']):raise ValueError('missing shared native ancestor')
+            verify_files(parent.parent,3.5,SHARED_MEMORY,4096)
     if not verified:raise ValueError("at least one live test cgroup must be verified")
     print(json.dumps(dict(effective_test_parent="verified",role=role,containers=len(records),dedicated_cpu_guarantee=False)))
 

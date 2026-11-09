@@ -14,6 +14,7 @@ assert.throws(()=>render({run,role:'main',images:{...images,api:'latest'}}),/pin
 for(const s of Object.values(doc.services)) {
   assert.equal(s.ports,undefined);assert.equal(s.network_mode,undefined);
   assert.equal(s.labels['atlxpres.cohost.run'],run);
+  assert.equal(s.cgroup_parent,run.replaceAll('-','')+'native-main.slice');
 }
 assert.equal(render({run,role:'database',images}).networks.default.internal,true);
 console.log('Native network reservation and private services verified.');
