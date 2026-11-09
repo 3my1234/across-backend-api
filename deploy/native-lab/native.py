@@ -1,0 +1,165 @@
+"""Host-native adapter for the unchanged cohost workload. No live install/load by default.
+
+Main-host operations are local. The database uses the existing restricted,
+host-key-pinned, noninteractive test connection. No Windows/CI heartbeat exists.
+"""
+import argparse,concurrent.futures,hashlib,json,os,re,signal,subprocess,sys,time
+from pathlib import Path
+
+HERE=Path(__file__).resolve().parent
+SOURCE=HERE.parents[1]
+sys.path.insert(0,str(SOURCE/'deploy/cohost-lab'))
+from trial_runner import Runner,execute_sequence
+from trial_policy import STAGES,validate,client_hashes,peer_progress
+
+def atomic(path,value):
+    pending=path.with_suffix('.next')
+    pending.write_text(json.dumps(value));pending.chmod(0o600);pending.replace(path)
+
+def load(path,live=True):
+    if path.is_symlink() or not path.is_file():raise ValueError('regular native configuration required')
+    path=path.absolute()
+    if path.resolve()!=path:raise ValueError('symlinked native configuration parent')
+    config=json.loads(path.read_text());run=config.get('run','')
+    if not re.fullmatch('cohost-[a-f0-9]{16}',run):raise ValueError('invalid run nonce')
+    base=Path('/root/atlxpres-cohost')/run
+    if path!=base/'native.json' or config.get('main_base')!=str(base):raise ValueError('fixed owned main run directory required')
+    if not re.fullmatch(r'(?:[\w./:-]+@)?sha256:[0-9a-f]{64}',config.get('generator_image','')):raise ValueError('immutable generator image required')
+    if config.get('generator_ip')!='172.29.248.21':raise ValueError('original trusted synthetic generator address required')
+    if config.get('network')!=run+'-main_lab':raise ValueError('owned private generator network required')
+    if config.get('stages')!=[list(s) for s in STAGES]:raise ValueError('original stages must remain unchanged')
+    for p in (path,base,Path(config['peer_config'])):
+        if p.is_symlink() or not p.exists() or (os.name=='posix' and (p.stat().st_uid!=0 or p.stat().st_mode&0o022)):raise ValueError('unsafe native package path/owner/mode')
+    if config.get('client_hashes')!=client_hashes(SOURCE):raise ValueError('qualified client/policy source changed')
+    for name,digest in config.get('code_hashes',{}).items():
+        target=(SOURCE/name).resolve()
+        if not target.is_relative_to(SOURCE) or hashlib.sha256(target.read_bytes()).hexdigest()!=digest:raise ValueError('native package source checksum mismatch')
+    required=('deploy/native-lab/native.py','deploy/native-lab/launch.py','deploy/native-lab/local.py','deploy/cohost-lab/trial_runner.py')
+    if not all(n in config.get('code_hashes',{}) for n in required):raise ValueError('native source inventory missing')
+    if live:
+        if os.name!='posix' or os.geteuid()!=0:raise ValueError('Linux root required')
+        proof=base/'native-lifecycle.json'
+        if proof.is_symlink() or hashlib.sha256(proof.read_bytes()).hexdigest()!=config.get('lifecycle_sha256'):raise ValueError('pinned Linux lifecycle proof required')
+        observed=json.loads(proof.read_text())
+        if observed.get('passed') is not True or observed.get('code_hashes')!=config['code_hashes']:raise ValueError('lifecycle proof does not match installed native sources')
+        for name in ('detached','term_cleanup','kill_cleanup','deadline_cleanup','peer_loss_stops_job','unrelated_container_preserved'):
+            if observed.get(name) is not True:raise ValueError('missing lifecycle assertion: '+name)
+        # A lifecycle proof alone does not certify the current API, restored DB or peer.
+        readiness=json.loads((base/'native-readiness.json').read_text())
+        if readiness.get('run')!=run or readiness.get('code_hashes')!=config['code_hashes'] or readiness.get('application')!=config.get('application'):raise ValueError('prepared runtime identity mismatch')
+        for name in ('isolated_snapshot_restored','schema_114_verified','two_api_checksums_verified','worker_checksum_verified','both_host_watchdogs_verified','resource_caps_verified','peer_connection_verified'):
+            if readiness.get(name) is not True:raise ValueError('unverified prepared runtime: '+name)
+    return config
+
+class NativeRunner(Runner):
+    def __init__(self,config):
+        self.native=config;self.base=Path(config['main_base'])
+        approval=json.loads((self.base/'trial-approval.json').read_text())
+        super().__init__(SOURCE,Path(config['peer_config']),approval,self.base/'results')
+    def control_process(self,role,command):
+        if role=='main':return [sys.executable,str(HERE/'local.py'),str(self.base),command]
+        if role!='database':raise ValueError('unknown host role')
+        return ['ssh','-F',str(self.config),'-o','BatchMode=yes','-o','NumberOfPasswordPrompts=0','-o','StrictHostKeyChecking=yes','cohost-database',command]
+    def ssh(self,role,cmd,timeout=30,input=None,destination=None):
+        args=self.control_process(role,cmd)
+        if destination is None:return subprocess.check_output(args,input=input,timeout=timeout)
+        with destination.open('wb') as out:subprocess.run(args,input=input,stdout=out,check=True,timeout=timeout)
+    def generator_network(self):
+        return ['--network',self.native['network'],'--ip',self.native['generator_ip']]
+    def generator_image(self):return self.native['generator_image']
+    def connect_gateway(self):
+        # Never bind or target main-host8080: production already owns that port.
+        body=self.control('main','exec','api1',['curl','-fsS','--max-time','3','http://gateway:8080/api/v1/ready'])
+        if json.loads(body).get('ok') is not True:raise ValueError('owned gateway not ready')
+    def check(self):
+        super().check()
+        state=json.loads((self.base/'native-peer.json').read_text())
+        if state.get('run')!=self.approval['run'] or state.get('failed') or not 0<=time.time()-state['observed_unix']<=5:raise RuntimeError('independent native peer monitor stale/failed')
+    def prepare(self):
+        # Restoration and migrations belong to bounded host setup, not every load stage.
+        # Never seed again or accept a production DB as a substitute for the fixture.
+        if self.sql("SELECT current_database()||':'||current_setting('cluster_name')")!='capacity_lab:'+self.approval['run']:raise ValueError('wrong disposable database')
+        if self.sql("SELECT marker||':'||scenario FROM capacity_lab_identity")!='disposable-compose-only:large-busy':raise ValueError('synthetic fixture identity missing')
+        for name in ('exporter','verifier','lifecycle','queue-check'):self.service(name)
+        self.lab('prepare-sessions')
+        self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
+        self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
+        for name in ('api1','api2','gateway','notification-provider'):self.service(name)
+        self.connect_gateway()
+        self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
+        self.lab('queue-check','queue-check',self.output/'queue-check.jsonl')
+    def measure(self,stage):
+        atomic(self.base/'progress.json',dict(run=self.approval['run'],stage=stage[0],sessions=stage[2],state='running',time=time.time()))
+        super().measure(stage)
+        atomic(self.base/'progress.json',dict(run=self.approval['run'],stage=stage[0],sessions=stage[2],state='all original gates passed',time=time.time()))
+    def start(self):
+        # Independent systemd peer service refreshes leases. The coordinator never does.
+        deadline=time.monotonic()+15
+        while True:
+            try:self.check();break
+            except (OSError,ValueError,RuntimeError):
+                if time.monotonic()>deadline:raise
+                time.sleep(.25)
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:list(pool.map(lambda role:self.ssh(role,'activate',timeout=60),('main','database')))
+        self.activation_done=True
+    def cleanup(self):
+        self.stop.set()
+        for child in self.children:
+            if child.poll() is None:
+                try:os.killpg(child.pid,signal.SIGTERM)
+                except ProcessLookupError:pass
+        cleanup(self.native)
+
+def peer(config):
+    runner=NativeRunner(config);previous={};base=Path(config['main_base'])
+    try:
+        while True:
+            with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                statuses=list(pool.map(lambda role:json.loads(runner.ssh(role,'status',timeout=2)),('main','database')))
+            progress=peer_progress(statuses,previous,config['run'])
+            if progress is not None:
+                previous=progress
+                with concurrent.futures.ThreadPoolExecutor(2) as pool:list(pool.map(lambda role:runner.ssh(role,'lease',timeout=2),('main','database')))
+                atomic(base/'native-peer.json',dict(run=config['run'],observed_unix=time.time(),sequences=previous,failed=False))
+            time.sleep(.5)
+    except BaseException:
+        atomic(base/'native-peer.json',dict(run=config['run'],observed_unix=time.time(),failed=True))
+        # Both pre-existing local watchdogs/reapers retain independent stop deadlines.
+        raise
+
+def cleanup(config):
+    runner=NativeRunner(config);result={}
+    saved=Path(config['main_base'])/'native-cleanup.json'
+    if saved.exists() and (runner.base/'cleanup.complete').exists():
+        previous=json.loads(saved.read_text())
+        if previous.get('run')==config['run'] and previous.get('hosts')==dict(database='confirmed',main='confirmed'):return
+    # Never stop a generator owned by a different run, even on coordinator SIGKILL.
+    found=subprocess.run(['docker','inspect','cohost-generator'],capture_output=True,text=True,timeout=10)
+    if found.returncode==0:
+        item=json.loads(found.stdout)[0]
+        if item['Config'].get('Labels',{}).get('atlxpres.cohost.run')!=config['run']:result['generator']='foreign generator; preserved'
+        else:
+            subprocess.run(['docker','stop','--timeout','5',item['Id']],check=True,capture_output=True,timeout=20)
+            subprocess.run(['docker','rm',item['Id']],check=True,capture_output=True,timeout=15)
+    # Remote cleanup first: main cleanup removes the test-only database identity key.
+    for role in ('database','main'):
+        try:runner.ssh(role,'cleanup',timeout=180);result[role]='confirmed'
+        except Exception as e:result[role]='unconfirmed: '+type(e).__name__
+    atomic(Path(config['main_base'])/'native-cleanup.json',dict(run=config['run'],hosts=result))
+    if any(v!='confirmed' for v in result.values()):raise RuntimeError('cleanup incomplete; preserve evidence; host-local reapers remain independent')
+
+def execute(config):
+    runner=NativeRunner(config);validate(runner.approval,config['run'])
+    runner.output.mkdir(mode=0o700,exist_ok=False)
+    atomic(runner.output/'native-provenance.json',dict(config=config,client_hashes=client_hashes(SOURCE),stages=STAGES))
+    def interrupted(*_):raise KeyboardInterrupt('native coordinator interrupted')
+    signal.signal(signal.SIGTERM,interrupted);signal.signal(signal.SIGINT,interrupted)
+    execute_sequence(runner)
+    atomic(runner.output/'trial-passed.json',dict(passed=True,stages=STAGES,production_capacity_claim=False))
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('action',choices=('plan','peer','execute','cleanup'));p.add_argument('config',type=Path,nargs='?');a=p.parse_args()
+    if a.action=='plan':print(json.dumps(dict(stages=STAGES,load_started=False,live_transport='main local; existing restricted noninteractive database peer',generator_network='owned private Docker network; never host8080'),indent=2));return
+    config=load(a.config)
+    {'peer':peer,'execute':execute,'cleanup':cleanup}[a.action](config)
+if __name__=='__main__':main()

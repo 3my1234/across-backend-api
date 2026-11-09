@@ -6,7 +6,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, sender-profile, gateway-probe, fanout, qualified-500, generator-clock]
+        options: [roles, receipts, expanded, inbox, system, queries, nearby, calibration, trigger-profile, sender-profile, gateway-probe, fanout, qualified-500, generator-clock, native-lifecycle]
         default: roles
       calibration_run:
         description: Successful bounded calibration independently reviewed for sustained500
@@ -30,6 +30,28 @@ permissions:
   contents: read
   actions: read
 jobs:
+  native-lifecycle:
+    if: github.event.inputs.phase == 'native-lifecycle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native adapter and retained orchestration regressions
+        run: |
+          python3 -m unittest discover -s deploy/native-lab -p 'test_*.py' -v
+          python3 -m unittest discover -s deploy/cohost-lab -p 'test_*.py' -v
+          npm install --prefix /tmp/native-deps --no-audit --no-fund yaml
+          NODE_PATH=/tmp/native-deps/node_modules node deploy/native-lab/test-render.cjs
+      - name: Real detached units, forced exits and owned cleanup; no application load
+        run: |
+          docker pull alpine:3.20
+          sudo --preserve-env=GITHUB_ACTIONS python3 deploy/native-lab/lifecycle.py prove "$PWD/native-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-no-load-${{ github.run_id }}
+          path: native-evidence/
+          retention-days: 14
   fanout-regressions:
     if: github.event.inputs.phase == 'fanout'
     runs-on: ubuntu-latest

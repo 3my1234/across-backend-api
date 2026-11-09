@@ -9,6 +9,12 @@ class Runner:
     def __init__(self,root,config,approval,output):
         self.root=root.resolve();self.config=config.resolve();self.approval=approval;self.output=output.resolve()
         self.children=[];self.stop=threading.Event();self.error=None;self.previous={};self.activation_done=False
+    def control_process(self,role,cmd):
+        return ['ssh','-F',str(self.config),'cohost-'+role,cmd]
+    def generator_network(self):
+        return ['--network','host','--add-host','gateway:127.0.0.1']
+    def generator_image(self):
+        return 'grafana/k6:2.3.0'
     def ssh(self,role,cmd,timeout=30,input=None,destination=None):
         args=['ssh','-F',str(self.config),'cohost-'+role,cmd]
         if destination is None:return subprocess.check_output(args,input=input,timeout=timeout)
@@ -94,6 +100,10 @@ class Runner:
         self.lab('notification-prepare',destination=self.output/'notification-preparation.log')
         self.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ANALYZE;')
         for name in ('api1','api2','gateway'):self.service(name)
+        self.connect_gateway()
+        self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
+        self.lab('queue-check','queue-check',self.output/'queue-check.jsonl')
+    def connect_gateway(self):
         self.ssh('main','gateway-relay')
         tunnel=subprocess.Popen(['ssh','-F',str(self.config),'-N','-L','127.0.0.1:8080:127.0.0.1:58080','cohost-main'],start_new_session=True)
         self.children.append(tunnel)
@@ -107,8 +117,6 @@ class Runner:
             except Exception:
                 if time.monotonic()>deadline:raise
                 time.sleep(1)
-        self.lab('lifecycle','lifecycle',self.output/'lifecycle.jsonl')
-        self.lab('queue-check','queue-check',self.output/'queue-check.jsonl')
     def fixture(self,directory):
         self.ssh('main','publish-fixture')
         for name in ('fixtures.json','run.json'):self.ssh('main','download '+name,destination=directory/name)
@@ -140,17 +148,17 @@ class Runner:
         if hashlib.sha256(generated.encode()).hexdigest()!=expected:raise RuntimeError('executed generator differs from qualified source')
         (suite/'sessions.js').write_text(generated)
         (public/'executed-client.sha256').write_text(expected)
-        args=['docker','run','--user','0:0','--label','atlxpres.cohost.run='+self.approval['run'],'--name','cohost-generator','--network','host','--add-host','gateway:127.0.0.1',
+        args=['docker','run','--user','0:0','--label','atlxpres.cohost.run='+self.approval['run'],'--name','cohost-generator',*self.generator_network(),
             '--cpus','2','--memory','4g','--memory-swap','4g','--pids-limit','512',
             '-v',str(suite)+':/suite:ro','-v',str(private)+':/exchange',
             '-e','K6_NO_USAGE_REPORT=true','-e','K6_NO_COLOR=true','-e','LAB_SESSION_AUTH_MODE=established',
             '-e','LAB_SESSION_PROFILE='+profile,'-e','LAB_SESSION_TARGET='+str(target),'-e','LAB_SESSION_MIX=mixed',
-            '-e','LAB_SESSION_APPROVAL=/exchange/approval.json','grafana/k6:2.3.0',
+            '-e','LAB_SESSION_APPROVAL=/exchange/approval.json',self.generator_image(),
             'run','--out','json=/exchange/timeseries.json','/suite/sessions.js']
         observer_command='control '+base64.b64encode(json.dumps(dict(action='exec',service='exporter',args=['/app/lab','observe-sessions'])).encode()).decode()
         observer_out=(public/'pools.jsonl').open('wb')
         observer_error=(public/'pool-observer-error.log').open('wb')
-        observer=subprocess.Popen(['ssh','-F',str(self.config),'cohost-main',observer_command],stdout=observer_out,stderr=observer_error,start_new_session=True)
+        observer=subprocess.Popen(self.control_process('main',observer_command),stdout=observer_out,stderr=observer_error,start_new_session=True)
         self.children.append(observer)
         log=public/'k6.log' 
         with log.open('wb') as out:
