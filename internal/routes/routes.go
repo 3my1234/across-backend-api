@@ -10,6 +10,7 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
+	"across/backend/internal/providerlinks"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	playRateLimit := middleware.DistributedUserRateLimit(cache, "play-billing", 30, time.Minute)
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
+
+	app.Get("/open/provider", providerlinks.Landing)
 
 	v1 := app.Group("/api/v1")
 	v1.Post("/webhooks/google-play", playAdmission.Handler, playBilling.Notification)

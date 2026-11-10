@@ -18,6 +18,7 @@ import (
 
 	"across/backend/internal/branding"
 	"across/backend/internal/config"
+	"across/backend/internal/providerlinks"
 )
 
 type EmailService struct {
@@ -69,13 +70,13 @@ func (e *EmailService) sendWelcomeEmail(toEmail, toName, messageID, accountConte
 	actionLabel := "Explore Atlantic Express"
 	plainAction := "Explore Atlantic Express"
 	if accountContext == "provider" {
-		destination = strings.TrimSpace(e.cfg.ProviderPortalURL)
+		destination = e.cfg.ProviderAppURL()
 		introduction = "Continue in the ATL Xpress mobile app: sign in with the email and password you registered, open Provider workspace, and complete your business profile and verification documents. You can also use the web provider portal below."
 		featureOneTitle, featureOneCopy = "Verify", "Complete your profile"
 		featureTwoTitle, featureTwoCopy = "List", "Products or services"
 		featureThreeTitle, featureThreeCopy = "Grow", "Reach verified buyers"
-		actionLabel = "Open provider portal"
-		plainAction = "Open the provider portal"
+		actionLabel = "Open provider workspace in the app"
+		plainAction = "Open the provider workspace in the ATL Xpress app"
 	}
 	website := html.EscapeString(destination)
 	body := e.layout("Welcome to Atlantic Express", "Your Atlantic Express account is ready.", fmt.Sprintf(`
@@ -144,7 +145,7 @@ func (e *EmailService) sendMarketplaceActivityEmail(toEmail string, values map[s
 	plain := message
 	content := `<p style="margin:0;color:#344b47;font-size:16px;line-height:1.65;">` +
 		strings.ReplaceAll(html.EscapeString(message), "\n", "<br>") + `</p>`
-	if actionURL := strings.TrimSpace(values["action_url"]); actionURL != "" {
+	if actionURL := providerlinks.RewriteLegacyURL(strings.TrimSpace(values["action_url"]), e.cfg.ProviderAppURL()); actionURL != "" {
 		label := strings.TrimSpace(values["action_label"])
 		if label == "" {
 			label = "View update"

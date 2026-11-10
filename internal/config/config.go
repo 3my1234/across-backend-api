@@ -10,11 +10,10 @@ import (
 )
 
 const (
-	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com,https://provider.atlxpres.com"
+	defaultAllowedOrigins = "https://atlxpres.com,https://admin.atlxpres.com"
 	defaultAPIBaseURL     = "https://api.atlxpres.com"
 	defaultAssetsCDNBase  = "https://media.atlxpres.com"
 	defaultWebsiteURL     = "https://atlxpres.com"
-	defaultProviderURL    = "https://provider.atlxpres.com"
 )
 
 type Config struct {
@@ -82,7 +81,6 @@ type Config struct {
 	SESSNSTopicARN                string
 	BrandLogoURL                  string
 	WebsiteURL                    string
-	ProviderPortalURL             string
 	ProviderSubscriptionsEnforced bool
 	ProviderSubscriptionsStartAt  *time.Time
 	ProviderSubscriptionPolicy    *ProviderSubscriptionPolicy
@@ -186,7 +184,6 @@ func Load() Config {
 		SESSNSTopicARN:                env("SES_SNS_TOPIC_ARN", ""),
 		BrandLogoURL:                  brandLogoURL,
 		WebsiteURL:                    env("WEBSITE_URL", defaultWebsiteURL),
-		ProviderPortalURL:             env("PROVIDER_PORTAL_URL", defaultProviderURL),
 		ProviderSubscriptionsEnforced: envBool("PROVIDER_SUBSCRIPTIONS_ENFORCED", false),
 		ProviderSubscriptionsStartAt:  envTime("PROVIDER_SUBSCRIPTIONS_START_AT"),
 	}
@@ -291,4 +288,13 @@ func envTime(key string) *time.Time {
 	}
 	value = value.UTC()
 	return &value
+}
+
+// ProviderAppURL stays on the API host; the retired portal environment variable is ignored.
+func (c Config) ProviderAppURL() string {
+	base := strings.TrimRight(strings.TrimSpace(c.PublicBaseURL), "/")
+	if base == "" {
+		base = defaultAPIBaseURL
+	}
+	return base + "/open/provider"
 }

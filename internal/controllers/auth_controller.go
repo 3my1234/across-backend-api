@@ -853,7 +853,7 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 	c.Type("html", "utf-8")
 	verificationMessage := "Your Atlantic Express account is active. Return to the mobile app and sign in to continue."
 	if registrationContext == "provider" {
-		verificationMessage = "Your Atlantic Express account is active. Return to the ATL Xpress app or web provider portal and sign in with the same email and password to complete provider onboarding."
+		verificationMessage = "Your Atlantic Express account is active. Return to the ATL Xpress mobile app and sign in with the same email and password to complete provider onboarding."
 	}
 	return c.SendString(a.verificationResultPage(true, "Email verified successfully", verificationMessage))
 }
