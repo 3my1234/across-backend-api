@@ -141,9 +141,12 @@ def collect_checks(ids,diagnostics,urls=None,native=False):
     # Docker inspection and public HTTP are independent checks. Serializing a
     # valid2.5s HTTP observation behind up to3s of inspection can make a healthy
     # completed scan older than the unchanged3s peer freshness limit.
+    check=probe
+    if native:
+        from native_probe import probe as check
     with ThreadPoolExecutor(max_workers=4) as pool:
         inspection=pool.submit(native_state if native else state,ids)
-        results=list(pool.map(lambda url:probe(url,diagnostics),URLS if urls is None else urls))
+        results=list(pool.map(lambda url:check(url,diagnostics),URLS if urls is None else urls))
         return results,inspection.result()
 
 def monitoring_urls(native,now,last_advisory):
