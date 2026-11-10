@@ -464,7 +464,7 @@
               },
               {
                 "Name": "ALLOWED_ORIGINS",
-                "Value": "https://atlxpres.com,https://admin.atlxpres.com,https://provider.atlxpres.com"
+                "Value": "https://atlxpres.com,https://admin.atlxpres.com"
               }
             ],
             "Name": "app",
@@ -682,7 +682,7 @@
               },
               {
                 "Name": "ALLOWED_ORIGINS",
-                "Value": "https://atlxpres.com,https://admin.atlxpres.com,https://provider.atlxpres.com"
+                "Value": "https://atlxpres.com,https://admin.atlxpres.com"
               }
             ],
             "Name": "app",
@@ -900,7 +900,7 @@
               },
               {
                 "Name": "ALLOWED_ORIGINS",
-                "Value": "https://atlxpres.com,https://admin.atlxpres.com,https://provider.atlxpres.com"
+                "Value": "https://atlxpres.com,https://admin.atlxpres.com"
               }
             ],
             "Name": "app",
