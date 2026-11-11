@@ -88,8 +88,14 @@ func TestFreshLabMigrationsAndFixtures(t *testing.T) {
 	if _, err = checkFixtures(ctx, db, plan); err != nil {
 		t.Fatal(err)
 	}
+	// Large fixtures need twenty combined posts and two simultaneous rooms.
+	// Use a real tier allowance; never disable the new quota triggers to seed.
+	var entitlementsReady bool
+	if err = db.QueryRow(ctx, `SELECT count(*)=$2 AND bool_and((provider_current_benefits(provider)->>'post_limit')::int >= $1 AND (provider_current_benefits(provider)->>'town_hall_room_limit')::int >= 2) FROM capacity_lab_actors`, 2*(1+plan.ExtraListings), plan.Pairs).Scan(&entitlementsReady); err != nil || !entitlementsReady {
+		t.Fatalf("fixture entitlements ready=%v error=%v", entitlementsReady, err)
+	}
 	var actors int
-	if err = db.QueryRow(ctx, "SELECT count(*) FROM capacity_lab_actors").Scan(&actors); err != nil || actors != 100 {
+	if err = db.QueryRow(ctx, "SELECT count(*) FROM capacity_lab_actors").Scan(&actors); err != nil || actors != plan.Pairs {
 		t.Fatalf("actors=%d error=%v", actors, err)
 	}
 }
