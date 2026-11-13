@@ -333,6 +333,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Put("/providers/me/driver-availability", marketplaceController.DriverAvailability)
 	authed.Delete("/providers/me/driver-availability", marketplaceController.DriverAvailability)
 	authed.Get("/marketplace/drivers/nearby", marketplaceController.NearbyDrivers)
+	authed.Get("/marketplace/drivers/:listing_id/safety-profile", marketplaceController.DriverSafetyProfile)
 	authed.Post("/providers/me/payout-account", marketplaceController.ConfigurePayoutAccount)
 	authed.Post("/providers/me/uploads/presign", marketplaceController.PresignProviderUpload)
 	authed.Get("/providers/me/verification-documents", marketplaceController.ListVerificationDocuments)

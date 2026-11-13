@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.27.3'}
+        with: {go-version: '1.27.4'}
       - name: Install real video verification tools for bounded correctness tests
         run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
       - name: Check offline budgets

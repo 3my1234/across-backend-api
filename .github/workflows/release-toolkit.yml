@@ -20,7 +20,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-go@v5
-        with: {go-version: '1.27.3'}
+        with: {go-version: '1.27.4'}
       - name: Verify bounded DDL lock waits preserve existing writes
         env:
           MIGRATION_GATE_LAB: isolated-ci
