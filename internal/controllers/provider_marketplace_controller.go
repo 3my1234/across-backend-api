@@ -435,10 +435,15 @@ func (m *ProviderMarketplaceController) listVerificationDocuments(c *fiber.Ctx, 
 	}
 	rows.Close()
 	var driverName string
-	if err := m.db.QueryRow(c.Context(), `SELECT u.full_name FROM provider_organizations p JOIN users u ON u.id=p.owner_user_id WHERE p.id=$1::uuid`, providerID).Scan(&driverName); err != nil {
+	var isDriver bool
+	if err := m.db.QueryRow(c.Context(), `SELECT u.full_name,p.is_driver OR EXISTS(SELECT 1 FROM provider_listings l WHERE l.provider_id=p.id AND (l.category||' '||l.title) ~* '(^|[^a-z])(drivers?|chauffeurs?|taxi|riders?|couriers?|dispatch)([^a-z]|$)') FROM provider_organizations p JOIN users u ON u.id=p.owner_user_id WHERE p.id=$1::uuid`, providerID).Scan(&driverName, &isDriver); err != nil {
 		return fiber.ErrInternalServerError
 	}
-	return c.JSON(fiber.Map{"items": items, "driver_name": driverName})
+	required := []string{"government_id"}
+	if isDriver {
+		required = []string{"drivers_license", "driver_face", "driver_vehicle", "driver_plate", "vehicle_registration"}
+	}
+	return c.JSON(fiber.Map{"items": items, "driver_name": driverName, "is_driver": isDriver, "required_documents": required, "driver_licence_counts_as_id": true})
 }
 
 func (m *ProviderMarketplaceController) AdminListVerificationDocuments(c *fiber.Ctx) error {
@@ -1931,7 +1936,7 @@ func (m *ProviderMarketplaceController) AdminVerifyProvider(c *fiber.Ctx) error 
 	if status != "approved" && status != "rejected" && status != "suspended" {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid verification status")
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_organizations SET verification_status=$2,verification_notes=$3,verified_at=CASE WHEN $2='approved' THEN now() ELSE verified_at END,verified_by=$4::uuid,updated_at=now() WHERE id=$1::uuid AND ($2<>'approved' OR EXISTS(SELECT 1 FROM provider_verification_documents d WHERE d.provider_id=provider_organizations.id AND d.status='approved'))`, c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID)
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_organizations SET verification_status=$2,verification_notes=$3,verified_at=CASE WHEN $2='approved' THEN now() ELSE verified_at END,verified_by=$4::uuid,updated_at=now() WHERE id=$1::uuid AND ($2<>'approved' OR EXISTS(SELECT 1 FROM (SELECT DISTINCT ON (d.document_type) d.document_type,d.status,d.expires_on FROM provider_verification_documents d WHERE d.provider_id=provider_organizations.id AND d.document_type IN ('government_id','drivers_license') ORDER BY d.document_type,d.created_at DESC,d.id DESC) latest WHERE latest.status='approved' AND (latest.expires_on IS NULL OR latest.expires_on>=CURRENT_DATE) AND (latest.document_type<>'drivers_license' OR latest.expires_on IS NOT NULL)))`, c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID)
 	if err != nil {
 		if policyErr := providerCapacityError(err); policyErr != nil {
 			return policyErr
@@ -1940,7 +1945,7 @@ func (m *ProviderMarketplaceController) AdminVerifyProvider(c *fiber.Ctx) error 
 	}
 	if tag.RowsAffected() == 0 {
 		if status == "approved" {
-			return fiber.NewError(fiber.StatusConflict, "approve at least one verification document before approving the provider")
+			return fiber.NewError(fiber.StatusConflict, "Approve a current government-issued ID or driver licence before approving the provider. Driver/rider approval also requires the five transport documents.")
 		}
 		return fiber.ErrNotFound
 	}
