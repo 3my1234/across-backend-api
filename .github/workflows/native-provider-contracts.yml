@@ -30,7 +30,7 @@ jobs:
       - name: Verify private detail ownership and complete editable snapshot
         run: |
           go test -p 1 -count=1 -v ./internal/controllers -run '^Test(Native(ListingDetail|RequestExact|PushStatus)|CatalogIgnoredPaginationAndSearchPreserveResponse|CatalogMarketEligibilityAndDeliverySpecificity|CatalogComparePricesIncludeRegularDiscountsAndDelivery)'
-          go test -p 1 -count=1 -v ./internal/controllers -run '^TestDriver(Safety|DocumentStorage)'
+          go test -race -p 1 -count=1 -v ./internal/controllers -run '^TestDriver(Safety|DocumentStorage)'
           go test -race -count=1 ./internal/middleware -run '^Test(IgnoredCatalogueParametersShareOneConcurrentFill|ApprovalInvalidatesCachedPriceForEveryRefreshVariant|PublicCache|SimultaneousPublicCache|RefreshNonces)'
       - name: Compile all handlers and route registrations
         run: go test -p 1 ./internal/controllers ./internal/routes -run '^$'
