@@ -13,7 +13,15 @@ import (
 )
 
 func driverDocument(kind string) bool {
-	return kind == "drivers_license" || kind == "driver_vehicle" || kind == "driver_plate"
+	switch kind {
+	case "drivers_license", "driver_face", "driver_vehicle", "driver_plate", "vehicle_registration", "vehicle_insurance", "roadworthiness", "driver_lasrra", "driver_lasdri":
+		return true
+	}
+	return false
+}
+
+func driverDocumentNeedsExpiry(kind string) bool {
+	return kind == "drivers_license" || kind == "vehicle_insurance" || kind == "roadworthiness"
 }
 
 var driverEvidenceSlots = make(chan struct{}, 2)
@@ -24,7 +32,7 @@ func (m *ProviderMarketplaceController) freezeDriverDocument(c *fiber.Ctx, provi
 	}
 	key, e := url.PathUnescape(m.s3.KeyFromURL(raw))
 	if e != nil || !strings.HasPrefix(key, "private/providers/"+provider+"/verification/") || strings.Contains(key, "..") {
-		return "", fiber.NewError(422, "Upload your own clear licence, car or plate photo using the verification form.")
+		return "", fiber.NewError(422, "Upload your own clear driver/rider evidence using the verification form.")
 	}
 	select {
 	case driverEvidenceSlots <- struct{}{}:

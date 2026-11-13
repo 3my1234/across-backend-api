@@ -152,6 +152,14 @@ func (s *S3) objectReadURL(key string, expires time.Duration, method string) (st
 
 func (s *S3) ObjectURL(key string) string {
 	normalized := strings.TrimLeft(key, "/")
+	// Private evidence is an origin reference, never a public CDN/API image URL.
+	// Controllers issue short-lived signed reads after authorization/review checks.
+	if strings.HasPrefix(normalized, "private/") {
+		if s.bucket != "" && s.region != "" {
+			return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", s.bucket, s.region, encodeKeyPath(normalized))
+		}
+		return normalized
+	}
 	if s.cdnBase != "" {
 		return s.cdnBase + "/" + encodeKeyPath(normalized)
 	}

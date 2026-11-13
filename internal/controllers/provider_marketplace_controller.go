@@ -359,18 +359,30 @@ func (m *ProviderMarketplaceController) AddVerificationDocument(c *fiber.Ctx) er
 	var req struct {
 		DocumentType string `json:"document_type"`
 		DocumentURL  string `json:"document_url"`
+		ExpiresOn    string `json:"expires_on"`
 	}
 	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.DocumentType) == "" || !validProviderAssetURL(req.DocumentURL) {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "document_type and an approved document_url are required")
 	}
 	req.DocumentType = strings.ToLower(strings.TrimSpace(req.DocumentType))
+	var expiresOn *time.Time
+	if strings.TrimSpace(req.ExpiresOn) != "" {
+		date, parseErr := time.Parse("2006-01-02", strings.TrimSpace(req.ExpiresOn))
+		if parseErr != nil || date.Before(time.Now().UTC().Truncate(24*time.Hour)) {
+			return fiber.NewError(422, "Enter the document's current expiry date as YYYY-MM-DD")
+		}
+		expiresOn = &date
+	}
+	if driverDocumentNeedsExpiry(req.DocumentType) && expiresOn == nil {
+		return fiber.NewError(422, "A current expiry date is required for this driver/rider document")
+	}
 	var id string
 	if driverDocument(req.DocumentType) {
 		if req.DocumentURL, err = m.freezeDriverDocument(c, providerID, req.DocumentURL); err != nil {
 			return err
 		}
 	}
-	err = m.db.QueryRow(c.Context(), `INSERT INTO provider_verification_documents(provider_id,document_type,document_url) VALUES($1::uuid,$2,$3) RETURNING id::text`, providerID, strings.TrimSpace(req.DocumentType), strings.TrimSpace(req.DocumentURL)).Scan(&id)
+	err = m.db.QueryRow(c.Context(), `INSERT INTO provider_verification_documents(provider_id,document_type,document_url,expires_on) VALUES($1::uuid,$2,$3,$4) RETURNING id::text`, providerID, strings.TrimSpace(req.DocumentType), strings.TrimSpace(req.DocumentURL), expiresOn).Scan(&id)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -387,7 +399,8 @@ func (m *ProviderMarketplaceController) ListVerificationDocuments(c *fiber.Ctx) 
 }
 
 func (m *ProviderMarketplaceController) listVerificationDocuments(c *fiber.Ctx, providerID string) error {
-	rows, err := m.db.Query(c.Context(), `SELECT id::text,document_type,document_url,status,review_notes,created_at,reviewed_at FROM provider_verification_documents WHERE provider_id=$1::uuid ORDER BY created_at DESC,id DESC LIMIT 100`, providerID)
+	c.Set("Cache-Control", "private, no-store")
+	rows, err := m.db.Query(c.Context(), `SELECT id::text,document_type,document_url,status,review_notes,created_at,reviewed_at,expires_on FROM provider_verification_documents WHERE provider_id=$1::uuid ORDER BY created_at DESC,id DESC LIMIT 100`, providerID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -397,7 +410,8 @@ func (m *ProviderMarketplaceController) listVerificationDocuments(c *fiber.Ctx, 
 		var id, kind, url, status, notes string
 		var created time.Time
 		var reviewed *time.Time
-		if err := rows.Scan(&id, &kind, &url, &status, &notes, &created, &reviewed); err != nil {
+		var expires *time.Time
+		if err := rows.Scan(&id, &kind, &url, &status, &notes, &created, &reviewed, &expires); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if m.s3 != nil && m.s3.Configured() {
@@ -410,9 +424,21 @@ func (m *ProviderMarketplaceController) listVerificationDocuments(c *fiber.Ctx, 
 				}
 			}
 		}
-		items = append(items, fiber.Map{"id": id, "document_type": kind, "document_url": url, "status": status, "review_notes": notes, "created_at": created, "reviewed_at": reviewed})
+		var expiry string
+		if expires != nil {
+			expiry = expires.Format("2006-01-02")
+		}
+		items = append(items, fiber.Map{"id": id, "document_type": kind, "document_url": url, "status": status, "review_notes": notes, "created_at": created, "reviewed_at": reviewed, "expires_on": expiry})
 	}
-	return c.JSON(fiber.Map{"items": items})
+	if rows.Err() != nil {
+		return fiber.ErrInternalServerError
+	}
+	rows.Close()
+	var driverName string
+	if err := m.db.QueryRow(c.Context(), `SELECT u.full_name FROM provider_organizations p JOIN users u ON u.id=p.owner_user_id WHERE p.id=$1::uuid`, providerID).Scan(&driverName); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return c.JSON(fiber.Map{"items": items, "driver_name": driverName})
 }
 
 func (m *ProviderMarketplaceController) AdminListVerificationDocuments(c *fiber.Ctx) error {
@@ -422,8 +448,9 @@ func (m *ProviderMarketplaceController) AdminListVerificationDocuments(c *fiber.
 func (m *ProviderMarketplaceController) AdminReviewVerificationDocument(c *fiber.Ctx) error {
 	adminID, _ := c.Locals("admin_id").(string)
 	var req struct {
-		Status string `json:"status"`
-		Notes  string `json:"notes"`
+		Status            string `json:"status"`
+		Notes             string `json:"notes"`
+		EvidenceConfirmed bool   `json:"evidence_confirmed"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.ErrBadRequest
@@ -432,7 +459,7 @@ func (m *ProviderMarketplaceController) AdminReviewVerificationDocument(c *fiber
 	if status != "approved" && status != "rejected" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "status must be approved or rejected")
 	}
-	tag, err := m.db.Exec(c.Context(), `UPDATE provider_verification_documents SET status=$3,review_notes=$4,reviewed_at=now(),reviewed_by=$5::uuid WHERE id=$1::uuid AND provider_id=$2::uuid`, c.Params("document_id"), c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID)
+	tag, err := m.db.Exec(c.Context(), `UPDATE provider_verification_documents SET status=$3,review_notes=$4,reviewed_at=now(),reviewed_by=$5::uuid WHERE id=$1::uuid AND provider_id=$2::uuid AND ($3<>'approved' OR ((expires_on IS NULL OR expires_on>=CURRENT_DATE) AND (document_type NOT IN ('drivers_license','vehicle_insurance','roadworthiness') OR expires_on IS NOT NULL) AND (document_type NOT IN ('drivers_license','driver_face','driver_vehicle','driver_plate','vehicle_registration','vehicle_insurance','roadworthiness','driver_lasrra','driver_lasdri') OR $6)))`, c.Params("document_id"), c.Params("provider_id"), status, strings.TrimSpace(req.Notes), adminID, req.EvidenceConfirmed)
 	if err != nil {
 		if policyErr := providerCapacityError(err); policyErr != nil {
 			return policyErr
@@ -440,6 +467,10 @@ func (m *ProviderMarketplaceController) AdminReviewVerificationDocument(c *fiber
 		return fiber.ErrInternalServerError
 	}
 	if tag.RowsAffected() == 0 {
+		var exists bool
+		if m.db.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM provider_verification_documents WHERE id=$1::uuid AND provider_id=$2::uuid)`, c.Params("document_id"), c.Params("provider_id")).Scan(&exists) == nil && exists {
+			return fiber.NewError(422, "Confirm the original driver evidence and matching current expiry date before approval. Reject incorrect details for resubmission.")
+		}
 		return fiber.ErrNotFound
 	}
 	return c.SendStatus(fiber.StatusNoContent)

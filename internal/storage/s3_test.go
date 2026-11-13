@@ -3,9 +3,22 @@ package storage
 import (
 	"across/backend/internal/config"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPrivateEvidenceNeverUsesPublicCDNURL(t *testing.T) {
+	s := NewS3(config.Config{AWSRegion: "us-east-1", S3BucketName: "synthetic", AssetsCDNBase: "https://media.example.test", PublicBaseURL: "https://api.example.test"})
+	private := "private/providers/owner/verification/evidence/face.jpg"
+	raw := s.ObjectURL(private)
+	if strings.Contains(raw, "media.example.test") || strings.Contains(raw, "/public/images/view/") || s.KeyFromURL(raw) != private {
+		t.Fatal("private evidence became a public cache URL")
+	}
+	if s.ObjectURL("user-uploads/public.jpg") != "https://media.example.test/user-uploads/public.jpg" {
+		t.Fatal("public image CDN contract changed")
+	}
+}
 
 func TestSizedVideoUploadSignatureBindsExactLength(t *testing.T) {
 	s := NewS3(config.Config{AWSRegion: "eu-north-1", AWSAccessKeyID: "synthetic-key", AWSSecretAccessKey: "synthetic-secret", S3BucketName: "synthetic-bucket"})
