@@ -8,6 +8,7 @@ import (
 )
 
 type providerPostPolicy struct {
+	ActiveJobs         int    `json:"active_jobs_used,omitempty"`
 	Rooms              int    `json:"town_hall_room_limit"`
 	Weight             int    `json:"promotional_weight"`
 	DirectMessaging    bool   `json:"direct_messaging"`
