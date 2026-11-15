@@ -73,11 +73,14 @@ func jobsDB(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
 }
 func jobsIndependentMigration(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	raw, err := os.ReadFile("../../migrations/120_independent_provider_job_allowance.sql")
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"120_independent_provider_job_allowance.sql", "121_provider_job_tier_limits.sql"} {
+		raw, err := os.ReadFile("../../migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		safetyExec(t, db, string(raw))
 	}
-	safetyExec(t, db, string(raw))
+
 	if err := appdb.VerifyJobsSchema(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +516,7 @@ func TestJobApplicationReusesClosedThreadButNeverUnblocks(t *testing.T) {
 	}
 }
 
-func TestJobOneFreePlaceAcrossTiersAndLegacyOverage(t *testing.T) {
+func TestJobTierPlacesAndLegacyOverage(t *testing.T) {
 	db := jobsDB117(t)
 	app := jobsApp(db)
 	owner, provider := jobsActor(t, db, "bronze")
@@ -543,7 +546,7 @@ func TestJobOneFreePlaceAcrossTiersAndLegacyOverage(t *testing.T) {
 	jobsStatus(t, app, owner, fresh, "published", 409)
 	safetyExec(t, db, `UPDATE provider_jobs SET status='filled' WHERE id=$1`, b["id"])
 	jobsStatus(t, app, owner, fresh, "published", 200)
-	// Same one-job rule on Free and every paid tier, even with product/service allowance full.
+	// Tier-based jobs are independent even when the product/service allowance is full.
 	for _, tier := range []string{"free", "bronze", "silver", "diamond", "gold"} {
 		t.Run(tier, func(t *testing.T) {
 			actor, p := jobsActor(t, db, tier)
@@ -555,10 +558,20 @@ func TestJobOneFreePlaceAcrossTiersAndLegacyOverage(t *testing.T) {
 				safetyExec(t, db, `INSERT INTO products(provider_id)VALUES($1)`, p)
 			}
 			allowance := jobsCall(t, app, "GET", "/owner/allowance", actor, nil, 200)
-			if allowance["limit"] != float64(1) || allowance["remaining"] != float64(1) {
-				t.Fatal("not one separate free job", allowance)
+			jobLimit := 1
+			if tier == "diamond" {
+				jobLimit = 5
+			}
+			if tier == "gold" {
+				jobLimit = 10
+			}
+			if allowance["limit"] != float64(jobLimit) || allowance["remaining"] != float64(jobLimit) {
+				t.Fatal("wrong independent tier limit", allowance)
 			}
 			first := jobsStatus(t, app, actor, jobsCreate(t, app, actor, "chat"), "published", 200)
+			for n := 1; n < jobLimit; n++ {
+				jobsStatus(t, app, actor, jobsCreate(t, app, actor, "chat"), "published", 200)
+			}
 			jobsStatus(t, app, actor, jobsCreate(t, app, actor, "chat"), "published", 409)
 			safetyExec(t, db, `UPDATE products SET moderation_status='archived' WHERE provider_id=$1`, p)
 			safetyExec(t, db, `INSERT INTO provider_listings(provider_id)VALUES($1)`, p)
@@ -574,8 +587,79 @@ func TestJobOneFreePlaceAcrossTiersAndLegacyOverage(t *testing.T) {
 func TestJobPlanComparisonOffersSeparateFreePlace(t *testing.T) {
 	for _, code := range []string{"provider-free", "provider-monthly", "provider-growth", "provider-business", "provider-diamond", "legacy-custom"} {
 		p := mergedPlanPolicy(code, 7, []byte(`{"post_limit":25,"max_images":8,"max_videos":0}`))
-		if p.JobLimit != 1 {
+		want := 1
+		if code == "provider-business" {
+			want = 5
+		}
+		if code == "provider-diamond" {
+			want = 10
+		}
+		if p.JobLimit != want {
 			t.Fatal("plan comparison omitted free job", code, p)
 		}
+	}
+}
+
+func TestJobPaidTierConcurrentPublishesAndExpiry(t *testing.T) {
+	db := jobsDB(t)
+	app := jobsApp(db)
+	for _, tc := range []struct {
+		tier string
+		cap  int
+	}{{"diamond", 5}, {"gold", 10}} {
+		t.Run(tc.tier, func(t *testing.T) {
+			owner, provider := jobsActor(t, db, tc.tier)
+			jobs := []map[string]any{}
+			for n := 0; n < tc.cap+1; n++ {
+				jobs = append(jobs, jobsCreate(t, app, owner, "chat"))
+			}
+			start := make(chan struct{})
+			codes := make(chan int, len(jobs))
+			var wg sync.WaitGroup
+			for _, job := range jobs {
+				wg.Add(1)
+				go func(job map[string]any) {
+					defer wg.Done()
+					<-start
+					raw, _ := json.Marshal(map[string]any{"status": "published", "revision": job["revision"]})
+					req := httptest.NewRequest("POST", "/owner/"+job["id"].(string)+"/status", strings.NewReader(string(raw)))
+					req.Header.Set("Actor", owner)
+					req.Header.Set("Content-Type", "application/json")
+					res, err := app.Test(req, 15000)
+					if err != nil {
+						codes <- 0
+						return
+					}
+					defer res.Body.Close()
+					codes <- res.StatusCode
+				}(job)
+			}
+			close(start)
+			wg.Wait()
+			close(codes)
+			counts := map[int]int{}
+			for code := range codes {
+				counts[code]++
+			}
+			if counts[200] != tc.cap || counts[409] != 1 {
+				t.Fatal("tier publish race", counts)
+			}
+			safetyExec(t, db, `UPDATE provider_jobs SET deadline=clock_timestamp()-interval '1 second' WHERE id=(SELECT id FROM provider_jobs WHERE provider_id=$1 AND status='published' LIMIT 1)`, provider)
+			if jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)["remaining"] != float64(1) {
+				t.Fatal("expired tier place not released")
+			}
+			fresh := jobsCreate(t, app, owner, "chat")
+			jobsStatus(t, app, owner, fresh, "published", 200)
+			safetyExec(t, db, `UPDATE provider_organizations SET tier='free' WHERE id=$1`, provider)
+			limits := jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)
+			if limits["limit"] != float64(1) || limits["remaining"] != float64(0) {
+				t.Fatal("downgrade allowance", limits)
+			}
+			jobsStatus(t, app, owner, jobsCreate(t, app, owner, "chat"), "published", 409)
+			var count int
+			if err := db.QueryRow(context.Background(), `SELECT count(*) FROM provider_jobs WHERE provider_id=$1 AND status='published' AND deadline>clock_timestamp()`, provider).Scan(&count); err != nil || count != tc.cap {
+				t.Fatal("downgrade removed jobs", count, err)
+			}
+		})
 	}
 }

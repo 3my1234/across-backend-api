@@ -283,7 +283,7 @@ func (m *ProviderMarketplaceController) JobAllowance(c *fiber.Ctx) error {
 	}
 	var limit, used int
 	var verified bool
-	err = m.db.QueryRow(c.Context(), `SELECT provider_active_job_limit(),p.is_active AND p.verification_status='approved',
+	err = m.db.QueryRow(c.Context(), `SELECT provider_active_job_limit(p.id),p.is_active AND p.verification_status='approved',
  (SELECT count(*) FROM provider_jobs WHERE provider_id=p.id AND status='published' AND deadline>clock_timestamp()) FROM provider_organizations p WHERE p.id=$1::uuid`, owner).Scan(&limit, &verified, &used)
 	if err != nil {
 		return jobError(err)
@@ -293,7 +293,7 @@ func (m *ProviderMarketplaceController) JobAllowance(c *fiber.Ctx) error {
 		remaining = 0
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "note": "Every verified provider has one free active job place, separate from product and service places. Drafts use no job place; closing, filling, expiry or removal releases it. Existing jobs stay in your history."})
+	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "note": "Active jobs have a separate plan allowance: Free, Bronze and Silver 1; Diamond 5; Gold 10. Drafts use no job place; closing, filling, expiry or removal releases it. Existing jobs stay in your history."})
 }
 func (m *ProviderMarketplaceController) SaveJob(c *fiber.Ctx) error {
 	owner, err := m.jobsOwner(c)

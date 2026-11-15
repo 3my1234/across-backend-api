@@ -125,7 +125,13 @@ func mergedPlanPolicy(code string, limit int, raw []byte) providerPostPolicy {
 			p.VideoUploadsPaused = current.VideoUploadsPaused
 		}
 	}
-	// Jobs have a separate free allowance on every plan, including custom legacy plans.
+	// Jobs have a separate active allowance, including one free place on legacy plans.
 	p.JobLimit = 1
+	switch providerPlanTier(code) {
+	case "diamond":
+		p.JobLimit = 5
+	case "gold":
+		p.JobLimit = 10
+	}
 	return p
 }

@@ -66,6 +66,11 @@ func TestLaunchVideoThreeMinuteMigrationPreservesQuotas(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(string(migration))
+	migration, err = os.ReadFile("../../migrations/121_provider_job_tier_limits.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(string(migration))
 	run(`UPDATE provider_jobs SET deadline=now()+interval '1 day' WHERE id=$1`, job)
 	// Bronze already has three product drafts and can still publish the independent job.
 	usage, err := (&ProviderMarketplaceController{db: db}).providerEntitlements(ctx, bronze)
