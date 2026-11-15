@@ -222,6 +222,8 @@ func runMediaLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 		if err := controllers.RunImageMediaJob(ctx, db, cfg, nil); err != nil {
 			log.Printf("image processing cycle failed; durable retry retained")
 		}
+		// A completed image phase is progress; do not add its runtime to the video budget.
+		heartbeat(ctx, "media")
 		if err := controllers.RunVideoMediaJob(ctx, db, cfg, nil); err != nil {
 			log.Printf("video processing cycle failed; durable retry retained")
 		}

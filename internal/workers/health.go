@@ -10,7 +10,7 @@ import (
 
 type monitorKey struct{}
 
-// Monitor observes completed polling cycles, independently of individual jobs
+// Monitor observes completed polling cycles (and bounded media phases), independently of jobs
 // succeeding. External delivery failures use durable retries, not restart loops.
 type Monitor struct {
 	mu   sync.Mutex
@@ -18,7 +18,8 @@ type Monitor struct {
 }
 
 var loopLimits = map[string]time.Duration{
-	"media":          5 * time.Minute,
+	// Video jobs have a five-minute deadline; allow cleanup without false restarts.
+	"media":          6 * time.Minute,
 	"message_fanout": 30 * time.Second,
 	// A 25-message SMTP batch can take nearly five minutes at its timeout
 	// limits. Settlement batches can make up to 100 twenty-second requests.
