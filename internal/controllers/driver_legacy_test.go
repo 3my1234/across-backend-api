@@ -14,7 +14,7 @@ import (
 
 func TestDriverLegacyEvidenceEligibilityAndNearby(t *testing.T) {
 	db := driverSafetyDB(t)
-	safetyExec(t, db, `ALTER TABLE provider_listings ADD COLUMN moderated_at timestamptz,ADD COLUMN description text DEFAULT '',ADD COLUMN price numeric,ADD COLUMN currency_code text DEFAULT 'NGN',ADD COLUMN pricing_unit text DEFAULT 'ride';CREATE TABLE admins(id uuid PRIMARY KEY,role text,is_active bool);CREATE TABLE schema_migrations(name text PRIMARY KEY,applied_at timestamptz);INSERT INTO schema_migrations VALUES('115_driver_safety_identity.sql',now());`)
+	safetyExec(t, db, `ALTER TABLE provider_organizations ADD COLUMN verification_notes text DEFAULT '',ADD COLUMN verified_at timestamptz,ADD COLUMN verified_by uuid,ADD COLUMN updated_at timestamptz DEFAULT now();ALTER TABLE provider_listings ADD COLUMN moderated_at timestamptz,ADD COLUMN description text DEFAULT '',ADD COLUMN price numeric,ADD COLUMN currency_code text DEFAULT 'NGN',ADD COLUMN pricing_unit text DEFAULT 'ride';CREATE TABLE admins(id uuid PRIMARY KEY,role text,is_active bool);CREATE TABLE schema_migrations(name text PRIMARY KEY,applied_at timestamptz);INSERT INTO schema_migrations VALUES('115_driver_safety_identity.sql',now());`)
 	p, owner, listing, admin, plan, sub := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	safetyExec(t, db, `INSERT INTO admins VALUES($1,'super_admin',true);`, admin)
 	s3 := storage.NewS3(config.Config{AWSRegion: "us-east-1", S3BucketName: "synthetic", AWSAccessKeyID: "synthetic", AWSSecretAccessKey: "synthetic"})
@@ -69,6 +69,9 @@ func TestDriverLegacyEvidenceEligibilityAndNearby(t *testing.T) {
 		c.Locals("admin_id", admin)
 		return market.AdminReviewVerificationDocument(c)
 	})
+	app.Patch("/providers/:provider_id", func(c *fiber.Ctx) error { c.Locals("admin_id", admin); return market.AdminVerifyProvider(c) })
+	uploadOnly := &ProviderMarketplaceController{db: db}
+	app.Post("/documents", uploadOnly.AddVerificationDocument)
 	policy := communityCall(t, app, "GET", "/documents/"+p, "admin", "", 200)
 	if policy["legacy_driver_screening"] != true || len(policy["required_documents"].([]any)) != 3 {
 		t.Fatal("legacy checklist was replaced by new UI requirements", policy)
@@ -87,6 +90,13 @@ func TestDriverLegacyEvidenceEligibilityAndNearby(t *testing.T) {
 	}
 	communityCall(t, app, "PATCH", "/documents/"+p+"/"+licenceID, "admin", `{"status":"approved","evidence_confirmed":false}`, 422)
 	communityCall(t, app, "PATCH", "/documents/"+p+"/"+licenceID, "admin", `{"status":"approved","evidence_confirmed":true}`, 204)
+	communityCall(t, app, "PATCH", "/providers/"+p, "admin", `{"status":"approved"}`, 204)
+	communityCall(t, app, "PATCH", "/providers/"+newProvider, "admin", `{"status":"approved"}`, 409)
+	// A legacy upload with no expiry reaches the storage gate, without making
+	// an external request; current applicants are still rejected at validation.
+	uploadJSON := fmt.Sprintf(`{"document_type":"drivers_license","document_url":%q}`, s3.ObjectURL("private/providers/"+p+"/verification/evidence/license.jpg"))
+	communityCall(t, app, "POST", "/documents", owner, uploadJSON, 503)
+
 	payload := func() string {
 		return fmt.Sprintf(`{"listing_id":%q,"latitude":9.08,"longitude":7.45,"accuracy_m":20,"captured_at":%q}`, listing, time.Now().Format(time.RFC3339Nano))
 	}
