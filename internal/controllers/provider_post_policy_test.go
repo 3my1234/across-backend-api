@@ -106,9 +106,14 @@ func TestProviderPostRulesCombinedCapacityAndMedia(t *testing.T) {
 	}
 }
 func TestPostVideoInspectionRejectsInvalidAndLongMedia(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"format":{"duration":"61"},"streams":[{"codec_type":"video","codec_name":"h264"}]}`, `{"format":{"duration":"20"},"streams":[{"codec_type":"audio","codec_name":"aac"}]}`, `{"format":{"duration":"20"},"streams":[{"codec_type":"video","codec_name":"hevc"}]}`, `{"format":{"duration":"NaN"}}`} {
+	for _, raw := range []string{`{}`, `{"format":{"duration":"181"},"streams":[{"codec_type":"video","codec_name":"h264"}]}`, `{"format":{"duration":"20"},"streams":[{"codec_type":"audio","codec_name":"aac"}]}`, `{"format":{"duration":"20"},"streams":[{"codec_type":"video","codec_name":"hevc"}]}`, `{"format":{"duration":"NaN"}}`} {
 		if _, e := verifiedVideoDuration([]byte(raw)); e == nil {
 			t.Fatal("invalid video accepted")
+		}
+	}
+	for _, duration := range []string{"61", "180"} {
+		if _, err := verifiedVideoDuration([]byte(`{"format":{"duration":"` + duration + `"},"streams":[{"codec_type":"video","codec_name":"h264","duration":"` + duration + `"}]}`)); err != nil {
+			t.Fatal("valid three-minute media rejected", err)
 		}
 	}
 	if d, e := verifiedVideoDuration([]byte(`{"format":{"duration":"60"},"streams":[{"codec_type":"video","codec_name":"h264","duration":"60"}]}`)); e != nil || d != 60 {
