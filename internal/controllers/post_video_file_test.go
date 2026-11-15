@@ -17,7 +17,7 @@ func TestPostVideoRealFileDuration(t *testing.T) {
 	}
 	ctx, done := context.WithTimeout(context.Background(), 30*time.Second)
 	defer done()
-	for _, duration := range []string{"1", "61"} {
+	for _, duration := range []string{"1", "181"} {
 		name := filepath.Join(t.TempDir(), "test.mp4")
 		raw, e := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=16x16:rate=1", "-t", duration, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", name).CombinedOutput()
 		if e != nil {
@@ -27,8 +27,8 @@ func TestPostVideoRealFileDuration(t *testing.T) {
 		if duration == "1" && e != nil {
 			t.Fatal(e)
 		}
-		if duration == "61" && e == nil {
-			t.Fatal("real 61-second video accepted")
+		if duration == "181" && e == nil {
+			t.Fatal("real 181-second video accepted")
 		}
 	}
 }

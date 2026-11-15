@@ -149,8 +149,8 @@ func jobError(err error) error {
 	return fiber.ErrInternalServerError
 }
 
-const jobAvailable = `j.status='published' AND j.deadline>clock_timestamp() AND p.is_active AND p.verification_status='approved' AND j.plan_slot<=(provider_current_benefits(j.provider_id)->>'post_limit')::int`
-const jobSelect = `SELECT to_jsonb(j)||jsonb_build_object('provider_name',p.business_name,'available',(` + jobAvailable + `),'effective_status',CASE WHEN j.status='published' AND j.deadline<=clock_timestamp() THEN 'expired' ELSE j.status END,'availability_reason',CASE WHEN j.status<>'published' THEN j.status WHEN j.deadline<=clock_timestamp() THEN 'expired' WHEN NOT p.is_active OR p.verification_status<>'approved' THEN 'provider_unavailable' WHEN j.plan_slot>(provider_current_benefits(j.provider_id)->>'post_limit')::int THEN 'plan_limit' ELSE '' END,'open_reports',(SELECT count(*) FROM provider_job_reports r WHERE r.job_id=j.id AND r.status='open')) FROM provider_jobs j JOIN provider_organizations p ON p.id=j.provider_id `
+const jobAvailable = `j.status='published' AND j.deadline>clock_timestamp() AND p.is_active AND p.verification_status='approved'`
+const jobSelect = `SELECT to_jsonb(j)||jsonb_build_object('provider_name',p.business_name,'available',(` + jobAvailable + `),'effective_status',CASE WHEN j.status='published' AND j.deadline<=clock_timestamp() THEN 'expired' ELSE j.status END,'availability_reason',CASE WHEN j.status<>'published' THEN j.status WHEN j.deadline<=clock_timestamp() THEN 'expired' WHEN NOT p.is_active OR p.verification_status<>'approved' THEN 'provider_unavailable' ELSE '' END,'open_reports',(SELECT count(*) FROM provider_job_reports r WHERE r.job_id=j.id AND r.status='open')) FROM provider_jobs j JOIN provider_organizations p ON p.id=j.provider_id `
 
 func (m *ProviderMarketplaceController) jobsOwner(c *fiber.Ctx) (string, error) {
 	actor, _ := c.Locals("user_id").(string)
@@ -283,8 +283,8 @@ func (m *ProviderMarketplaceController) JobAllowance(c *fiber.Ctx) error {
 	}
 	var limit, used int
 	var verified bool
-	err = m.db.QueryRow(c.Context(), `SELECT (provider_current_benefits(p.id)->>'post_limit')::int,p.is_active AND p.verification_status='approved',
- (SELECT count(*) FROM products WHERE provider_id=p.id AND moderation_status<>'archived')+(SELECT count(*) FROM provider_listings WHERE provider_id=p.id AND status<>'archived')+(SELECT count(*) FROM provider_jobs WHERE provider_id=p.id AND status='published' AND deadline>clock_timestamp()) FROM provider_organizations p WHERE p.id=$1::uuid`, owner).Scan(&limit, &verified, &used)
+	err = m.db.QueryRow(c.Context(), `SELECT provider_active_job_limit(p.id),p.is_active AND p.verification_status='approved',
+ (SELECT count(*) FROM provider_jobs WHERE provider_id=p.id AND status='published' AND deadline>clock_timestamp()) FROM provider_organizations p WHERE p.id=$1::uuid`, owner).Scan(&limit, &verified, &used)
 	if err != nil {
 		return jobError(err)
 	}
@@ -293,7 +293,7 @@ func (m *ProviderMarketplaceController) JobAllowance(c *fiber.Ctx) error {
 		remaining = 0
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "note": "Published active jobs share your existing listing allowance. Job drafts use no slot; closing, filling, expiry or removal releases the slot. Product/service draft rules are unchanged."})
+	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "note": "Active jobs have a separate plan allowance: Free, Bronze and Silver 1; Diamond 5; Gold 10. Drafts use no job place; closing, filling, expiry or removal releases it. Existing jobs stay in your history."})
 }
 func (m *ProviderMarketplaceController) SaveJob(c *fiber.Ctx) error {
 	owner, err := m.jobsOwner(c)

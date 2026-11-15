@@ -20,6 +20,7 @@ import (
 var videoVerificationSlots = make(chan struct{}, 2)
 
 const maxPostVideoBytes = 50 * 1024 * 1024
+const maxPostVideoSeconds = 180
 
 type videoProbeOutput struct{ buffer bytes.Buffer }
 
@@ -36,7 +37,7 @@ func probePostVideo(ctx context.Context, filename string) (float64, error) {
 	command.Stderr = io.Discard
 	e := command.Run()
 	if e != nil {
-		return 0, fmt.Errorf("Could not verify this video. Upload a valid H.264 MP4 of up to 60 seconds.")
+		return 0, fmt.Errorf("Could not verify this video. Upload a valid H.264 MP4 of up to 180 seconds.")
 	}
 	return verifiedVideoDuration(output.buffer.Bytes())
 }
@@ -56,8 +57,8 @@ func verifiedVideoDuration(raw []byte) (float64, error) {
 		return 0, fmt.Errorf("Could not inspect this video. Choose a valid MP4 file.")
 	}
 	d, err := strconv.ParseFloat(probe.Format.Duration, 64)
-	if err != nil || math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 || d > 60 {
-		return 0, fmt.Errorf("Each video must be no longer than 60 seconds.")
+	if err != nil || math.IsNaN(d) || math.IsInf(d, 0) || d <= 0 || d > maxPostVideoSeconds {
+		return 0, fmt.Errorf("Each video must be no longer than 180 seconds.")
 	}
 	found := false
 	for _, s := range probe.Streams {
@@ -67,8 +68,8 @@ func verifiedVideoDuration(raw []byte) (float64, error) {
 			}
 			found = true
 		}
-		if duration, e := strconv.ParseFloat(s.Duration, 64); e == nil && (math.IsNaN(duration) || math.IsInf(duration, 0) || duration > 60) {
-			return 0, fmt.Errorf("Each video must be no longer than 60 seconds.")
+		if duration, e := strconv.ParseFloat(s.Duration, 64); e == nil && (math.IsNaN(duration) || math.IsInf(duration, 0) || duration > maxPostVideoSeconds) {
+			return 0, fmt.Errorf("Each video must be no longer than 180 seconds.")
 		}
 	}
 	if !found {
