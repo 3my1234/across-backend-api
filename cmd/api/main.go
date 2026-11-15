@@ -46,6 +46,9 @@ func main() {
 	if cfg.AppEnv == "production" || cfg.AppEnv == "staging" {
 		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := db.VerifyProviderRenewalSchema(checkCtx, store.PG)
+		if err == nil {
+			err = db.VerifyJobsSchema(checkCtx, store.PG)
+		}
 		cancel()
 		if err != nil {
 			log.Fatal(err)

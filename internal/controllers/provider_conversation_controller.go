@@ -199,11 +199,11 @@ func (m *ProviderMarketplaceController) ListBuyerConversations(c *fiber.Ctx) err
 		}
 	}
 	c.Set("Cache-Control", "private, no-store")
-	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title),p.business_name,c.status,
+	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title,'Job application'),p.business_name,c.status,
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id IN (`+businessThreadMembers("c.id")+`) ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages msg JOIN provider_conversations physical ON physical.id=msg.conversation_id WHERE physical.id IN (`+businessThreadMembers("c.id")+`) AND msg.sender_type='provider' AND msg.created_at>COALESCE(physical.buyer_last_read_at,'epoch'::timestamptz)),
-		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_conversations jobthread WHERE jobthread.id IN (`+businessThreadMembers("c.id")+`) AND to_jsonb(jobthread)->>'job_id' IS NOT NULL) OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN provider_organizations p ON p.id=c.provider_id
 		WHERE c.user_id=$1::uuid AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text)
 		AND ($8='' OR NULLIF($8,'')::uuid IN (`+businessThreadMembers("c.id")+`))
@@ -240,11 +240,11 @@ func (m *ProviderMarketplaceController) ListProviderConversations(c *fiber.Ctx) 
 			return fiber.ErrBadRequest
 		}
 	}
-	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title),u.full_name,c.status,
+	rows, err := m.db.Query(ctx, `SELECT c.id::text,COALESCE(l.id::text,''),COALESCE(l.title,pr.title,'Job application'),u.full_name,c.status,
 		COALESCE((SELECT body FROM provider_conversation_messages WHERE conversation_id IN (`+businessThreadMembers("c.id")+`) ORDER BY created_at DESC,id DESC LIMIT 1),''),
 		c.last_message_at,
 		(SELECT count(*)::int FROM provider_conversation_messages msg JOIN provider_conversations physical ON physical.id=msg.conversation_id WHERE physical.id IN (`+businessThreadMembers("c.id")+`) AND msg.sender_type='buyer' AND msg.created_at>COALESCE(physical.provider_last_read_at,'epoch'::timestamptz)),
-		($2::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
+		($2::boolean OR EXISTS(SELECT 1 FROM provider_conversations jobthread WHERE jobthread.id IN (`+businessThreadMembers("c.id")+`) AND to_jsonb(jobthread)->>'job_id' IS NOT NULL) OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now())),COALESCE(c.product_id::text,''),c.provider_id::text
 		FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id JOIN users u ON u.id=c.user_id
 		WHERE c.provider_id=$1::uuid AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text) AND ($6='' OR NULLIF($6,'')::uuid IN (`+businessThreadMembers("c.id")+`)) AND ($3::timestamptz IS NULL OR (c.last_message_at,c.id)<($3::timestamptz,NULLIF($4,'')::uuid)) ORDER BY c.last_message_at DESC,c.id DESC LIMIT $5`, providerID, !m.subscriptionsRequired(), page.CursorTime, page.CursorID, page.Limit+1, lookup)
 	if err != nil {
@@ -369,16 +369,16 @@ func (m *ProviderMarketplaceController) sendConversationMessage(c *fiber.Ctx, pr
 		if memberErr != nil {
 			return fiber.ErrForbidden
 		}
-		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,COALESCE(c.listing_id::text,''),COALESCE(l.title,pr.title),c.user_id::text,COALESCE(c.product_id::text,'')
+		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,COALESCE(c.listing_id::text,''),COALESCE(l.title,pr.title,'Job application'),c.user_id::text,COALESCE(c.product_id::text,'')
 			FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
 			WHERE c.id=$1::uuid AND c.provider_id=$2::uuid AND c.status='open'
-			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
+			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_conversations jobthread WHERE jobthread.id IN (`+businessThreadMembers("c.id")+`) AND to_jsonb(jobthread)->>'job_id' IS NOT NULL) OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
 			c.Params("conversation_id"), memberProviderID, !m.subscriptionsRequired()).Scan(&providerID, &listingID, &listingTitle, &buyerID, &productID)
 	} else {
-		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,COALESCE(c.listing_id::text,''),COALESCE(l.title,pr.title),c.user_id::text,COALESCE(c.product_id::text,'')
+		err = m.db.QueryRow(c.Context(), `SELECT c.provider_id::text,COALESCE(c.listing_id::text,''),COALESCE(l.title,pr.title,'Job application'),c.user_id::text,COALESCE(c.product_id::text,'')
 			FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
 			WHERE c.id=$1::uuid AND c.user_id=$2::uuid AND c.status='open'
-			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
+			  AND ($3::boolean OR EXISTS(SELECT 1 FROM provider_conversations jobthread WHERE jobthread.id IN (`+businessThreadMembers("c.id")+`) AND to_jsonb(jobthread)->>'job_id' IS NOT NULL) OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=c.provider_id AND s.status='active' AND s.current_period_end>now()))`,
 			c.Params("conversation_id"), userID, !m.subscriptionsRequired()).Scan(&providerID, &listingID, &listingTitle, &buyerID, &productID)
 	}
 	if err == pgx.ErrNoRows {

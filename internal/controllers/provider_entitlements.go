@@ -31,13 +31,14 @@ func (m *ProviderMarketplaceController) providerEntitlements(ctx context.Context
 	if err = json.Unmarshal(raw, &benefits); err != nil {
 		return nil, err
 	}
+	posts += benefits.ActiveJobs
 	remaining := func(limit, used int) int {
 		if used >= limit {
 			return 0
 		}
 		return limit - used
 	}
-	return fiber.Map{"entitlements_version": 1, "provider_id": id, "tier": tier, "tier_label": providerTierLabel(tier), "paid_active": paid, "verified": verified, "requires_verification": true, "benefits": benefits, "active_listings_used": posts, "remaining_active_listings": remaining(benefits.Posts, posts), "town_hall_rooms_used": rooms, "remaining_town_hall_rooms": remaining(benefits.Rooms, rooms), "listing_over_limit": posts > benefits.Posts, "room_over_limit": rooms > benefits.Rooms, "capacity_note": "Products and services share one allowance. Unarchived drafts reserve a place. Existing listings, images and joined rooms are kept after a downgrade; new listings and joins must fit your plan."}, nil
+	return fiber.Map{"entitlements_version": 1, "provider_id": id, "tier": tier, "tier_label": providerTierLabel(tier), "paid_active": paid, "verified": verified, "requires_verification": true, "benefits": benefits, "active_listings_used": posts, "remaining_active_listings": remaining(benefits.Posts, posts), "town_hall_rooms_used": rooms, "remaining_town_hall_rooms": remaining(benefits.Rooms, rooms), "listing_over_limit": posts > benefits.Posts, "room_over_limit": rooms > benefits.Rooms, "capacity_note": "Products, services and active published jobs share one allowance. Product/service drafts reserve a place; job drafts do not. Closed, filled, expired and removed jobs free their place. Existing listings, images and joined rooms are kept after a downgrade; new listings and joins must fit your plan."}, nil
 }
 func (m *ProviderMarketplaceController) ProviderEntitlements(c *fiber.Ctx) error {
 	actor, _ := c.Locals("user_id").(string)
