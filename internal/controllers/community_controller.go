@@ -522,7 +522,7 @@ func (s *CommunityController) Inbox(c *fiber.Ctx) error {
  SELECT c.id,'business','legacy',c.last_message_at,CASE WHEN c.user_id=$1::uuid THEN p.business_name ELSE COALESCE(u.full_name,'Customer') END,CASE WHEN c.user_id=$1::uuid THEN p.owner_user_id::text ELSE c.user_id::text END,c.provider_id::text,
  CASE WHEN c.user_id=$1::uuid THEN 'buyer' ELSE 'provider' END,c.status,
  NULL::timestamptz,
- jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'job_id',to_jsonb(c)->>'job_id','title',COALESCE(l.title,pr.title,'Job application'))
+ jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'title',COALESCE(l.title,pr.title,'Job application')) || CASE WHEN to_jsonb(c)->>'job_id' IS NOT NULL THEN jsonb_build_object('job_id',to_jsonb(c)->>'job_id') ELSE '{}'::jsonb END
  FROM provider_conversations c JOIN provider_organizations p ON p.id=c.provider_id JOIN users u ON u.id=c.user_id LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products pr ON pr.id=c.product_id
  WHERE (c.user_id=$1::uuid OR c.provider_id=NULLIF($2,'')::uuid) AND c.id::text=COALESCE(to_jsonb(c)->>'thread_id',c.id::text)
  ) SELECT id::text,kind,source,last_message_at,title,peer_id,provider_id,actor_role,state,CASE WHEN source='shared' THEN

@@ -41,7 +41,7 @@ CREATE TABLE provider_job_applications (
 );
 CREATE OR REPLACE FUNCTION provider_message_context() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- SELECT jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'job_id',c.job_id,'title',COALESCE(l.title,p.title,j.title,'')) INTO NEW.context
+ SELECT jsonb_build_object('listing_id',c.listing_id,'product_id',c.product_id,'title',COALESCE(l.title,p.title,j.title,'')) || CASE WHEN c.job_id IS NOT NULL THEN jsonb_build_object('job_id',c.job_id) ELSE '{}'::jsonb END INTO NEW.context
  FROM provider_conversations c LEFT JOIN provider_listings l ON l.id=c.listing_id LEFT JOIN products p ON p.id=c.product_id LEFT JOIN provider_jobs j ON j.id=c.job_id WHERE c.id=NEW.conversation_id;
  RETURN NEW;
 END $$;

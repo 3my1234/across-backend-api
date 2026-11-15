@@ -488,7 +488,7 @@ func (m *ProviderMarketplaceController) ApplyJob(c *fiber.Ctx) error {
 		return fiber.NewError(409, "You cannot apply to your own provider's job")
 	}
 	var physical, thread string
-	err = tx.QueryRow(ctx, `INSERT INTO provider_conversations(job_id,provider_id,user_id) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) WHERE job_id IS NOT NULL DO UPDATE SET updated_at=now() WHERE provider_conversations.status<>'blocked' RETURNING id::text,thread_id::text`, c.Params("job_id"), job.Provider, actor).Scan(&physical, &thread)
+	err = tx.QueryRow(ctx, `INSERT INTO provider_conversations(job_id,provider_id,user_id) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) WHERE job_id IS NOT NULL DO UPDATE SET status='open',updated_at=now() WHERE provider_conversations.status<>'blocked' RETURNING id::text,thread_id::text`, c.Params("job_id"), job.Provider, actor).Scan(&physical, &thread)
 	if err != nil {
 		return jobError(err)
 	}
@@ -506,6 +506,9 @@ func (m *ProviderMarketplaceController) ApplyJob(c *fiber.Ctx) error {
 	}
 	if blocked {
 		return fiber.NewError(409, "This conversation is blocked")
+	}
+	if _, err = tx.Exec(ctx, `UPDATE provider_conversations SET status='open' WHERE id=$1::uuid AND status<>'blocked'`, thread); err != nil {
+		return jobError(err)
 	}
 	if m.cfg.AsyncMessageNotifications {
 		if _, err = tx.Exec(ctx, `SELECT set_config('app.async_message_fanout','on',true)`); err != nil {

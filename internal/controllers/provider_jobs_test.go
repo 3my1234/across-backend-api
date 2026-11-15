@@ -470,3 +470,29 @@ func TestJobConcurrentApplicationsProduceOneMessage(t *testing.T) {
 		t.Fatal("race duplicated first message", count, e)
 	}
 }
+
+func TestJobApplicationReusesClosedThreadButNeverUnblocks(t *testing.T) {
+	db := jobsDB(t)
+	app := jobsApp(db)
+	owner, provider := jobsActor(t, db, "bronze")
+	buyer, service, thread := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	safetyExec(t, db, `INSERT INTO users(id)VALUES($1)`, buyer)
+	safetyExec(t, db, `INSERT INTO provider_listings(id,provider_id)VALUES($1,$2)`, service, provider)
+	safetyExec(t, db, `INSERT INTO provider_conversations(id,provider_id,user_id,listing_id,status)VALUES($1,$2,$3,$4,'blocked')`, thread, provider, buyer, service)
+	job := jobsStatus(t, app, owner, jobsCreate(t, app, owner, "chat"), "published", 200)
+	payload := map[string]any{"id": uuid.NewString(), "revision": job["revision"], "message": "Please consider my application"}
+	jobsCall(t, app, "POST", "/jobs/"+job["id"].(string)+"/applications", buyer, payload, 409)
+	var count int
+	if e := db.QueryRow(context.Background(), `SELECT count(*) FROM provider_job_applications`).Scan(&count); e != nil || count != 0 {
+		t.Fatal("blocked conversation accepted application", count, e)
+	}
+	safetyExec(t, db, `UPDATE provider_conversations SET status='closed' WHERE id=$1`, thread)
+	receipt := jobsCall(t, app, "POST", "/jobs/"+job["id"].(string)+"/applications", buyer, payload, 201)
+	if receipt["conversation_id"] != thread {
+		t.Fatal("existing inbox identity replaced")
+	}
+	var status string
+	if e := db.QueryRow(context.Background(), `SELECT status FROM provider_conversations WHERE id=$1`, thread).Scan(&status); e != nil || status != "open" {
+		t.Fatal("application conversation remained unusable", status, e)
+	}
+}
