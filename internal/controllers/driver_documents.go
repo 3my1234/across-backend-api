@@ -24,6 +24,14 @@ func driverDocumentNeedsExpiry(kind string) bool {
 	return kind == "drivers_license" || kind == "vehicle_insurance" || kind == "roadworthiness"
 }
 
+// The server-owned checklist distinguishes reviewed pre-rollout providers.
+// Never accept a client-supplied age/cohort flag.
+func (m *ProviderMarketplaceController) legacyDriverScreening(ctx context.Context, provider string) (bool, error) {
+	var legacy bool
+	err := m.db.QueryRow(ctx, `SELECT count(*)=3 FROM driver_required_documents($1::uuid)`, provider).Scan(&legacy)
+	return legacy, err
+}
+
 var driverEvidenceSlots = make(chan struct{}, 2)
 
 func (m *ProviderMarketplaceController) freezeDriverDocument(c *fiber.Ctx, provider, raw string) (string, error) {

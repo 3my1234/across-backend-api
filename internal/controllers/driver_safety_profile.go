@@ -28,9 +28,9 @@ func (m *ProviderMarketplaceController) DriverSafetyProfile(c *fiber.Ctx) error 
 	var provider, name, face, vehicle, plate string
 	var legacy bool
 	err := m.db.QueryRow(ctx, `SELECT l.provider_id::text,u.full_name,
- COALESCE((SELECT CASE WHEN status='approved' AND (expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_face' ORDER BY created_at DESC,id DESC LIMIT 1),''),
- COALESCE((SELECT CASE WHEN status='approved' AND (expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_vehicle' ORDER BY created_at DESC,id DESC LIMIT 1),''),
- COALESCE((SELECT CASE WHEN status='approved' AND (expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_plate' ORDER BY created_at DESC,id DESC LIMIT 1),''),
+ COALESCE((SELECT CASE WHEN status='approved' AND ((SELECT count(*)=3 FROM driver_required_documents(l.provider_id)) OR expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_face' ORDER BY created_at DESC,id DESC LIMIT 1),''),
+ COALESCE((SELECT CASE WHEN status='approved' AND ((SELECT count(*)=3 FROM driver_required_documents(l.provider_id)) OR expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_vehicle' ORDER BY created_at DESC,id DESC LIMIT 1),''),
+ COALESCE((SELECT CASE WHEN status='approved' AND ((SELECT count(*)=3 FROM driver_required_documents(l.provider_id)) OR expires_on IS NULL OR expires_on>=CURRENT_DATE) THEN document_url END FROM provider_verification_documents WHERE provider_id=l.provider_id AND document_type='driver_plate' ORDER BY created_at DESC,id DESC LIMIT 1),''),
  (SELECT count(*)=3 FROM driver_required_documents(l.provider_id))
  FROM provider_listings l JOIN provider_public_identity i ON i.provider_id=l.provider_id
  JOIN provider_organizations p ON p.id=l.provider_id JOIN users u ON u.id=p.owner_user_id

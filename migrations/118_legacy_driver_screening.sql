@@ -56,9 +56,18 @@ RETURNS TABLE(document_type text,requires_expiry boolean) LANGUAGE sql STABLE AS
  CROSS JOIN LATERAL unnest(CASE WHEN legacy THEN ARRAY['drivers_license','driver_vehicle','driver_plate']
  ELSE ARRAY['drivers_license','driver_face','driver_vehicle','driver_plate','vehicle_registration'] END) kind;
 $$;
--- driver_documents_approved still checks latest status and rejects any explicitly
--- expired required document. Legacy licences without recorded expiry retain the
--- original policy; this does not label their expiry as verified/current.
+-- Do not apply newly introduced expiry metadata checks to the reviewed cohort.
+-- A rejected/pending/missing required document still fails the ORIGINAL checks.
+-- This preserves the old screening policy, not a claim of current licence validity.
+CREATE OR REPLACE FUNCTION driver_documents_approved(provider uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT NOT EXISTS (
+ SELECT 1 FROM driver_required_documents(provider) r LEFT JOIN LATERAL (
+ SELECT d.status,d.expires_on FROM provider_verification_documents d
+ WHERE d.provider_id=provider AND d.document_type=r.document_type ORDER BY d.created_at DESC,d.id DESC LIMIT 1
+ ) latest ON true WHERE latest.status IS DISTINCT FROM 'approved'
+ OR (NOT driver_has_legacy_screening(provider) AND
+ ((r.requires_expiry AND latest.expires_on IS NULL) OR latest.expires_on<CURRENT_DATE)));
+$$;
 CREATE FUNCTION revoke_driver_legacy_screening() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL THEN

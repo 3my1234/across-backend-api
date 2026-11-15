@@ -64,6 +64,29 @@ func TestDriverLegacyEvidenceEligibilityAndNearby(t *testing.T) {
 	app.Put("/availability", market.DriverAvailability)
 	app.Get("/nearby", market.NearbyDrivers)
 	app.Get("/safety/:listing_id", market.DriverSafetyProfile)
+	app.Get("/documents/:provider_id", market.AdminListVerificationDocuments)
+	app.Patch("/documents/:provider_id/:document_id", func(c *fiber.Ctx) error {
+		c.Locals("admin_id", admin)
+		return market.AdminReviewVerificationDocument(c)
+	})
+	policy := communityCall(t, app, "GET", "/documents/"+p, "admin", "", 200)
+	if policy["legacy_driver_screening"] != true || len(policy["required_documents"].([]any)) != 3 {
+		t.Fatal("legacy checklist was replaced by new UI requirements", policy)
+	}
+	legacy, e := market.legacyDriverScreening(context.Background(), p)
+	if e != nil || !legacy {
+		t.Fatal("legacy upload policy still requires expiry", e)
+	}
+	legacy, e = market.legacyDriverScreening(context.Background(), newProvider)
+	if e != nil || legacy {
+		t.Fatal("new applicant received legacy upload waiver", e)
+	}
+	var licenceID string
+	if e := db.QueryRow(context.Background(), `SELECT id::text FROM provider_verification_documents WHERE provider_id=$1 AND document_type='drivers_license'`, p).Scan(&licenceID); e != nil {
+		t.Fatal(e)
+	}
+	communityCall(t, app, "PATCH", "/documents/"+p+"/"+licenceID, "admin", `{"status":"approved","evidence_confirmed":false}`, 422)
+	communityCall(t, app, "PATCH", "/documents/"+p+"/"+licenceID, "admin", `{"status":"approved","evidence_confirmed":true}`, 204)
 	payload := func() string {
 		return fmt.Sprintf(`{"listing_id":%q,"latitude":9.08,"longitude":7.45,"accuracy_m":20,"captured_at":%q}`, listing, time.Now().Format(time.RFC3339Nano))
 	}
@@ -97,10 +120,10 @@ func TestDriverLegacyEvidenceEligibilityAndNearby(t *testing.T) {
 	}
 	safetyExec(t, db, `UPDATE provider_listings SET status='approved' WHERE id=$1`, listing)
 	safetyExec(t, db, `UPDATE provider_verification_documents SET expires_on=CURRENT_DATE-1 WHERE provider_id=$1 AND document_type='drivers_license'`, p)
-	if safetyApproved(t, db, p) {
-		t.Fatal("legacy exception accepted explicitly expired licence")
+	if !safetyApproved(t, db, p) {
+		t.Fatal("new expiry metadata constrained original approved legacy documents")
 	}
-	nearby(0)
+	nearby(1)
 	safetyExec(t, db, `UPDATE provider_verification_documents SET expires_on=CURRENT_DATE+1,status='rejected' WHERE provider_id=$1 AND document_type='drivers_license'`, p)
 	if safetyApproved(t, db, p) {
 		t.Fatal("legacy exception accepted rejected licence")
