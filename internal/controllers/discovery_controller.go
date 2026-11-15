@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type discoveryItem struct {
 	Category       []string  `json:"categories"`
 	City           string    `json:"city"`
 	Images         []string  `json:"image_urls"`
+	Videos         []string  `json:"video_urls"`
 	Price          *float64  `json:"price"`
 	Currency       string    `json:"currency"`
 	Paid           bool      `json:"-"`
@@ -53,6 +55,26 @@ type discoveryItem struct {
 	Receipt        string    `json:"receipt"`
 	Score          int       `json:"-"`
 }
+
+func publicDiscoveryVideos(urls []string) []string {
+	result := []string{}
+	for _, raw := range urls {
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+			continue
+		}
+		path, err := url.PathUnescape(parsed.EscapedPath())
+		if err != nil || strings.Contains("/"+strings.Trim(path, "/")+"/", "/private/") {
+			continue
+		}
+		result = append(result, parsed.String())
+		if len(result) == 5 {
+			break
+		}
+	}
+	return result
+}
+
 type discoveryReceipt struct {
 	Kind      string `json:"k"`
 	ID        string `json:"i"`
@@ -218,6 +240,11 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 		}
 		carouselLimit = n
 	}
+	viewer := c.Query("sponsored_viewer") == "1"
+	after := c.Query("sponsored_after", "00000000-0000-0000-0000-000000000000")
+	if viewer && (listingKind == "" || sourceID != "" || uuid.Validate(after) != nil) {
+		return fiber.ErrBadRequest
+	}
 	categories := []string{}
 	sourceTitle := ""
 	if sourceID != "" {
@@ -258,6 +285,10 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	seed := sha256.Sum256([]byte(session + time.Now().UTC().Format("2006-01-02T15:04")))
 	pivot := uuid.UUID(seed[:16]).String()
 	query := discoveryCandidateSQL
+	if viewer {
+		query = sponsoredViewerSQL
+		pivot = after
+	}
 	rows, err := d.db.Query(ctx, query, country, state, city, sourceID, words, categories, pivot, sourceID != "" || c.Query("search") != "", listingKind)
 	if err != nil {
 		return fiber.NewError(503, "Discovery is temporarily unavailable")
@@ -266,7 +297,8 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	candidates := []discoveryItem{}
 	for rows.Next() {
 		var item discoveryItem
-		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created, &item.PriceMode, &item.CompareAtPrice); err != nil {
+		var videos []byte
+		if err = rows.Scan(&item.Kind, &item.ID, &item.Provider, &item.Title, &item.Category, &item.City, &item.Images, &item.Price, &item.Currency, &item.Paid, &item.Tier, &item.Priority, &item.Promote, &item.Created, &item.PriceMode, &item.CompareAtPrice, &videos); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		item.Score = discoveryRelevance(item, categories, words, city)
@@ -274,6 +306,12 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 			item.Score--
 		}
 		item.Images = d.catalog.normalizeImageURLs(item.Images)
+		item.Videos = []string{}
+		if err = json.Unmarshal(videos, &item.Videos); err != nil {
+			item.Videos = []string{}
+		}
+		// Stored video links use the video endpoint; never rewrite them to the image endpoint.
+		item.Videos = publicDiscoveryVideos(item.Videos)
 		candidates = append(candidates, item)
 	}
 	if rows.Err() != nil {
@@ -282,6 +320,26 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	rows.Close()
 	digest := sha256.Sum256([]byte(session))
 	sessionHash := hex.EncodeToString(digest[:])
+	if viewer {
+		next := ""
+		if len(candidates) > 24 {
+			candidates = candidates[:24]
+			next = candidates[23].ID
+		}
+		cards := []fiber.Map{}
+		for _, item := range candidates {
+			item.Placement = "promoted"
+			item.Label = "Sponsored"
+			item.Receipt = d.signReceipt(discoveryReceipt{item.Kind, item.ID, item.Provider, sessionHash, "promoted", time.Now().Unix()})
+			raw, _ := json.Marshal(item)
+			card := fiber.Map{}
+			_ = json.Unmarshal(raw, &card)
+			cards = append(cards, card)
+		}
+		c.Set("Cache-Control", "private, no-store")
+		c.Locals("public_provider_media", true)
+		return providerIdentityJSON(c, d.db, fiber.Map{"promoted": cards, "sponsored_next": next}, d.catalog.s3)
+	}
 	rails := fiber.Map{}
 	used := map[string]bool{}
 	placements := []string{"promoted", "recommended"}
@@ -328,25 +386,43 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 // Each half of each kind is capped before enrichment, using the UUID index.
 // Availability and paid eligibility are always live; no cached grant survives
 // expiry, suspension, moderation or an opt-out.
-const discoveryCandidateSQL = `WITH product_candidates AS NOT MATERIALIZED (SELECT 'product' kind,p.id,p.provider_id,p.title,p.category_path categories,p.inventory_city city,p.image_urls images,
- CASE WHEN p.is_flash_sale AND a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN p.flash_sale_price+a.delivery_fee ELSE a.delivered_price END price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode,CASE WHEN a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price THEN CASE WHEN p.is_flash_sale AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN GREATEST(p.local_selling_price,COALESCE(p.compare_at_price,0))+a.delivery_fee WHEN p.compare_at_price>p.local_selling_price THEN p.compare_at_price+a.delivery_fee ELSE 0 END ELSE 0 END compare_at_price
+const discoveryBaseSQL = `WITH product_candidates AS NOT MATERIALIZED (SELECT 'product' kind,p.id,p.provider_id,p.title,p.category_path categories,p.inventory_city city,p.image_urls images,
+ CASE WHEN p.is_flash_sale AND a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN p.flash_sale_price+a.delivery_fee ELSE a.delivered_price END price,a.currency_code currency,p.plan_slot,p.created_at,'fixed'::text price_mode,CASE WHEN a.currency_code=p.local_currency_code AND a.delivered_price-a.delivery_fee=p.local_selling_price THEN CASE WHEN p.is_flash_sale AND p.flash_sale_price>0 AND p.flash_sale_price<p.local_selling_price THEN GREATEST(p.local_selling_price,COALESCE(p.compare_at_price,0))+a.delivery_fee WHEN p.compare_at_price>p.local_selling_price THEN p.compare_at_price+a.delivery_fee ELSE 0 END ELSE 0 END compare_at_price,COALESCE(to_jsonb(p)#>'{factory_details,video_urls}','[]'::jsonb) videos
  FROM products p JOIN provider_public_identity v ON v.provider_id=p.provider_id AND v.verified AND p.plan_slot<=v.listing_limit JOIN LATERAL (SELECT a.delivered_price,a.delivery_fee,a.currency_code FROM product_delivery_areas a JOIN countries_config market ON market.country_code=a.country_code AND market.currency_code=a.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways) WHERE a.product_id=p.id AND a.country_code=$1 AND (a.state_key='' OR a.state_key=$2) AND (a.city_key='' OR a.city_key=$3) ORDER BY (a.city_key<>'') DESC,(a.state_key<>'') DESC LIMIT 1) a ON true
  WHERE ($9::text='' OR $9='product') AND p.is_active AND p.published_at IS NOT NULL AND p.moderation_status='approved' AND p.inventory_count>0 AND p.payment_mode='contact' AND p.fulfillment_mode IN('merchant_local','merchant_cross_border') AND ($4='' OR p.id<>NULLIF($4,'')::uuid)
- AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service',l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed'),0::numeric
+ AND (NOT $8 OR p.category_path && $6::text[] OR to_tsvector('simple',p.title||' '||p.description) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), service_candidates AS NOT MATERIALIZED (SELECT 'service' kind,l.id,l.provider_id,l.title,ARRAY[l.category,l.listing_type],l.city,l.media_urls,l.price,l.currency_code,l.plan_slot,l.created_at,COALESCE(l.attributes->>'price_mode','fixed'),0::numeric,COALESCE(l.attributes->'video_urls','[]'::jsonb)
  FROM provider_listings l JOIN provider_public_identity v ON v.provider_id=l.provider_id AND v.verified AND l.plan_slot<=v.listing_limit JOIN countries_config market ON market.country_code=l.country_code AND market.currency_code=l.currency_code AND market.is_active AND 'flutterwave'=ANY(market.active_payment_gateways)
  WHERE ($9::text='' OR $9='service') AND l.country_code=$1 AND l.published_at IS NOT NULL AND l.status='approved' AND l.is_available_now AND ($4='' OR l.id<>NULLIF($4,'')::uuid)
- AND (NOT $8 OR l.category=ANY($6::text[]) OR to_tsvector('simple',l.title||' '||l.description||' '||l.category) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), content AS MATERIALIZED (
+ AND (NOT $8 OR l.category=ANY($6::text[]) OR to_tsvector('simple',l.title||' '||l.description||' '||l.category) @@ websearch_to_tsquery('simple',array_to_string($5::text[],' OR ')))), `
+const discoverySampleSQL = `content AS MATERIALIZED (
  (SELECT * FROM product_candidates WHERE id>=$7::uuid ORDER BY id LIMIT 128)
  UNION ALL (SELECT * FROM product_candidates WHERE id<$7::uuid ORDER BY id LIMIT 128)
  UNION ALL (SELECT * FROM service_candidates WHERE id>=$7::uuid ORDER BY id LIMIT 128)
  UNION ALL (SELECT * FROM service_candidates WHERE id<$7::uuid ORDER BY id LIMIT 128)
- )
+ )`
+const discoveryProjectionSQL = `
  SELECT c.kind,c.id::text,c.provider_id::text,c.title,c.categories,c.city,c.images,c.price::float8,c.currency,
- i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at,c.price_mode,c.compare_at_price::float8
+ i.paid_active,i.badge_tier,COALESCE(ls.priority,1),COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true),c.created_at,c.price_mode,c.compare_at_price::float8,c.videos
  FROM content c JOIN provider_public_identity i ON i.provider_id=c.provider_id
  LEFT JOIN discovery_listing_settings ls ON ls.kind=c.kind AND ls.listing_id=c.id AND ls.provider_id=c.provider_id
  LEFT JOIN discovery_provider_settings ps ON ps.provider_id=c.provider_id
  WHERE i.verified AND c.plan_slot<=i.listing_limit`
+const discoveryCandidateSQL = discoveryBaseSQL + discoverySampleSQL + discoveryProjectionSQL
+
+// The full-screen viewer walks all eligible ads, in bounded UUID seek pages.
+// The compact rail keeps its existing weighted, one-business-per-rail rotation.
+const sponsoredViewerSQL = discoveryBaseSQL + `content AS MATERIALIZED (
+ (SELECT pc.* FROM product_candidates pc
+ JOIN provider_public_identity pi ON pi.provider_id=pc.provider_id AND pi.paid_active
+ LEFT JOIN discovery_listing_settings ps ON ps.kind=pc.kind AND ps.listing_id=pc.id AND ps.provider_id=pc.provider_id
+ LEFT JOIN discovery_provider_settings pp ON pp.provider_id=pc.provider_id
+ WHERE pc.id>$7::uuid AND COALESCE(ps.enabled,true) AND COALESCE(pp.enabled,true) ORDER BY pc.id LIMIT 25)
+ UNION ALL (SELECT sc.* FROM service_candidates sc
+ JOIN provider_public_identity si ON si.provider_id=sc.provider_id AND si.paid_active
+ LEFT JOIN discovery_listing_settings ss ON ss.kind=sc.kind AND ss.listing_id=sc.id AND ss.provider_id=sc.provider_id
+ LEFT JOIN discovery_provider_settings sp ON sp.provider_id=sc.provider_id
+ WHERE sc.id>$7::uuid AND COALESCE(ss.enabled,true) AND COALESCE(sp.enabled,true) ORDER BY sc.id LIMIT 25)
+ )` + discoveryProjectionSQL + ` AND i.paid_active AND COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true) ORDER BY c.id LIMIT 25`
 
 func (d *DiscoveryController) Events(c *fiber.Ctx) error {
 	var body struct {
