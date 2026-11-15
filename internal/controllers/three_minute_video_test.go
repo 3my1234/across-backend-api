@@ -60,6 +60,24 @@ func TestLaunchVideoThreeMinuteMigrationPreservesQuotas(t *testing.T) {
 	}
 	run(`UPDATE provider_jobs SET deadline=now()-interval '1 second' WHERE id=$1`, job)
 	run(`INSERT INTO products(id,provider_id,moderation_status) VALUES(gen_random_uuid(),$1,'draft')`, bronze)
+	// Migration120 separates Jobs without weakening the current media or product/service rules.
+	migration, err := os.ReadFile("../../migrations/120_independent_provider_job_allowance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(string(migration))
+	run(`UPDATE provider_jobs SET deadline=now()+interval '1 day' WHERE id=$1`, job)
+	// Bronze already has three product drafts and can still publish the independent job.
+	usage, err := (&ProviderMarketplaceController{db: db}).providerEntitlements(ctx, bronze)
+	if err != nil || usage["active_listings_used"] != 3 || usage["remaining_active_listings"] != 0 || usage["active_jobs_used"] != 1 || usage["active_job_limit"] != 1 || usage["remaining_active_jobs"] != 0 {
+		t.Fatal("independent entitlement accounting", usage, err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO products(id,provider_id)VALUES(gen_random_uuid(),$1)`, bronze); err == nil {
+		t.Fatal("product capacity weakened")
+	}
+	extraAsset := "https://fixture.test/three-minutes-after-jobs.mp4"
+	run(`INSERT INTO provider_post_video_assets VALUES($1,$2,180,100,now())`, extraAsset, gold)
+	run(`INSERT INTO products(id,provider_id,factory_details) VALUES(gen_random_uuid(),$1,jsonb_build_object('video_urls',jsonb_build_array($2::text)))`, gold, extraAsset)
 	run(`UPDATE provider_video_launch_policy SET max_seconds=120`)
 	if _, err := db.Exec(ctx, `INSERT INTO products(id,provider_id,factory_details) VALUES(gen_random_uuid(),$1,jsonb_build_object('video_urls',jsonb_build_array($2::text)))`, gold, asset); err == nil {
 		t.Fatal("current lower video policy bypassed")

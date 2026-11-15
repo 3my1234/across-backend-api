@@ -8,6 +8,7 @@ import (
 )
 
 type providerPostPolicy struct {
+	JobLimit           int    `json:"active_job_limit,omitempty"`
 	ActiveJobs         int    `json:"active_jobs_used,omitempty"`
 	Rooms              int    `json:"town_hall_room_limit"`
 	Weight             int    `json:"promotional_weight"`
@@ -124,5 +125,7 @@ func mergedPlanPolicy(code string, limit int, raw []byte) providerPostPolicy {
 			p.VideoUploadsPaused = current.VideoUploadsPaused
 		}
 	}
+	// Jobs have a separate free allowance on every plan, including custom legacy plans.
+	p.JobLimit = 1
 	return p
 }

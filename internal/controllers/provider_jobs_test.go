@@ -20,7 +20,7 @@ import (
 )
 
 // Synthetic, randomly isolated schema. No workers, mailers, storage or gateway clients run.
-func jobsDB(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
+func jobsDB117(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
 	t.Helper()
 	db := settlementTestDB(t)
 	if appdb.VerifyJobsSchema(context.Background(), db) == nil {
@@ -60,10 +60,27 @@ func jobsDB(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
  CREATE TRIGGER slot BEFORE INSERT OR UPDATE ON products FOR EACH ROW EXECUTE FUNCTION assign_provider_post_slot();
  CREATE TRIGGER capacity BEFORE INSERT OR UPDATE ON provider_listings FOR EACH ROW EXECUTE FUNCTION enforce_provider_listing_capacity();
  CREATE TRIGGER slot BEFORE INSERT OR UPDATE ON provider_listings FOR EACH ROW EXECUTE FUNCTION assign_provider_post_slot();`)
-	if e := appdb.VerifyJobsSchema(context.Background(), db); e != nil {
-		t.Fatal("migrated Jobs schema refused", e)
+	if e := appdb.VerifyJobsSchema(context.Background(), db); e == nil {
+		t.Fatal("old shared Jobs schema allowed new API startup")
 	}
 	return db
+}
+func jobsDB(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
+	t.Helper()
+	db := jobsDB117(t, before...)
+	jobsIndependentMigration(t, db)
+	return db
+}
+func jobsIndependentMigration(t *testing.T, db *pgxpool.Pool) {
+	t.Helper()
+	raw, err := os.ReadFile("../../migrations/120_independent_provider_job_allowance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	safetyExec(t, db, string(raw))
+	if err := appdb.VerifyJobsSchema(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
 }
 func jobsApp(db *pgxpool.Pool) *fiber.App {
 	m := &ProviderMarketplaceController{db: db}
@@ -170,7 +187,7 @@ func TestJobValidation(t *testing.T) {
 		t.Fatal("incomplete draft rejected")
 	}
 }
-func TestJobSharedAllowanceExpiryAndHistory(t *testing.T) {
+func TestJobIndependentAllowanceExpiryAndHistory(t *testing.T) {
 	db := jobsDB(t)
 	app := jobsApp(db)
 	owner, p := jobsActor(t, db, "free")
@@ -179,14 +196,12 @@ func TestJobSharedAllowanceExpiryAndHistory(t *testing.T) {
 	if jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)["remaining"] != float64(1) {
 		t.Fatal("draft used slot")
 	}
-	// Legacy product drafts still reserve the same shared allowance.
+	// A Free provider can keep their product place and publish one free job.
 	safetyExec(t, db, `INSERT INTO products(provider_id)VALUES($1)`, p)
-	jobsStatus(t, app, owner, first, "published", 409)
-	safetyExec(t, db, `UPDATE products SET moderation_status='archived' WHERE provider_id=$1`, p)
 	first = jobsStatus(t, app, owner, first, "published", 200)
 	jobsStatus(t, app, owner, second, "published", 409)
 	if _, e := db.Exec(ctx, `INSERT INTO provider_listings(provider_id)VALUES($1)`, p); e == nil {
-		t.Fatal("service draft bypassed active job slot")
+		t.Fatal("service draft bypassed the existing product allowance")
 	}
 	// No background cleanup, status changes or slot clearing after deadline passage.
 	safetyExec(t, db, `UPDATE provider_jobs SET deadline=clock_timestamp()+interval '150 milliseconds' WHERE id=$1`, first["id"])
@@ -260,9 +275,9 @@ func TestJobSimultaneousPublishAndLegacyAllocation(t *testing.T) {
 	}
 	var used int
 	if e := db.QueryRow(context.Background(), `SELECT count(*) FROM provider_jobs WHERE provider_id=$1 AND status='published'`, p).Scan(&used); e != nil || used != 1 {
-		t.Fatal("wrong shared count", used, e)
+		t.Fatal("wrong active job count", used, e)
 	}
-	// Cross-kind attempts must serialize on the same provider lock too.
+	// A product and a job can publish concurrently: their allowances are independent.
 	safetyExec(t, db, `UPDATE provider_jobs SET status='closed' WHERE provider_id=$1`, p)
 	start = make(chan struct{})
 	errs := make(chan error, 2)
@@ -289,8 +304,8 @@ func TestJobSimultaneousPublishAndLegacyAllocation(t *testing.T) {
 			ok++
 		}
 	}
-	if ok != 1 {
-		t.Fatal("cross-kind allocation race", ok)
+	if ok != 2 {
+		t.Fatal("independent product/job allocations interfered", ok)
 	}
 }
 func TestJobApplicationsClicksOwnershipAndModeration(t *testing.T) {
@@ -372,7 +387,7 @@ func TestJobApplicationsClicksOwnershipAndModeration(t *testing.T) {
 	if e != nil || events != 2 || applications != 1 {
 		t.Fatal("wrong accounting", events, applications, e)
 	}
-	if jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)["remaining"] != float64(3) {
+	if jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)["remaining"] != float64(1) {
 		t.Fatal("removal did not free slots", p)
 	}
 	draft := jobsCreate(t, app, owner, "chat")
@@ -405,7 +420,8 @@ func TestJobMigrationPreservesExistingConversationAndLegacyBenefits(t *testing.T
 	}
 	app := jobsApp(db)
 	job := jobsCreate(t, app, owner, "chat")
-	jobsStatus(t, app, owner, job, "published", 409)
+	jobsStatus(t, app, owner, job, "published", 200)
+	job = jobsCreate(t, app, owner, "chat")
 	// Never-published drafts remain private even when removed by an administrator.
 	safetyExec(t, db, `UPDATE provider_jobs SET status='removed' WHERE id=$1`, job["id"])
 	jobsCall(t, app, "GET", "/jobs/"+job["id"].(string), buyer, nil, 404)
@@ -494,5 +510,72 @@ func TestJobApplicationReusesClosedThreadButNeverUnblocks(t *testing.T) {
 	var status string
 	if e := db.QueryRow(context.Background(), `SELECT status FROM provider_conversations WHERE id=$1`, thread).Scan(&status); e != nil || status != "open" {
 		t.Fatal("application conversation remained unusable", status, e)
+	}
+}
+
+func TestJobOneFreePlaceAcrossTiersAndLegacyOverage(t *testing.T) {
+	db := jobsDB117(t)
+	app := jobsApp(db)
+	owner, provider := jobsActor(t, db, "bronze")
+	a, b := jobsCreate(t, app, owner, "chat"), jobsCreate(t, app, owner, "email")
+	// Seed real pre-120 published jobs through the old guard, not by disabling constraints.
+	safetyExec(t, db, `UPDATE provider_jobs SET status='published',published_at=clock_timestamp() WHERE id IN($1,$2)`, a["id"], b["id"])
+	jobsIndependentMigration(t, db)
+	var count int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM provider_jobs WHERE provider_id=$1 AND status='published'`, provider).Scan(&count); err != nil || count != 2 {
+		t.Fatal("migration lost existing jobs", count, err)
+	}
+	if len(jobsCall(t, app, "GET", "/jobs", owner, nil, 200)["items"].([]any)) != 2 {
+		t.Fatal("historical jobs hidden")
+	}
+	limits := jobsCall(t, app, "GET", "/owner/allowance", owner, nil, 200)
+	if limits["limit"] != float64(1) || limits["used"] != float64(2) || limits["remaining"] != float64(0) {
+		t.Fatal("legacy overage allowance", limits)
+	}
+	fresh := jobsCreate(t, app, owner, "chat")
+	jobsStatus(t, app, owner, fresh, "published", 409)
+	// Existing active jobs remain editable, but overages cannot extend their old deadlines.
+	safetyExec(t, db, `UPDATE provider_jobs SET title='Updated title' WHERE id=$1`, a["id"])
+	if _, err := db.Exec(context.Background(), `UPDATE provider_jobs SET deadline=deadline+interval '1 day' WHERE id=$1`, a["id"]); err == nil {
+		t.Fatal("overage extended its deadline")
+	}
+	safetyExec(t, db, `UPDATE provider_jobs SET status='closed' WHERE id=$1`, a["id"])
+	jobsStatus(t, app, owner, fresh, "published", 409)
+	safetyExec(t, db, `UPDATE provider_jobs SET status='filled' WHERE id=$1`, b["id"])
+	jobsStatus(t, app, owner, fresh, "published", 200)
+	// Same one-job rule on Free and every paid tier, even with product/service allowance full.
+	for _, tier := range []string{"free", "bronze", "silver", "diamond", "gold"} {
+		t.Run(tier, func(t *testing.T) {
+			actor, p := jobsActor(t, db, tier)
+			var cap int
+			if err := db.QueryRow(context.Background(), `SELECT (provider_current_benefits($1)->>'post_limit')::int`, p).Scan(&cap); err != nil {
+				t.Fatal(err)
+			}
+			for n := 0; n < cap; n++ {
+				safetyExec(t, db, `INSERT INTO products(provider_id)VALUES($1)`, p)
+			}
+			allowance := jobsCall(t, app, "GET", "/owner/allowance", actor, nil, 200)
+			if allowance["limit"] != float64(1) || allowance["remaining"] != float64(1) {
+				t.Fatal("not one separate free job", allowance)
+			}
+			first := jobsStatus(t, app, actor, jobsCreate(t, app, actor, "chat"), "published", 200)
+			jobsStatus(t, app, actor, jobsCreate(t, app, actor, "chat"), "published", 409)
+			safetyExec(t, db, `UPDATE products SET moderation_status='archived' WHERE provider_id=$1`, p)
+			safetyExec(t, db, `INSERT INTO provider_listings(provider_id)VALUES($1)`, p)
+			// Downgrade never hides the independent job (or consumes product/service capacity).
+			safetyExec(t, db, `UPDATE provider_organizations SET tier='free' WHERE id=$1`, p)
+			if jobsCall(t, app, "GET", "/jobs/"+first["id"].(string), actor, nil, 200)["available"] != true {
+				t.Fatal("tier downgrade hid free job")
+			}
+		})
+	}
+}
+
+func TestJobPlanComparisonOffersSeparateFreePlace(t *testing.T) {
+	for _, code := range []string{"provider-free", "provider-monthly", "provider-growth", "provider-business", "provider-diamond", "legacy-custom"} {
+		p := mergedPlanPolicy(code, 7, []byte(`{"post_limit":25,"max_images":8,"max_videos":0}`))
+		if p.JobLimit != 1 {
+			t.Fatal("plan comparison omitted free job", code, p)
+		}
 	}
 }

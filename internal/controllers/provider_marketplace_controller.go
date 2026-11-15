@@ -1625,7 +1625,7 @@ func (m *ProviderMarketplaceController) ListPlans(c *fiber.Ctx) error {
 		_ = json.Unmarshal(features, &f)
 		items = append(items, fiber.Map{"id": id, "code": code, "name": name, "description": desc, "amount_ngn": amount, "listing_limit": limit, "features": f, "entitlements_version": 1, "card_available": cardAvailable, "banktransfer_available": true, "badge_tier": providerPlanTier(code), "badge_label": providerTierLabel(providerPlanTier(code)), "post_policy": mergedPlanPolicy(code, limit, policyJSON), "period_prices": providerPeriodPrices(amount, cardAvailable)})
 	}
-	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true, "post_policy": postPolicy("")}, "transfer_months": []int{1, 3, 6, 12}})
+	return c.JSON(fiber.Map{"items": items, "free_plan": fiber.Map{"code": "provider-free", "name": "Free", "amount_ngn": 0, "listing_limit": 1, "combined_limit": true, "requires_verification": true, "post_policy": mergedPlanPolicy("provider-free", 1, nil)}, "transfer_months": []int{1, 3, 6, 12}})
 }
 
 func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error {
