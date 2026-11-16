@@ -49,6 +49,9 @@ func main() {
 		if err == nil {
 			err = db.VerifyJobsSchema(checkCtx, store.PG)
 		}
+		if err == nil {
+			err = db.VerifyReferralCodeSchema(checkCtx, store.PG)
+		}
 		cancel()
 		if err != nil {
 			log.Fatal(err)
