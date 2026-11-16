@@ -413,6 +413,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/xp/daily-login", xpController.ClaimDailyLogin)
 	authed.Get("/xp/balance", xpController.GetBalance)
 	authed.Get("/referrals/me", referralController.Mine)
+	authed.Post("/referrals/me/custom-code", authRateLimit, referralController.Customize)
 	authed.Get("/xp/history", xpController.GetHistory)
 	authed.Get("/xp/withdrawals", xpController.ListWithdrawals)
 	authed.Post("/xp/withdrawals", xpController.RequestWithdrawal)

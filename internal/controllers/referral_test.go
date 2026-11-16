@@ -17,6 +17,22 @@ import (
 
 func referralFixture(t *testing.T) (*pgxpool.Pool, string, string) {
 	t.Helper()
+	db, inviter, user := legacyReferralFixture(t)
+	applyCustomReferralMigration(t, db)
+	return db, inviter, user
+}
+func applyCustomReferralMigration(t *testing.T, db *pgxpool.Pool) {
+	t.Helper()
+	aliases, err := os.ReadFile("../../migrations/122_custom_referral_codes.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(context.Background(), string(aliases)); err != nil {
+		t.Fatal(err)
+	}
+}
+func legacyReferralFixture(t *testing.T) (*pgxpool.Pool, string, string) {
+	t.Helper()
 	db := settlementTestDB(t)
 	ctx := context.Background()
 	_, err := db.Exec(ctx, `CREATE TABLE users(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),email text UNIQUE,full_name text DEFAULT '',phone text,password_hash text,country_id uuid,privy_user_id text,is_active boolean DEFAULT false,email_verified boolean DEFAULT false,updated_at timestamptz DEFAULT now());
