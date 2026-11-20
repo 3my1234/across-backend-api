@@ -68,6 +68,7 @@ def runtime_delta(current, previous, seconds):
     acquires = max(0, pool['acquires']-old['acquires'])
     result['pool_wait_ms_per_acquire'] = round(max(0, pool['wait_ms_total']-old['wait_ms_total'])/acquires, 2) if acquires else 0
     result['pool_empty_acquires'] = max(0, pool['empty_acquires']-old['empty_acquires'])
+    result['pool_empty_wait_ms_total']=max(0,pool.get('empty_wait_ms_total',0)-old.get('empty_wait_ms_total',0))
     result['pool_cancelled'] = max(0, pool['cancelled']-old['cancelled'])
     return result
 
@@ -144,6 +145,7 @@ def collect(role, previous):
         if name.startswith(('atlxpres-scale-pilot-api-', 'x139kasktvpelpef1t6xgid3-')) and sample['state'] == 'running':
             try:
                 runtime = json.loads(command(['docker', 'exec', cid, 'cat', '/tmp/atl-api-metrics.json']))
+                if now-runtime.get('exported_unix',0)>90:raise RuntimeError('runtime_metrics_stale')
                 runtimes[cid] = runtime
                 sample['runtime'] = runtime
                 sample['interval'] = runtime_delta(runtime, previous.get('runtimes', {}).get(cid), interval)
@@ -252,10 +254,12 @@ def main():
     report['email_alerts_configured']=bool(mail)
     # Record an attempt before SMTP. A timeout after DATA must not cause an email storm.
     old_alerts=previous.get('last_notified_alerts',[])
+    state['mail_attempts']=[t for t in previous.get('mail_attempts',[]) if time.time()-t<86400]
     state['last_notified_alerts']=old_alerts;state['active_alerts']=report['alerts'];state['last_mail_attempt']=previous.get('last_mail_attempt',0)
     changed=set(report['alerts'])!=set(old_alerts)
-    if mail and changed and time.time()-state['last_mail_attempt']>=3600:
-        state['last_mail_attempt']=time.time();atomic(ROOT/'previous.json',state)
+    if mail and changed and len(state['mail_attempts'])>=6:report['issues'].append('operational_email_daily_limit_reached')
+    if mail and changed and time.time()-state['last_mail_attempt']>=300 and len(state['mail_attempts'])<6:
+        state['last_mail_attempt']=time.time();state['mail_attempts'].append(time.time());atomic(ROOT/'previous.json',state)
         try:
             send_alert(mail,'[ATL '+role+'] '+('Resource alert' if report['alerts'] else 'Recovered'),
                        'Sustained conditions: '+(', '.join(report['alerts']) or 'Previous conditions cleared')+'.\nOpen Admin Overview > Server capacity for measurements. These alerts do not automatically purchase or scale infrastructure.')

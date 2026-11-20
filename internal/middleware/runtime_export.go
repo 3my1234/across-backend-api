@@ -5,6 +5,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"runtime"
+	"time"
 )
 
 // Local root-owned monitoring reads only this aggregate file, never tokens or logs.
@@ -13,7 +14,7 @@ func (m *RequestMetrics) ExportRuntime(pool *pgxpool.Pool) error {
 	p := pool.Stat()
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
-	data := map[string]any{"http": m.Snapshot(), "go": map[string]any{"heap_bytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine(), "gc_pause_ns_total": mem.PauseTotalNs}, "pool": map[string]any{"max": p.MaxConns(), "acquired": p.AcquiredConns(), "acquires": p.AcquireCount(), "empty_acquires": p.EmptyAcquireCount(), "cancelled": p.CanceledAcquireCount(), "wait_ms_total": p.AcquireDuration().Milliseconds(), "empty_wait_ms_total": p.EmptyAcquireWaitTime().Milliseconds()}}
+	data := map[string]any{"exported_unix": time.Now().Unix(), "http": m.Snapshot(), "go": map[string]any{"heap_bytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine(), "gc_pause_ns_total": mem.PauseTotalNs}, "pool": map[string]any{"max": p.MaxConns(), "acquired": p.AcquiredConns(), "acquires": p.AcquireCount(), "empty_acquires": p.EmptyAcquireCount(), "cancelled": p.CanceledAcquireCount(), "wait_ms_total": p.AcquireDuration().Milliseconds(), "empty_wait_ms_total": p.EmptyAcquireWaitTime().Milliseconds()}}
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err
