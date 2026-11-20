@@ -177,6 +177,7 @@ DB_HEALTH = """SELECT json_build_object(
  'lock_waiters',(SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock'),
  'idle_in_transaction',(SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction'),
  'longest_transaction_seconds',(SELECT COALESCE(max(extract(epoch FROM clock_timestamp()-xact_start)),0) FROM pg_stat_activity WHERE state<>'idle'),
+ 'peer_monitor_age_seconds',(SELECT COALESCE(extract(epoch FROM clock_timestamp()-max(observed_at)),1000000) FROM ops_capacity_samples WHERE host<>'CURRENT_MONITOR_ROLE'),
  'database_bytes',pg_database_size(current_database()),
  'email_pending',(SELECT count(*) FROM email_outbox WHERE status IN('pending','retry','sending')),
  'email_oldest_seconds',(SELECT COALESCE(extract(epoch FROM clock_timestamp()-min(created_at)),0) FROM email_outbox WHERE status IN('pending','retry','sending')),
@@ -196,6 +197,7 @@ def assess(report, previous):
                   'host_disk': h['disk_used_percent'] >= 85,
                   'api_unavailable': not checks.get('api_ready', False),
                   'database_locks': db.get('lock_waiters', 0) > 0,
+                  'peer_monitor_stale': db.get('peer_monitor_age_seconds',0)>180,
                   'email_queue': db.get('email_oldest_seconds', 0) > 120,
                   'push_queue': db.get('push_oldest_seconds', 0) > 120,
                   'media_queue': db.get('media_oldest_seconds', 0) > 600,
@@ -204,6 +206,7 @@ def assess(report, previous):
     for container in report['containers']:
         if (container.get('throttled_period_percent') or 0)>10:conditions['container_cpu_limit']=True
         if (container.get('memory_limit_used_percent') or 0)>85:conditions['container_memory_limit']=True
+        if container.get('metrics_unavailable'):conditions['api_metrics_missing']=True
         if container.get('oom_killed') or container.get('health') == 'unhealthy':
             conditions['container_unhealthy'] = True
         for group in container.get('interval', {}).get('groups', {}).values():
@@ -245,7 +248,7 @@ def main():
     if target:
         target += ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1']
         try:
-            report['database'] = json.loads(command(target, "BEGIN READ ONLY;SET LOCAL statement_timeout='3s';"+DB_HEALTH+'COMMIT;'))
+            report['database'] = json.loads(command(target, "BEGIN READ ONLY;SET LOCAL statement_timeout='3s';"+DB_HEALTH.replace('CURRENT_MONITOR_ROLE',role)+'COMMIT;'))
         except Exception:
             report['issues'].append('database_snapshot_unavailable')
     if report.get('database',{}).get('full_stats_visible') is False:report['issues'].append('database_stats_permission_incomplete')
