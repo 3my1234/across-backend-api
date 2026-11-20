@@ -19,6 +19,7 @@ from email.message import EmailMessage
 import subprocess
 import time
 import urllib.request
+import urllib.error
 
 ROOT = pathlib.Path('/var/lib/atl-monitor')
 BOUNDS = [10, 50, 100, 250, 500, 1000, 3000, None]
@@ -70,6 +71,24 @@ def runtime_delta(current, previous, seconds):
     result['pool_empty_acquires'] = max(0, pool['empty_acquires']-old['empty_acquires'])
     result['pool_empty_wait_ms_total']=max(0,pool.get('empty_wait_ms_total',0)-old.get('empty_wait_ms_total',0))
     result['pool_cancelled'] = max(0, pool['cancelled']-old['cancelled'])
+    return result
+
+
+def probe_ready():
+    started = time.monotonic()
+    result = {'api_ready': False}
+    try:
+        request = urllib.request.Request('https://api.atlxpres.com/api/v1/ready',
+                  headers={'User-Agent': 'ATL-Capacity-Monitor/1.0', 'Cache-Control': 'no-cache'})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            result['api_status_code'] = response.status
+            result['api_ready'] = response.status == 200 and json.load(response).get('ok') is True
+    except urllib.error.HTTPError as error:
+        result['api_status_code'] = error.code
+        result['probe_rejected'] = error.code in (401, 403)
+    except Exception:
+        pass
+    result['ready_ms'] = round((time.monotonic()-started)*1000)
     return result
 
 
@@ -158,13 +177,7 @@ def collect(role, previous):
             env = dict(v.split('=', 1) for v in info['Config']['Env'] if '=' in v)
             db_target = ['docker', 'exec', '-i', cid, 'psql', '-U', env.get('POSTGRES_USER', 'postgres'), '-d', 'across_db']
         report['containers'].append(sample)
-    try:
-        started = time.monotonic()
-        with urllib.request.urlopen('https://api.atlxpres.com/api/v1/ready', timeout=8) as response:
-            report['checks']['api_ready'] = response.status == 200 and json.load(response).get('ok') is True
-        report['checks']['ready_ms'] = round((time.monotonic()-started)*1000)
-    except Exception:
-        report['checks']['api_ready'] = False
+    report['checks'] = probe_ready()
     report['host'].update(io_rates)
     state = {'disk_io':disk_io, 'time': now, 'cpu': cpu, 'net': net, 'runtimes': runtimes, 'cgroups': cgroups}
     return report, state, db_target
@@ -195,7 +208,8 @@ def assess(report, previous):
     conditions = {'host_cpu': (h.get('cpu_percent') or 0) >= 75,
                   'host_memory': h['memory_used_percent'] >= 85,
                   'host_disk': h['disk_used_percent'] >= 85,
-                  'api_unavailable': not checks.get('api_ready', False),
+                  'api_unavailable': not checks.get('api_ready', False) and not checks.get('probe_rejected', False),
+                  'api_probe_rejected': checks.get('probe_rejected', False),
                   'database_locks': db.get('lock_waiters', 0) > 0,
                   'peer_monitor_stale': db.get('peer_monitor_age_seconds',0)>180,
                   'email_queue': db.get('email_oldest_seconds', 0) > 120,
