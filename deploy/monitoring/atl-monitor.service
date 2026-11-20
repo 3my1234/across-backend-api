@@ -7,7 +7,7 @@ Type=oneshot
 ExecStart=/usr/bin/python3 /opt/atl-monitor/collect.py
 User=root
 UMask=0077
-CPUQuota=5%
+CPUQuota=10%
 MemoryMax=128M
 TasksMax=32
 TimeoutStartSec=50
@@ -16,4 +16,3 @@ IOSchedulingClass=idle
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
-
