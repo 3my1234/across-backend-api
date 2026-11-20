@@ -57,6 +57,9 @@ func (p *PlayBillingController) Catalog(c *fiber.Ctx) error {
 		if err = p.db.QueryRow(c.Context(), `SELECT code,listing_limit,amount_ngn FROM provider_subscription_plans WHERE id=$1::uuid`, item.PlanID).Scan(&code, &item.ListingLimit, &item.MonthlyAmount); err != nil {
 			return fiber.NewError(503, "Google Play plan benefits could not load")
 		}
+		if e := checkTransportPlan(c.Context(), p.db, provider, item.PlanID, item.Months); e != nil {
+			item.Purchasable = false
+		}
 		item.BadgeTier = providerPlanTier(code)
 		item.PostPolicy, _ = json.Marshal(planPostPolicy(code, item.ListingLimit))
 	}
@@ -113,6 +116,14 @@ func (p *PlayBillingController) Prepare(c *fiber.Ctx) error {
 	}
 	if len(c.Body()) > 2048 || c.BodyParser(&input) != nil {
 		return fiber.ErrBadRequest
+	}
+	var plan string
+	var months int
+	if err = p.db.QueryRow(c.Context(), `SELECT plan_id::text,duration_months FROM play_provider_products WHERE product_id=$1 AND base_plan_id=$2 AND enabled`, input.Product, input.Base).Scan(&plan, &months); err != nil {
+		return fiber.NewError(422, "Choose an available plan.")
+	}
+	if err = checkTransportPlan(c.Context(), p.db, provider, plan, months); err != nil {
+		return err
 	}
 	if err = p.store.Prepare(c.Context(), provider, input.Product, input.Base); err != nil {
 		return fiber.NewError(409, "Check your current or pending subscription before starting another purchase. If checkout was closed, wait 15 minutes or restore purchases")

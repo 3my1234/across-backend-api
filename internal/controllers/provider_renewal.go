@@ -108,6 +108,9 @@ func (m *ProviderMarketplaceController) ProviderManageRenewal(c *fiber.Ctx) erro
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_subscription_plans WHERE id=$1::uuid AND is_active AND amount_ngn>0)`, req.NextPlanID).Scan(&valid); err != nil {
 			return fiber.ErrInternalServerError
 		}
+		if err := checkTransportPlan(ctx, tx, providerID, req.NextPlanID, 1); err != nil {
+			return err
+		}
 		if !valid {
 			return fiber.NewError(422, "Choose an available paid plan.")
 		}

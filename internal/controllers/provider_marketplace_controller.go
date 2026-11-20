@@ -508,6 +508,7 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		CountryCode       string `json:"country_code"`
 		LogoURL           string `json:"logo_url"`
 		IsDriver          bool   `json:"is_driver"`
+		TransportRole     string `json:"transport_role"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid provider profile")
@@ -551,8 +552,11 @@ func (m *ProviderMarketplaceController) Onboard(c *fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create provider profile")
 	}
+	if req.TransportRole != "" && (!req.IsDriver || req.TransportRole != "driver" && req.TransportRole != "rider") {
+		return fiber.NewError(422, "Choose car driver or rider.")
+	}
 	if req.IsDriver {
-		if _, err = tx.Exec(c.Context(), `UPDATE provider_organizations SET is_driver=true WHERE id=$1::uuid`, providerID); err != nil {
+		if _, err = tx.Exec(c.Context(), `UPDATE provider_organizations SET is_driver=true,transport_role=$2 WHERE id=$1::uuid`, providerID, req.TransportRole); err != nil {
 			return fiber.NewError(500, "Could not save driver verification requirements.")
 		}
 	}
@@ -714,7 +718,11 @@ func (m *ProviderMarketplaceController) MyProvider(c *fiber.Ctx) error {
 		}
 	}
 	required := m.subscriptionsRequired()
-	return providerIdentityJSON(c, m.db, fiber.Map{"id": id, "business_name": business, "is_driver": isDriver, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "billing_mode": subBillingMode, "billing_provider": subBillingProvider, "current_period_end": periodEnd, "required": required, "launch_access_active": false, "free_plan": true}, "payout_account": payout}, m.s3)
+	var transportRole string
+	if err := m.db.QueryRow(c.Context(), `SELECT COALESCE(to_jsonb(p)->>'transport_role','') FROM provider_organizations p WHERE id=$1::uuid`, id).Scan(&transportRole); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	return providerIdentityJSON(c, m.db, fiber.Map{"transport_role": transportRole, "id": id, "business_name": business, "is_driver": isDriver, "provider_type": providerType, "provider_type_other": providerTypeOther, "can_sell_products": products, "can_offer_services": services, "slug": slug, "description": description, "contact_email": email, "contact_phone": phone, "website_url": website, "logo_url": logo, "address_line": address, "city": city, "state": state, "country_code": country, "verification_status": verification, "verification_notes": notes, "is_active": active, "created_at": created, "subscription": fiber.Map{"status": subStatus, "billing_mode": subBillingMode, "billing_provider": subBillingProvider, "current_period_end": periodEnd, "required": required, "launch_access_active": false, "free_plan": true}, "payout_account": payout}, m.s3)
 }
 
 type listingPayload struct {
@@ -1711,6 +1719,9 @@ func (m *ProviderMarketplaceController) SubscriptionCheckout(c *fiber.Ctx) error
 	err = checkoutTx.QueryRow(c.Context(), `SELECT id::text,name,amount_ngn,flutterwave_plan_id FROM provider_subscription_plans WHERE id=$1::uuid AND is_active=true`, req.PlanID).Scan(&planID, &name, &amount, &fwPlanID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "subscription plan not found")
+	}
+	if err := checkTransportPlan(c.Context(), checkoutTx, providerID, planID, months); err != nil {
+		return err
 	}
 	if method == "card" && months == 1 {
 		if fwPlanID == nil {
