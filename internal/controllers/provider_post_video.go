@@ -117,7 +117,7 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 		return fiber.NewError(503, "Video uploads are temporarily paused. Your published videos remain available.")
 	}
 	if policy.Videos == 0 {
-		return fiber.NewError(403, "Upgrade to Gold to upload videos.")
+		return fiber.NewError(403, "Diamond or Gold is required to upload videos.")
 	}
 	if _, err = exec.LookPath("ffprobe"); err != nil {
 		return fiber.NewError(503, "Video verification is temporarily unavailable. Please try again later.")
@@ -133,7 +133,7 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 		c.Set("Retry-After", "10")
 		return fiber.NewError(429, "Videos are being checked. Please retry in 10 seconds.")
 	}
-	ctx, done := context.WithTimeout(c.Context(), 75*time.Second)
+	ctx, done := context.WithTimeout(c.Context(), 300*time.Second)
 	defer done()
 	signed, e := m.s3.ObjectGetURL(key, time.Minute)
 	if e != nil {
@@ -171,6 +171,23 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if policy.VideoSeconds < 1 || duration > float64(policy.VideoSeconds) || (policy.VideoBytes > 0 && size > policy.VideoBytes) {
 		return fiber.NewError(422, fmt.Sprintf("Choose a video within your current plan limits: %d seconds and %d bytes.", policy.VideoSeconds, policy.VideoBytes))
 	}
+	branded := file.Name() + "-branded.mp4"
+	poster := file.Name() + "-poster.jpg"
+	defer os.Remove(branded)
+	defer os.Remove(poster)
+	if e = processLaunchVideo(ctx, file.Name(), branded, poster, policy.VideoSeconds); e != nil {
+		return fiber.NewError(422, "Could not prepare this video. Please retry.")
+	}
+	encoded, e := os.Open(branded)
+	if e != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer encoded.Close()
+	info, e := encoded.Stat()
+	if e != nil || info.Size() > policy.VideoBytes {
+		return fiber.NewError(422, "Processed video exceeds your plan size limit.")
+	}
+	size = info.Size()
 	// Publish a fresh object whose PUT URL is never given to the uploader. The
 	// temporary upload cannot be overwritten to bypass an earlier verification.
 	verifiedKey := providerVerifiedVideoKey(provider, ticket)
@@ -181,7 +198,7 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if _, e = file.Seek(0, 0); e != nil {
 		return fiber.ErrInternalServerError
 	}
-	upload, _ := http.NewRequestWithContext(ctx, http.MethodPut, put, file)
+	upload, _ := http.NewRequestWithContext(ctx, http.MethodPut, put, encoded)
 	upload.ContentLength = size
 	upload.Header.Set("Content-Type", "video/mp4")
 	published, e := client.Do(upload)
@@ -196,7 +213,7 @@ func (m *ProviderMarketplaceController) CompletePostVideo(c *fiber.Ctx) error {
 	if e != nil {
 		return fiber.NewError(503, "Video links are not configured.")
 	}
-	if e = m.finishProviderVideo(ctx, provider, key, public, duration, size); e != nil {
+	if e = m.finishProviderVideo(ctx, provider, key, public, duration, size, ticket.size); e != nil {
 		return fiber.NewError(503, "The video was checked but could not be registered. Please retry.")
 	}
 	// The original candidate is no longer needed. Its stale PUT link cannot

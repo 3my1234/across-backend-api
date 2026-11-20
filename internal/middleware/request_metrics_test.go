@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -34,5 +36,28 @@ func TestRequestMetricsIncludesRejectionErrorsAndRecoveredPanics(t *testing.T) {
 	}
 	if durations != 4 {
 		t.Fatal("latency histogram lost requests")
+	}
+}
+
+func TestRequestMetricsLabelsCannotContainIdentifiers(t *testing.T) {
+	m := NewRequestMetrics()
+	app := fiber.New()
+	app.Use(m.Handler)
+	app.Get("/*", func(c *fiber.Ctx) error { return c.SendStatus(200) })
+	for _, path := range []string{"/api/v1/chat/town-hall/private-customer-id?token=SECRET", "/api/v1/jobs/company-id", "/api/v1/unknown/user@example.com"} {
+		r, e := app.Test(httptest.NewRequest("GET", path, nil))
+		if e != nil {
+			t.Fatal(e)
+		}
+		r.Body.Close()
+	}
+	raw, _ := json.Marshal(m.Snapshot())
+	for _, secret := range []string{"private-customer-id", "SECRET", "company-id", "user@example.com"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatal("metric label leaked identifier")
+		}
+	}
+	if len(m.groups) != 3 {
+		t.Fatal("unexpected unbounded labels", m.groups)
 	}
 }

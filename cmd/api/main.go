@@ -108,6 +108,9 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if err := metrics.ExportRuntime(store.PG); err != nil {
+					log.Print("runtime metrics export unavailable")
+				}
 				pool := store.PG.Stat()
 				log.Printf("api_capacity admission=%v db_acquired=%d db_max=%d db_wait_ms=%d db_cancelled=%d", admission.Snapshot(), pool.AcquiredConns(), pool.MaxConns(), pool.AcquireDuration().Milliseconds(), pool.CanceledAcquireCount())
 			}

@@ -19,7 +19,7 @@ func (m *ProviderMarketplaceController) checkPostUpload(ctx context.Context, pro
 		return fiber.NewError(503, "Video uploads are temporarily paused. Your published videos remain available.")
 	}
 	if purpose == "post_video" && policy.Videos == 0 {
-		return fiber.NewError(403, "Upgrade to Gold to upload videos.")
+		return fiber.NewError(403, "Diamond or Gold is required to upload videos.")
 	}
 	if id == "" {
 		return nil

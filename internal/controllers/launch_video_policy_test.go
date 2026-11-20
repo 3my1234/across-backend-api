@@ -327,12 +327,12 @@ func TestLaunchVideoActualVerificationAndCompletionRetry(t *testing.T) {
 		if r.Method == "DELETE" {
 			return &http.Response{StatusCode: 204, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
 		}
-		if r.Method != "PUT" || r.ContentLength != int64(len(video)) {
+		if r.Method != "PUT" || r.ContentLength <= 0 {
 			t.Fatal("unexpected object write", r.Method, r.ContentLength)
 		}
 		uploaded, e := io.ReadAll(r.Body)
-		if e != nil || !bytes.Equal(uploaded, video) {
-			t.Fatal("verified bytes changed", e)
+		if e != nil || bytes.Equal(uploaded, video) || !bytes.Contains(uploaded, []byte("ftyp")) {
+			t.Fatal("branded MP4 missing or raw candidate published", e)
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
 	})}

@@ -1,7 +1,8 @@
 name: Production readiness
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # GitHub schedules are best-effort; reuse one external probe, not two.
+    - cron: '3-58/5 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
