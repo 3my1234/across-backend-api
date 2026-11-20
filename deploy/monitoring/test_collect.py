@@ -16,7 +16,7 @@ class CapacityTests(unittest.TestCase):
             checks = collect.probe_ready()
         self.assertTrue(checks['probe_rejected'])
         self.assertFalse(checks['api_ready'])
-        report = {'host':{},'database':{},'checks':checks,'containers':[]}
+        report = {'host':{'memory_used_percent':10,'disk_used_percent':10},'database':{'connections':1,'max_connections':100},'checks':checks,'containers':[]}
         streaks={}
         for _ in range(3): alerts,streaks=collect.assess(report,streaks)
         self.assertIn('api_probe_rejected',alerts)
