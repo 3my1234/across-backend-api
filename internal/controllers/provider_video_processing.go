@@ -4,6 +4,7 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/storage"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -375,6 +376,10 @@ func rationalFPS(value string) float64 {
 	}
 	return math.Inf(1)
 }
+
+//go:embed assets/atl-logo.png
+var videoBrandLogo []byte
+
 func processLaunchVideo(ctx context.Context, input, output, poster string, maxSeconds int) error {
 	probe, err := inspectProcessingVideo(ctx, input)
 	if err != nil {
@@ -384,38 +389,29 @@ func processLaunchVideo(ctx context.Context, input, output, poster string, maxSe
 	if err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > float64(maxSeconds) {
 		return errors.New("video duration exceeds plan")
 	}
-	compliant := true
 	found := false
+	logoWidth := 96
 	for _, stream := range probe.Streams {
 		if stream.Type == "video" {
-			if found {
-				compliant = false
-			}
 			found = true
 			if stream.Width < 1 || stream.Height < 1 || stream.Width > 8192 || stream.Height > 8192 || int64(stream.Width)*int64(stream.Height) > 35000000 {
 				return errors.New("video dimensions exceed decode bound")
 			}
-			if stream.Codec != "h264" || stream.PixelFormat != "yuv420p" || min(stream.Width, stream.Height) > 720 || max(stream.Width, stream.Height) > 1280 || rationalFPS(stream.FPS) > 30 {
-				compliant = false
-			}
-		} else if stream.Type == "audio" && stream.Codec != "aac" {
-			compliant = false
+			logoWidth = max(8, min(160, min(stream.Width, stream.Height)/4))
 		}
 	}
 	if !found {
 		return errors.New("video stream missing")
 	}
-	bitrate, _ := strconv.ParseInt(probe.Format.BitRate, 10, 64)
-	if bitrate <= 0 || bitrate > 1800000 {
-		compliant = false
+	// Burn the real ATL logo into the last three seconds; metadata cannot remove it.
+	// Keep the duration unchanged, so a full three-minute video remains valid.
+	logo := filepath.Join(filepath.Dir(output), "atl-brand.png")
+	if err = os.WriteFile(logo, videoBrandLogo, 0600); err != nil {
+		return err
 	}
-	args := []string{"-nostdin", "-v", "error", "-y", "-threads", "1", "-filter_threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-i", input, "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-map_chapters", "-1"}
-	if compliant {
-		args = append(args, "-c", "copy")
-	} else {
-		filter := "scale=w='if(gte(iw,ih),min(1280,iw),min(720,iw))':h='if(gte(iw,ih),min(720,ih),min(1280,ih))':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps=30"
-		args = append(args, "-vf", filter, "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "28", "-maxrate", "1600k", "-bufsize", "3200k", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-ac", "2")
-	}
+	defer os.Remove(logo)
+	filter := fmt.Sprintf("[0:v:0]scale=w='if(gte(iw,ih),min(1280,iw),min(720,iw))':h='if(gte(iw,ih),min(720,ih),min(1280,ih))':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps=30[base];[1:v:0]scale=%d:%d[brand];[base][brand]overlay=x=W-w-W*0.02:y=H-h-H*0.02:enable='gte(t,%.3f)':eof_action=repeat[out]", logoWidth, logoWidth, math.Max(0, duration-3))
+	args := []string{"-nostdin", "-v", "error", "-y", "-threads", "1", "-filter_complex_threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-i", input, "-i", logo, "-filter_complex", filter, "-map", "[out]", "-map", "0:a:0?", "-map_metadata", "-1", "-map_chapters", "-1", "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "23", "-maxrate", "2100k", "-bufsize", "4200k", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-ac", "2"}
 	args = append(args, "-movflags", "+faststart", output)
 	command := exec.CommandContext(ctx, "ffmpeg", args...)
 	command.Stdout = io.Discard

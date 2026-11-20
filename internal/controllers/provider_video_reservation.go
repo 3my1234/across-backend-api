@@ -100,12 +100,16 @@ func (m *ProviderMarketplaceController) releaseProviderVideo(key string) {
 	defer cancel()
 	_, _ = m.db.Exec(ctx, `UPDATE provider_video_uploads SET state='pending',lease_until=NULL WHERE key=$1 AND state='processing'`, key)
 }
-func (m *ProviderMarketplaceController) finishProviderVideo(ctx context.Context, provider, key, url string, duration float64, size int64) error {
+func (m *ProviderMarketplaceController) finishProviderVideo(ctx context.Context, provider, key, url string, duration float64, size int64, originalSizes ...int64) error {
 	tx, err := m.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	inputSize := size
+	if len(originalSizes) > 0 {
+		inputSize = originalSizes[0]
+	}
 	// Lock in the same order as reservation creation, then recheck the live plan.
 	if _, err = tx.Exec(ctx, `SELECT 1 FROM provider_organizations WHERE id=$1::uuid FOR UPDATE`, provider); err != nil {
 		return err
@@ -118,7 +122,7 @@ func (m *ProviderMarketplaceController) finishProviderVideo(ctx context.Context,
 	if !authorized {
 		return fiber.NewError(409, "Your video allowance changed. This video was not published.")
 	}
-	tag, err := tx.Exec(ctx, `UPDATE provider_video_uploads SET state='complete',url=$3,duration_seconds=$4,lease_until=NULL WHERE key=$1 AND provider_id=$2::uuid AND state='processing' AND size_bytes=$5`, key, provider, url, duration, size)
+	tag, err := tx.Exec(ctx, `UPDATE provider_video_uploads SET state='complete',url=$3,duration_seconds=$4,lease_until=NULL WHERE key=$1 AND provider_id=$2::uuid AND state='processing' AND size_bytes=$5`, key, provider, url, duration, inputSize)
 	if err != nil {
 		return err
 	}

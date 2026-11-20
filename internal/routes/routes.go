@@ -193,6 +193,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	adminRoutes.Get("/subscribers", catalogOnly, admin.Subscribers)
 	adminRoutes.Get("/ops/queue-health", catalogOnly, ops.QueueHealth)
 	adminRoutes.Get("/ops/video-queue-health", catalogOnly, ops.VideoQueueHealth)
+	adminRoutes.Get("/ops/capacity", superOnly, ops.Capacity)
 	adminRoutes.Get("/ops/runtime", superOnly, func(c *fiber.Ctx) error {
 		c.Set("Cache-Control", "private, no-store")
 		var httpMetrics map[string]any

@@ -76,7 +76,7 @@ func TestAdminRoleRoutesAndImmediateRevocation(t *testing.T) {
 		{"PATCH", "/provider-listings/11111111-1111-4111-8111-111111111111/moderation", "super_admin catalog_admin moderation_admin"},
 		{"GET", "/xp/withdrawals", "super_admin finance_admin"}, {"GET", "/transactions", "super_admin catalog_admin finance_admin"},
 		{"GET", "/discovery/summary", "super_admin catalog_admin ads_admin"}, {"GET", "/overview", "super_admin catalog_admin"},
-		{"GET", "/provider-subscription-plans", "super_admin"}, {"GET", "/ops/runtime", "super_admin"},
+		{"GET", "/provider-subscription-plans", "super_admin"}, {"GET", "/ops/runtime", "super_admin"}, {"GET", "/ops/capacity", "super_admin"},
 	}
 	id := uuid.NewString()
 	if _, err = db.Exec(ctx, "INSERT INTO admins VALUES($1,'super_admin',true)", id); err != nil {

@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X 
 
 FROM alpine:3.23
 WORKDIR /app
-RUN apk add --no-cache ca-certificates curl tzdata && adduser -D -H -u 10001 across
+RUN apk add --no-cache ca-certificates curl tzdata ffmpeg && adduser -D -H -u 10001 across
 COPY --from=builder /out/across-worker /app/across-worker
 COPY --from=builder /out/across-config-check /app/across-config-check
 USER across
