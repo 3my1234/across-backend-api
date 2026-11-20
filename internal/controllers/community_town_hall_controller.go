@@ -205,6 +205,16 @@ func (s *CommunityController) HallDetail(c *fiber.Ctx) error {
 	}
 	var detail fiber.Map
 	_ = json.Unmarshal(raw, &detail)
+	// Participant identities are available only to the host or admitted members.
+	if detail["is_owner"] == true || detail["admitted"] == true {
+		var participants json.RawMessage
+		err = s.db.QueryRow(c.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id',p.user_id,'provider_id',p.provider_id,'role',p.role,'name',COALESCE(u.full_name,'Member'),'avatar_url',COALESCE(to_jsonb(u)->>'avatar_url','')) ORDER BY p.role,p.user_id),'[]'::jsonb) FROM chat_participants p JOIN users u ON u.id=p.user_id WHERE p.room_id=$1::uuid AND p.state='active'`, id).Scan(&participants)
+		if err != nil {
+			return communityError(err)
+		}
+		detail["participants"] = participants
+	}
+
 	if detail["is_owner"] == true {
 		rows, e := s.db.Query(c.Context(), `SELECT a.provider_id::text,i.name,a.state FROM town_hall_applications a JOIN provider_public_identity i ON i.provider_id=a.provider_id WHERE a.room_id=$1::uuid ORDER BY a.created_at LIMIT 100`, id)
 		if e != nil {
