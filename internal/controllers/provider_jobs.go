@@ -20,6 +20,7 @@ import (
 )
 
 type jobPayload struct {
+	Images       []string   `json:"image_urls"`
 	ID           string     `json:"id"`
 	Title        string     `json:"title"`
 	City         string     `json:"city"`
@@ -293,7 +294,7 @@ func (m *ProviderMarketplaceController) JobAllowance(c *fiber.Ctx) error {
 		remaining = 0
 	}
 	c.Set("Cache-Control", "private, no-store")
-	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "note": "Active jobs have a separate plan allowance: Free, Bronze and Silver 1; Diamond 5; Gold 10. Drafts use no job place; closing, filling, expiry or removal releases it. Existing jobs stay in your history."})
+	return c.JSON(fiber.Map{"limit": limit, "used": used, "remaining": remaining, "verified": verified, "photos_supported": true, "max_photos": 4, "note": "Active jobs have a separate plan allowance: Free, Bronze and Silver 1; Diamond 5; Gold 10. Drafts use no job place; closing, filling, expiry or removal releases it. Existing jobs stay in your history."})
 }
 func (m *ProviderMarketplaceController) SaveJob(c *fiber.Ctx) error {
 	owner, err := m.jobsOwner(c)
@@ -307,6 +308,19 @@ func (m *ProviderMarketplaceController) SaveJob(c *fiber.Ctx) error {
 	if err = validateJob(&p, false, time.Now()); err != nil {
 		return err
 	}
+	if len(p.Images) > 4 {
+		return fiber.NewError(422, "A job supports up to 4 photos")
+	}
+	seen := map[string]bool{}
+	for _, raw := range p.Images {
+		key := m.s3.KeyFromURL(raw)
+		pattern := `^user-uploads/providers/` + regexp.QuoteMeta(owner) + `/listing/[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp|avif)$`
+		if !strings.HasPrefix(raw, "https://") || !regexp.MustCompile(pattern).MatchString(key) || seen[raw] {
+			return fiber.NewError(422, "Choose distinct job photos uploaded by your business")
+		}
+		seen[raw] = true
+	}
+
 	create := c.Method() == "POST"
 	id := c.Params("job_id")
 	if create {
@@ -356,7 +370,7 @@ func (m *ProviderMarketplaceController) SaveJob(c *fiber.Ctx) error {
 			return jobError(err)
 		}
 	}
-	_, err = tx.Exec(ctx, `UPDATE provider_jobs SET title=$3,city=$4,state=$5,country_code=$6,work_type=$7,work_duration=$8,description=$9,requirements=$10,pay_min=$11,pay_max=$12,currency_code=$13,pay_period=$14,application_method=$15,application_url=$16,application_email=$17,application_instructions=$18,deadline=$19,revision=revision+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid`, id, owner, p.Title, p.City, p.State, p.Country, p.WorkType, p.Duration, p.Description, p.Requirements, p.PayMin, p.PayMax, p.Currency, p.PayPeriod, p.Method, p.URL, p.Email, p.Instructions, p.Deadline)
+	_, err = tx.Exec(ctx, `UPDATE provider_jobs SET title=$3,city=$4,state=$5,country_code=$6,work_type=$7,work_duration=$8,description=$9,requirements=$10,pay_min=$11,pay_max=$12,currency_code=$13,pay_period=$14,application_method=$15,application_url=$16,application_email=$17,application_instructions=$18,deadline=$19,image_urls=COALESCE($20::text[],image_urls),revision=revision+1,updated_at=now() WHERE id=$1::uuid AND provider_id=$2::uuid`, id, owner, p.Title, p.City, p.State, p.Country, p.WorkType, p.Duration, p.Description, p.Requirements, p.PayMin, p.PayMax, p.Currency, p.PayPeriod, p.Method, p.URL, p.Email, p.Instructions, p.Deadline, p.Images)
 	if err != nil {
 		return jobError(err)
 	}

@@ -590,14 +590,26 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	id := c.Params("conversation_id")
 	actor := communityActor(c)
 	var revision int64
-	var kind, state, role string
+	var kind, state, role, membership string
 	var owner string
-	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE r.state END,p.role,r.owner_user_id::text FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid AND p.state='active' WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner)
+	var expired bool
+	err = s.db.QueryRow(c.Context(), `SELECT r.revision,r.kind,CASE WHEN EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND h.engagement_deadline<=clock_timestamp()) THEN 'closed' ELSE r.state END,p.role,r.owner_user_id::text,p.state,EXISTS(SELECT 1 FROM town_hall_requests h WHERE h.room_id=r.id AND (h.expired_at IS NOT NULL OR (r.state='open' AND h.engagement_deadline<=clock_timestamp()))) FROM chat_rooms r JOIN chat_participants p ON p.room_id=r.id AND p.user_id=$2::uuid WHERE r.id=$1::uuid`, id, actor).Scan(&revision, &kind, &state, &role, &owner, &membership, &expired)
 	if err != nil {
 		return fiber.ErrForbidden
 	}
 	if kind == "town_hall" && state != "open" {
-		return fiber.NewError(410, "This Town Hall request has ended or expired")
+		c.Set("Cache-Control", "private, no-store")
+		if expired {
+			return c.Status(410).JSON(fiber.Map{"message": "This request has expired", "reason": "request_expired"})
+		}
+		return c.Status(410).JSON(fiber.Map{"message": "The customer has ended or closed this request", "reason": "request_closed"})
+	}
+	if membership != "active" {
+		if kind == "town_hall" && membership == "removed" {
+			c.Set("Cache-Control", "private, no-store")
+			return c.Status(403).JSON(fiber.Map{"message": "You were removed from this request by the customer", "reason": "removed"})
+		}
+		return fiber.ErrForbidden
 	}
 	canSend := state == "open"
 	if role == "provider" {
@@ -618,7 +630,7 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	if c.Get("If-None-Match") == etag && page.CursorTime == nil {
 		return c.SendStatus(304)
 	}
-	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,COALESCE(u.full_name,'Member'),m.body,m.media_keys,m.created_at,to_jsonb(m)->'location',CASE WHEN parent.id IS NOT NULL THEN jsonb_build_object('id',parent.id,'sender_name',COALESCE(parent_user.full_name,'Member'),'body',left(parent.body,240),'has_media',cardinality(parent.media_keys)>0,'has_location',to_jsonb(parent)->'location' IS NOT NULL AND to_jsonb(parent)->'location'<>'null'::jsonb) END FROM chat_messages m LEFT JOIN chat_messages parent ON parent.id=m.reply_to_id AND parent.room_id=m.room_id LEFT JOIN users parent_user ON parent_user.id=parent.sender_user_id JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
+	rows, err := s.db.Query(c.Context(), `SELECT m.id::text,m.sender_user_id::text,COALESCE(u.full_name,'Member'),COALESCE(to_jsonb(u)->>'avatar_url',''),COALESCE(m.sender_user_id=(SELECT owner_user_id FROM chat_rooms WHERE id=m.room_id),false),m.body,m.media_keys,m.created_at,to_jsonb(m)->'location',CASE WHEN parent.id IS NOT NULL THEN jsonb_build_object('id',parent.id,'sender_name',COALESCE(parent_user.full_name,'Member'),'body',left(parent.body,240),'has_media',cardinality(parent.media_keys)>0,'has_location',to_jsonb(parent)->'location' IS NOT NULL AND to_jsonb(parent)->'location'<>'null'::jsonb) END FROM chat_messages m LEFT JOIN chat_messages parent ON parent.id=m.reply_to_id AND parent.room_id=m.room_id LEFT JOIN users parent_user ON parent_user.id=parent.sender_user_id JOIN users u ON u.id=m.sender_user_id WHERE m.room_id=$1::uuid AND EXISTS(SELECT 1 FROM chat_participants WHERE room_id=m.room_id AND user_id=$2::uuid AND state='active') AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3,$4::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $5`, id, actor, page.CursorTime, nullID(page.CursorID), page.Limit+1)
 	if err != nil {
 		return communityError(err)
 	}
@@ -628,18 +640,19 @@ func (s *CommunityController) Messages(c *fiber.Ctx) error {
 	var last time.Time
 	var lastID string
 	for rows.Next() {
-		var mid, sender, name, body string
+		var mid, sender, name, avatar, body string
+		var host bool
 		var keys []string
 		var location, reply json.RawMessage
 		var at time.Time
-		if err = rows.Scan(&mid, &sender, &name, &body, &keys, &at, &location, &reply); err != nil {
+		if err = rows.Scan(&mid, &sender, &name, &avatar, &host, &body, &keys, &at, &location, &reply); err != nil {
 			return communityError(err)
 		}
 		if len(items) == page.Limit {
 			next = encodeAdminCursor(last, lastID)
 			break
 		}
-		items = append(items, fiber.Map{"id": mid, "sender_user_id": sender, "sender_name": name, "body": body, "media_urls": s.market.chatMediaURLs(keys), "location": location, "reply_to": reply, "created_at": at, "is_mine": sender == actor, "sender_type": "member"})
+		items = append(items, fiber.Map{"id": mid, "sender_user_id": sender, "sender_name": name, "sender_avatar_url": avatar, "sender_is_host": host, "body": body, "media_urls": s.market.chatMediaURLs(keys), "location": location, "reply_to": reply, "created_at": at, "is_mine": sender == actor, "sender_type": "member"})
 		last, lastID = at, mid
 	}
 	if err = rows.Err(); err != nil {

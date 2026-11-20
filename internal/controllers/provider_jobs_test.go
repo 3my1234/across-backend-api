@@ -5,6 +5,7 @@ import (
 	"across/backend/internal/config"
 	appdb "across/backend/internal/db"
 	"across/backend/internal/middleware"
+	"across/backend/internal/storage"
 	"context"
 	"encoding/json"
 	"github.com/gofiber/fiber/v2"
@@ -44,7 +45,7 @@ func jobsDB117(t *testing.T, before ...func(*pgxpool.Pool)) *pgxpool.Pool {
 	// The exact existing tier function; no paid subscriptions are needed by this fixture.
 	safetyExec(t, db, strings.Split(string(raw), "UPDATE provider_subscription_plans")[0])
 	safetyExec(t, db, `CREATE FUNCTION provider_current_benefits(provider uuid) RETURNS jsonb LANGUAGE sql STABLE AS $$SELECT provider_tier_benefits(tier) FROM provider_organizations WHERE id=provider$$;`)
-	for _, name := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql", "099_provider_conversation_threads.sql", "117_provider_jobs.sql"} {
+	for _, name := range []string{"041_provider_conversations.sql", "064_product_payment_options_and_chat_images.sql", "074_chat_history_revision.sql", "088_chat_location_pins.sql", "099_provider_conversation_threads.sql", "117_provider_jobs.sql", "123_job_photos.sql"} {
 		if name == "117_provider_jobs.sql" {
 			for _, seed := range before {
 				seed(db)
@@ -86,7 +87,7 @@ func jobsIndependentMigration(t *testing.T, db *pgxpool.Pool) {
 	}
 }
 func jobsApp(db *pgxpool.Pool) *fiber.App {
-	m := &ProviderMarketplaceController{db: db}
+	m := &ProviderMarketplaceController{db: db, s3: storage.NewS3(config.Config{AssetsCDNBase: "https://media.example.test"})}
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user_id", c.Get("Actor")); return c.Next() })
 	app.Get("/jobs", m.ListJobs)
