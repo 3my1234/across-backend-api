@@ -140,6 +140,9 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if !existing {
 		allowed, gateErr := signupAllowedTx(c.Context(), tx, req.Email, req.FullName)
 		if gateErr != nil {
+			if errors.Is(gateErr, errSignupClosed) {
+				return fiber.NewError(403, "We're at capacity right now, please try again soon.")
+			}
 			return fiber.NewError(503, "Signup is temporarily unavailable. Please try again.")
 		}
 		if !allowed {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -298,6 +299,9 @@ func TestReferralAttributionRollbackAndGoogleIdentity(t *testing.T) {
 	}
 	if _, err = db.Exec(ctx, `UPDATE signup_policy SET mode='closed'`); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err = service.ResolvePrivy(ctx, uuid.NewString(), "new-closed-subject", "closed-google@example.invalid", "Closed"); err == nil || !strings.Contains(err.Error(), "We're at capacity right now, please try again soon.") {
+		t.Fatalf("closed Google signup message: %v", err)
 	}
 	if again, created, err = service.ResolvePrivy(ctx, uuid.NewString(), "verified-google-subject", "google@example.test", "Google user"); err != nil || created || again != google {
 		t.Fatal("existing Google blocked", err)

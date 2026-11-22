@@ -88,6 +88,9 @@ func (s *IdentityService) ResolvePrivyWithReferral(ctx context.Context, countryI
 	if errors.Is(err, pgx.ErrNoRows) {
 		allowed, gateErr := signupAllowedTx(ctx, tx, email, name)
 		if gateErr != nil {
+			if errors.Is(gateErr, errSignupClosed) {
+				return "", false, fiber.NewError(403, "We're at capacity right now, please try again soon.")
+			}
 			return "", false, fiber.NewError(503, "Signup is temporarily unavailable. Please try again.")
 		}
 		if !allowed {

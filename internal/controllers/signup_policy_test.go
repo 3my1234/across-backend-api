@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"sync"
@@ -93,7 +94,7 @@ func TestSignupGateDoesNotStoreBlockedSignups(t *testing.T) {
 	}
 	allowed, err = signupAllowedTx(ctx, tx, "person@example.invalid", "Person")
 	tx.Rollback(ctx)
-	if err != nil || allowed {
+	if !stderrors.Is(err, errSignupClosed) || allowed {
 		t.Fatal("closed accepted", err)
 	}
 }

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -65,9 +66,16 @@ func TestPasswordSignupPolicyEndpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		responseBody, readErr := io.ReadAll(res.Body)
 		res.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
 		if res.StatusCode != tc.status {
 			t.Fatalf("%s %s: status %d", tc.mode, tc.email, res.StatusCode)
+		}
+		if tc.mode == "closed" && !strings.Contains(string(responseBody), "We're at capacity right now, please try again soon.") {
+			t.Fatalf("closed message: %s", responseBody)
 		}
 		var accounts, emails, waitlist int
 		if err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM users WHERE email=$1),(SELECT count(*) FROM email_outbox WHERE recipient_email=$1),(SELECT count(*) FROM launch_waitlist WHERE email=$1)`, tc.email).Scan(&accounts, &emails, &waitlist); err != nil {

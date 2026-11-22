@@ -2,9 +2,12 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 )
+
+var errSignupClosed = errors.New("signup is closed")
 
 // Caller holds the policy row share lock through account creation.
 func signupAllowedTx(ctx context.Context, tx pgx.Tx, email, name string) (bool, error) {
@@ -14,6 +17,9 @@ func signupAllowedTx(ctx context.Context, tx pgx.Tx, email, name string) (bool, 
 	}
 	if mode == "open" {
 		return true, nil
+	}
+	if mode == "closed" {
+		return false, errSignupClosed
 	}
 	if mode == "approved_only" {
 		var approved bool
