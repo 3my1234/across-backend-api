@@ -26,6 +26,31 @@ const (
 
 var ErrRecipientSuppressed = errors.New("email recipient is suppressed")
 
+var disabledEmailCounts = struct {
+	sync.Mutex
+	since  time.Time
+	counts map[string]int64
+}{counts: make(map[string]int64)}
+
+// Reports aggregate counts only; recipient addresses and message contents are never logged.
+func recordDisabledEmails(counts map[string]int64, now time.Time) {
+	disabledEmailCounts.Lock()
+	defer disabledEmailCounts.Unlock()
+	if disabledEmailCounts.since.IsZero() {
+		disabledEmailCounts.since = now
+	}
+	for category, n := range counts {
+		disabledEmailCounts.counts[category] += n
+	}
+	if now.Sub(disabledEmailCounts.since) >= time.Minute {
+		for category, n := range disabledEmailCounts.counts {
+			log.Printf("email_disabled_suppressed category=%s count=%d", category, n)
+		}
+		clear(disabledEmailCounts.counts)
+		disabledEmailCounts.since = now
+	}
+}
+
 type emailQueryer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -150,6 +175,39 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 	if sender == nil {
 		return 0, errors.New("email sender is nil")
 	}
+	// Older API instances may still enqueue these while the rollout is in
+	// progress. Retain the rows for audit, but never claim them for delivery.
+	rowsSuppressed, err := db.Query(ctx, `WITH changed AS (UPDATE email_outbox SET status = 'suppressed', locked_at = NULL,
+		last_error = 'email category disabled', updated_at = now()
+		WHERE status IN ('pending', 'retry') AND (template_type = 'welcome' OR
+		(template_type = 'marketplace_activity' AND (dedupe_key LIKE 'provider-message:%' OR
+		dedupe_key LIKE 'provider-request:%' OR dedupe_key LIKE 'provider-request-email:%' OR
+		dedupe_key LIKE 'listing-submitted:%' OR dedupe_key LIKE 'merchant-product-submitted:%'))) RETURNING template_type, dedupe_key)
+		SELECT CASE WHEN template_type='welcome' THEN 'welcome'
+		WHEN dedupe_key LIKE 'provider-message:%' THEN 'chat'
+		WHEN dedupe_key LIKE 'provider-request:%' THEN 'provider_request'
+		WHEN dedupe_key LIKE 'provider-request-email:%' THEN 'request_status'
+		WHEN dedupe_key LIKE 'listing-submitted:%' THEN 'service_submission'
+		ELSE 'product_submission' END, count(*) FROM changed GROUP BY 1`)
+	if err != nil {
+		return 0, err
+	}
+	counts := make(map[string]int64)
+	for rowsSuppressed.Next() {
+		var category string
+		var count int64
+		if err := rowsSuppressed.Scan(&category, &count); err != nil {
+			rowsSuppressed.Close()
+			return 0, err
+		}
+		counts[category] = count
+	}
+	err = rowsSuppressed.Err()
+	rowsSuppressed.Close()
+	if err != nil {
+		return 0, err
+	}
+	recordDisabledEmails(counts, time.Now())
 	if _, err := db.Exec(ctx, `
 		UPDATE email_outbox
 		SET status = 'retry', next_attempt_at = now(), locked_at = NULL,
@@ -173,38 +231,54 @@ func RunEmailDeliveryBatch(ctx context.Context, db *pgxpool.Pool, sender *EmailS
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `
-		SELECT id::text, user_id::text, recipient_email, recipient_name, template_type, payload, attempts
-		FROM email_outbox
-		WHERE status IN ('pending', 'retry') AND next_attempt_at <= now()
-		ORDER BY next_attempt_at, created_at, id
-		FOR UPDATE SKIP LOCKED
-		LIMIT $1
-	`, emailBatchLimit)
-	if err != nil {
+	// Reserve five of every 25 claims for non-security email when present.
+	// Fill unused slots from either class so small queues do not waste capacity.
+	items := make([]emailDelivery, 0, emailBatchLimit)
+	claim := func(security bool, limit int) error {
+		if limit <= 0 {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `SELECT id::text, user_id::text, recipient_email, recipient_name, template_type, payload, attempts
+    FROM email_outbox WHERE status IN ('pending','retry') AND next_attempt_at <= now()
+    AND NOT (template_type = 'welcome' OR (template_type = 'marketplace_activity' AND (dedupe_key LIKE 'provider-message:%' OR dedupe_key LIKE 'provider-request:%' OR dedupe_key LIKE 'provider-request-email:%' OR dedupe_key LIKE 'listing-submitted:%' OR dedupe_key LIKE 'merchant-product-submitted:%')))
+    AND (template_type IN ('verification','password_reset')) = $1
+    ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT $2`, security, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item emailDelivery
+			if err := rows.Scan(&item.ID, &item.UserID, &item.RecipientEmail, &item.RecipientName, &item.TemplateType, &item.Payload, &item.Attempts); err != nil {
+				return err
+			}
+			item.Attempts++
+			items = append(items, item)
+		}
+		return rows.Err()
+	}
+	if err := claim(true, 20); err != nil {
 		return 0, err
 	}
-	items := make([]emailDelivery, 0, emailBatchLimit)
-	for rows.Next() {
-		var item emailDelivery
-		if err := rows.Scan(&item.ID, &item.UserID, &item.RecipientEmail, &item.RecipientName, &item.TemplateType, &item.Payload, &item.Attempts); err != nil {
-			rows.Close()
+	if err := claim(false, 5); err != nil {
+		return 0, err
+	}
+	// Mark claimed rows before asking for a second page: otherwise the same
+	// transaction could select its own locked rows again.
+	for _, item := range items {
+		if _, err := tx.Exec(ctx, `UPDATE email_outbox SET status='sending',attempts=attempts+1,locked_at=now(),updated_at=now() WHERE id=$1::uuid`, item.ID); err != nil {
 			return 0, err
 		}
-		item.Attempts++
-		items = append(items, item)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	first := len(items)
+	if err := claim(true, emailBatchLimit-len(items)); err != nil {
 		return 0, err
 	}
-	rows.Close()
-	for _, item := range items {
-		if _, err := tx.Exec(ctx, `
-			UPDATE email_outbox
-			SET status = 'sending', attempts = attempts + 1, locked_at = now(), updated_at = now()
-			WHERE id = $1::uuid
-		`, item.ID); err != nil {
+	if err := claim(false, emailBatchLimit-len(items)); err != nil {
+		return 0, err
+	}
+	for _, item := range items[first:] {
+		if _, err := tx.Exec(ctx, `UPDATE email_outbox SET status='sending',attempts=attempts+1,locked_at=now(),updated_at=now() WHERE id=$1::uuid`, item.ID); err != nil {
 			return 0, err
 		}
 	}
