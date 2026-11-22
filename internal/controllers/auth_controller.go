@@ -130,6 +130,25 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not create account")
 	}
 	defer tx.Rollback(c.Context())
+	if _, err = tx.Exec(c.Context(), `SELECT pg_advisory_xact_lock(hashtext($1))`, "identity-email:"+req.Email); err != nil {
+		return err
+	}
+	var existing bool
+	if err = tx.QueryRow(c.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE lower(email)=lower($1))`, req.Email).Scan(&existing); err != nil {
+		return err
+	}
+	if !existing {
+		allowed, gateErr := signupAllowedTx(c.Context(), tx, req.Email, req.FullName)
+		if gateErr != nil {
+			return fiber.NewError(503, "Signup is temporarily unavailable. Please try again.")
+		}
+		if !allowed {
+			if err = tx.Commit(c.Context()); err != nil {
+				return err
+			}
+			return signupWaitlistError()
+		}
+	}
 	var userID string
 	err = tx.QueryRow(c.Context(), `
 		INSERT INTO users(country_id, email, phone, password_hash, full_name, is_active, email_verified, verification_token, verification_token_expires_at, verification_sent_at, verification_resend_count, registration_context)

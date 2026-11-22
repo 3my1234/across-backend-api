@@ -51,7 +51,8 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// Password hashing is CPU-bound. An independent, non-queuing bulkhead
 	// keeps a login/signup spike from occupying every application request slot.
 	// Rejections retain the existing JSON/Retry-After contract; no work is replayed.
-	passwordAdmission := middleware.NewAdmission(2)
+	passwordAdmission := middleware.NewBoundedPasswordAdmission(2, 30, 4*time.Second)
+	adminPasswordAdmission := middleware.NewBoundedPasswordAdmission(1, 4, 4*time.Second)
 	playAdmission := middleware.NewAdmission(2)
 	playRateLimit := middleware.DistributedUserRateLimit(cache, "play-billing", 30, time.Minute)
 
@@ -172,7 +173,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Post("/webhooks/ses", sesController.Webhook)
 	v1.Post("/payments/flutterwave/webhook", payments.FlutterwaveWebhook)
 
-	v1.Post("/admin/login", authRateLimit, passwordAdmission.Handler, admin.Login)
+	v1.Post("/admin/login", authRateLimit, adminPasswordAdmission.Handler, admin.Login)
 	v1.Post("/admin/pricing/calculate", controllers.PriceBreakdown)
 	adminRoutes := v1.Group("/admin")
 	allAdmins := middleware.RequireAdminRoles(cfg, db, "super_admin", "catalog_admin", "support_admin", "moderation_admin", "finance_admin", "ads_admin")
@@ -239,6 +240,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// Auto-confirm is a settlement safeguard, not a delivery operation.
 	adminRoutes.Post("/deliveries/auto-confirm", superOnly, ops.AutoConfirmDeliveries)
 
+	adminRoutes.Get("/signup-mode", superOnly, waitlist.AdminSignupMode)
+	adminRoutes.Put("/signup-mode", superOnly, waitlist.AdminSetSignupMode)
+	adminRoutes.Post("/waitlist/approve-oldest", superOnly, waitlist.AdminApproveWaitlist)
 	adminRoutes.Get("/waitlist", superOnly, waitlist.AdminList)
 	adminRoutes.Get("/waitlist/export", superOnly, waitlist.AdminExport)
 	adminRoutes.Get("/xp/withdrawals", financeOnly, xpController.AdminListWithdrawals)

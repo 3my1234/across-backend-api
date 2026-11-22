@@ -258,6 +258,9 @@ func TestReferralAttributionRollbackAndGoogleIdentity(t *testing.T) {
 	if err = db.QueryRow(ctx, `SELECT count(*) FROM user_referrals`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("rolled back signup left an attribution")
 	}
+	if _, err = db.Exec(ctx, `CREATE TABLE signup_approved_emails(email text PRIMARY KEY); CREATE TABLE signup_policy(singleton boolean primary key,mode text);INSERT INTO signup_policy VALUES(true,'open');CREATE TABLE launch_waitlist(email text PRIMARY KEY,full_name text,source text,consent_version text,approved boolean DEFAULT false)`); err != nil {
+		t.Fatal(err)
+	}
 	service := NewIdentityService(db)
 	google, created, err := service.ResolvePrivyWithReferral(ctx, uuid.NewString(), "verified-google-subject", "google@example.test", "Google user", "ABCDEF123456")
 	if err != nil || !created {
@@ -272,6 +275,32 @@ func TestReferralAttributionRollbackAndGoogleIdentity(t *testing.T) {
 	}
 	if n := referralBalance(t, db, inviter); n != 5 {
 		t.Fatal("Google login repeated reward")
+	}
+	if _, err = db.Exec(ctx, `UPDATE signup_policy SET mode='approved_only'`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = service.ResolvePrivy(ctx, uuid.NewString(), "subject-waiting", "waiting@example.invalid", "Waiting")
+	if err == nil {
+		t.Fatal("unapproved Google account created")
+	}
+	var approvedRows int
+	if err = db.QueryRow(ctx, `SELECT count(*) FROM launch_waitlist WHERE email='waiting@example.invalid'`).Scan(&approvedRows); err != nil || approvedRows != 0 {
+		t.Fatal("blocked signup created a waitlist entry", approvedRows, err)
+	}
+	if err = db.QueryRow(ctx, `SELECT count(*) FROM users WHERE email='waiting@example.invalid'`).Scan(&approvedRows); err != nil || approvedRows != 0 {
+		t.Fatal("blocked signup created an account", approvedRows, err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO launch_waitlist(email,approved) VALUES('waiting@example.invalid',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err = service.ResolvePrivy(ctx, uuid.NewString(), "subject-waiting", "waiting@example.invalid", "Waiting"); err != nil || !created {
+		t.Fatal("approved Google rejected", err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE signup_policy SET mode='closed'`); err != nil {
+		t.Fatal(err)
+	}
+	if again, created, err = service.ResolvePrivy(ctx, uuid.NewString(), "verified-google-subject", "google@example.test", "Google user"); err != nil || created || again != google {
+		t.Fatal("existing Google blocked", err)
 	}
 }
 func TestReferralLegacyAuthenticationGuards(t *testing.T) {

@@ -86,6 +86,16 @@ func (s *IdentityService) ResolvePrivyWithReferral(ctx context.Context, countryI
 	created := false
 	err = tx.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = lower($1) FOR UPDATE`, email).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		allowed, gateErr := signupAllowedTx(ctx, tx, email, name)
+		if gateErr != nil {
+			return "", false, fiber.NewError(503, "Signup is temporarily unavailable. Please try again.")
+		}
+		if !allowed {
+			if err = tx.Commit(ctx); err != nil {
+				return "", false, err
+			}
+			return "", false, signupWaitlistError()
+		}
 		created = true
 		err = tx.QueryRow(ctx, `
             INSERT INTO users(country_id, email, password_hash, full_name, is_active, email_verified, privy_user_id)

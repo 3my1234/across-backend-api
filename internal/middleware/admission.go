@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -12,6 +13,8 @@ type Admission struct {
 	slots    chan struct{}
 	draining atomic.Bool
 	rejected atomic.Uint64
+	wait     time.Duration
+	waiters  chan struct{}
 }
 
 func NewAdmission(limit int) *Admission {
@@ -19,6 +22,16 @@ func NewAdmission(limit int) *Admission {
 		limit = 128
 	}
 	return &Admission{slots: make(chan struct{}, limit)}
+}
+
+// NewBoundedPasswordAdmission limits both active hashes and waiting requests.
+func NewBoundedPasswordAdmission(limit, maxWaiting int, wait time.Duration) *Admission {
+	a := NewAdmission(limit)
+	if wait > 0 && maxWaiting > 0 {
+		a.wait = wait
+		a.waiters = make(chan struct{}, maxWaiting)
+	}
+	return a
 }
 
 func (a *Admission) Drain() { a.draining.Store(true) }
@@ -37,8 +50,30 @@ func (a *Admission) Handler(c *fiber.Ctx) error {
 	case a.slots <- struct{}{}:
 		defer func() { <-a.slots }()
 	default:
-		a.rejected.Add(1)
-		return a.unavailable(c, "Service busy. Please retry shortly.")
+		if a.waiters == nil {
+			a.rejected.Add(1)
+			return a.unavailable(c, "Service busy. Please retry shortly.")
+		}
+		select {
+		case a.waiters <- struct{}{}:
+		default:
+			a.rejected.Add(1)
+			return a.unavailable(c, "Service busy. Please retry shortly.")
+		}
+		timer := time.NewTimer(a.wait)
+		defer timer.Stop()
+		select {
+		case a.slots <- struct{}{}:
+			<-a.waiters
+			defer func() { <-a.slots }()
+			if a.draining.Load() {
+				return a.unavailable(c, "Service restarting. Please retry shortly.")
+			}
+		case <-timer.C:
+			<-a.waiters
+			a.rejected.Add(1)
+			return a.unavailable(c, "Service busy. Please retry shortly.")
+		}
 	}
 	return c.Next()
 }
