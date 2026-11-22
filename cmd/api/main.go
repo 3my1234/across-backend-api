@@ -86,7 +86,7 @@ func main() {
 	app.Use(logger.New(logger.Config{
 		Format: "${time} ${status} ${latency} ${method} ${path} request_id=${locals:requestid} error=${error}\n",
 	}))
-	routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg, metrics.Snapshot)
+	realtimeSnapshot := routes.Register(app, store.PG, store.ReadPG, store.Redis, cfg, metrics.Snapshot)
 
 	// Backward-compatible single-resource mode. At scale, set this false and
 	// run one or more /app/across-worker services independently.
@@ -108,7 +108,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := metrics.ExportRuntime(store.PG); err != nil {
+				if err := metrics.ExportRuntime(store.PG, realtimeSnapshot); err != nil {
 					log.Print("runtime metrics export unavailable")
 				}
 				pool := store.PG.Stat()

@@ -10,11 +10,14 @@ import (
 
 // Local root-owned monitoring reads only this aggregate file, never tokens or logs.
 // Replace atomically so a collector cannot mistake a partial write for a counter reset.
-func (m *RequestMetrics) ExportRuntime(pool *pgxpool.Pool) error {
+func (m *RequestMetrics) ExportRuntime(pool *pgxpool.Pool, extras ...func() map[string]any) error {
 	p := pool.Stat()
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	data := map[string]any{"exported_unix": time.Now().Unix(), "http": m.Snapshot(), "go": map[string]any{"heap_bytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine(), "gc_pause_ns_total": mem.PauseTotalNs}, "pool": map[string]any{"max": p.MaxConns(), "acquired": p.AcquiredConns(), "acquires": p.AcquireCount(), "empty_acquires": p.EmptyAcquireCount(), "cancelled": p.CanceledAcquireCount(), "wait_ms_total": p.AcquireDuration().Milliseconds(), "empty_wait_ms_total": p.EmptyAcquireWaitTime().Milliseconds()}}
+	if len(extras) > 0 && extras[0] != nil {
+		data["realtime"] = extras[0]()
+	}
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err

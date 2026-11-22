@@ -264,6 +264,35 @@ class Releases(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
             self.assertIn('--no-deps', run.call_args_list[1].args[0])
             self.assertEqual(run.call_args_list[1].args[0][-1], 'api')
+            self.assertIn(str(release.ROOT / 'deploy/scaling/compose.yml'), helper)
+            self.assertNotIn('gateway', run.call_args_list[1].args[0], 'API refresh alone must not be mistaken for gateway replacement')
+
+    def test_new_pinned_controller_refreshes_using_its_own_gateway_compose(self):
+        # The installed timer executes a frozen copy. Its subsequent refresh
+        # must write a helper pointing at that same copy, not the old checkout.
+        with tempfile.TemporaryDirectory() as directory:
+            root, runtime, units = [Path(directory) / name for name in ('source', 'runtime', 'units')]
+            for folder in (root, runtime, units):
+                folder.mkdir(mode=0o700)
+            names = ['scripts/replica-pilot.py', 'scripts/replica-route.py', 'scripts/replica-release.py',
+                     'deploy/scaling/compose.yml', 'deploy/scaling/haproxy.cfg']
+            for name in names:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('candidate ' + name)
+            api = original()
+            host = FakeHost(api, original(worker=True), replicas(api))
+            marker = runtime / 'auto-release-enabled'
+            with patch.object(release, 'ROOT', root), patch.object(release, 'RUNTIME', runtime), patch.object(release, 'ENABLED', marker), patch.object(release, 'Path', side_effect=lambda value: units if value == '/etc/systemd/system' else Path(value)), patch.object(release, 'Host', return_value=host), patch.object(release, 'owned_route', return_value=True), patch.object(release, 'systemctl'):
+                release.install(100)
+            pinned = next((runtime / 'controllers').iterdir())
+            self.assertEqual((pinned / 'deploy/scaling/haproxy.cfg').read_text(), 'candidate deploy/scaling/haproxy.cfg')
+            completed = release.subprocess.CompletedProcess([], 0, b'', b'')
+            with patch.object(release, 'ROOT', pinned), patch.object(release, 'RUNTIME', runtime), patch.object(release.subprocess, 'run', return_value=completed):
+                release.Host().refresh(api)
+            helper = (runtime / 'manage.sh').read_text()
+            self.assertIn(str(pinned / 'deploy/scaling/compose.yml'), helper)
+            self.assertNotIn(str(root / 'deploy/scaling/compose.yml'), helper)
 
     def test_failed_refresh_keeps_previous_management_helper(self):
         with tempfile.TemporaryDirectory() as directory:

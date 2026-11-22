@@ -45,7 +45,7 @@ func TestMigration032SplitsIntoCompleteStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	statements := splitSQLStatements(string(content))
+	statements := splitSQLStatements(strings.ReplaceAll(string(content), "\r\n", "\n"))
 	if len(statements) != 7 {
 		t.Fatalf("expected 7 complete statements, got %d", len(statements))
 	}

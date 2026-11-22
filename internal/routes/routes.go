@@ -11,13 +11,14 @@ import (
 	"across/backend/internal/controllers"
 	"across/backend/internal/middleware"
 	"across/backend/internal/providerlinks"
+	"across/backend/internal/realtime"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
-func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config, runtimeSnapshots ...func() map[string]any) {
+func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg config.Config, runtimeSnapshots ...func() map[string]any) func() map[string]any {
 	payments := controllers.NewPaymentController(db, cfg)
 	playBilling := controllers.NewPlayBillingController(db)
 	admin := controllers.NewAdminController(db, cfg)
@@ -46,6 +47,24 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	profileController := controllers.NewProfileController(db)
 	marketplaceController := controllers.NewProviderMarketplaceController(db, cfg)
 	communityController := controllers.NewCommunityController(db, cfg, cache)
+	// Experimental limits, not a capacity claim. The Redis switch defaults off.
+	realtimeHub := realtime.NewHub(256, 3)
+	realtimeBridge := realtime.NewRedisBridge(cache, realtimeHub)
+	realtimeRelay := &realtime.PostgresRelay{DB: db, Redis: cache}
+	realtimeContext, stopRealtime := context.WithCancel(context.Background())
+	if cache != nil {
+		go realtimeBridge.Run(realtimeContext)
+		go realtimeRelay.Run(realtimeContext)
+	}
+	app.Hooks().OnShutdown(func() error { stopRealtime(); return nil })
+	realtimeSockets := &realtime.SocketServer{Hub: realtimeHub, Bridge: realtimeBridge, Redis: cache, SourceReady: realtimeRelay.Ready}
+	realtimeSnapshot := func() map[string]any {
+		snapshot := realtimeHub.Snapshot()
+		snapshot["redis_ready"] = realtimeBridge.Ready()
+		snapshot["database_relay_ready"] = realtimeRelay.Ready()
+		snapshot["database_relay_forward_failures_total"] = realtimeRelay.ForwardFailures()
+		return snapshot
+	}
 	privateCommunity := func(c *fiber.Ctx) error { c.Set("Cache-Control", "private, no-store"); return c.Next() }
 	authRateLimit := middleware.DistributedRateLimit(cache, "auth", 20, time.Minute)
 	// Password hashing is CPU-bound. An independent, non-queuing bulkhead
@@ -202,7 +221,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 			httpMetrics = runtimeSnapshots[0]()
 		}
 		pool := db.Stat()
-		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds(), "acquire_count": pool.AcquireCount(), "empty_acquire_wait_ms_total": pool.EmptyAcquireWaitTime().Milliseconds()}})
+		return c.JSON(fiber.Map{"build": buildinfo.Snapshot("api"), "http": httpMetrics, "realtime": realtimeSnapshot(), "password_admission": passwordAdmission.Snapshot(), "play_billing_admission": playAdmission.Snapshot(), "database_pool": fiber.Map{"acquired": pool.AcquiredConns(), "max": pool.MaxConns(), "empty_acquires": pool.EmptyAcquireCount(), "cancelled_acquires": pool.CanceledAcquireCount(), "acquire_wait_ms_total": pool.AcquireDuration().Milliseconds(), "acquire_count": pool.AcquireCount(), "empty_acquire_wait_ms_total": pool.EmptyAcquireWaitTime().Milliseconds()}})
 	})
 	adminRoutes.Post("/admins", superOnly, admin.CreateAdmin)
 	adminRoutes.Patch("/admins/:admin_id", superOnly, admin.UpdateAdminAccess)
@@ -270,6 +289,9 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 
 	// Register every admin endpoint before the broad customer auth group.
 	v1.Get("/referrals/validate", authRateLimit, referralController.Validate)
+	connectionHandlers := []fiber.Handler{realtime.HandshakeGate(cache, 20), middleware.RequireAuth(cfg, db), middleware.DistributedUserRateLimit(cache, "realtime-connect", 30, time.Minute)}
+	connectionHandlers = append(connectionHandlers, realtimeSockets.Handlers()...)
+	v1.Get("/realtime", connectionHandlers...)
 	authed := v1.Group("", middleware.RequireAuth(cfg, db))
 	authed.Get("/messaging/preferences", messageReceipts.Preferences)
 	authed.Patch("/messaging/preferences", messageReceipts.SavePreferences)
@@ -441,4 +463,5 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	// Profile
 	authed.Get("/profile", profileController.GetProfile)
 	authed.Put("/profile", profileController.UpdateProfile)
+	return realtimeSnapshot
 }
