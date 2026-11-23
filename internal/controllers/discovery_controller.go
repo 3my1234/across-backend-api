@@ -130,27 +130,41 @@ func discoveryRelevance(item discoveryItem, categories, words []string, city str
 	return score
 }
 
+// discoveryRotation is a deterministic weighted draw: paid tiers get proportionally
+// more early positions, but every eligible listing keeps a chance in each session.
+func discoveryRotation(item discoveryItem, placement, session string) float64 {
+	sum := sha256.Sum256([]byte(session + placement + item.Provider + item.ID))
+	n := float64(uint64(sum[0])<<24 | uint64(sum[1])<<16 | uint64(sum[2])<<8 | uint64(sum[3]))
+	weight := 1.0
+	if placement == "promoted" {
+		switch item.Tier {
+		case "silver":
+			weight = 2
+		case "gold":
+			weight = 5
+		case "diamond":
+			weight = 3
+		}
+		weight *= float64(max(item.Priority, 1))
+	}
+	return -math.Log((n+1)/4294967297) / weight
+}
+
+// rankSponsoredPage orders one viewer page: relevance first, then tier rotation.
+func rankSponsoredPage(items []discoveryItem, session string) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Score != items[j].Score {
+			return items[i].Score > items[j].Score
+		}
+		return discoveryRotation(items[i], "promoted", session) < discoveryRotation(items[j], "promoted", session)
+	})
+}
+
 // Relevance always precedes tier; deterministic weighted rotation only breaks
 // ties. One card per business per rail prevents inventory size buying the rail.
 func rankDiscovery(items []discoveryItem, placement, session string, limit int) []discoveryItem {
 	picked := append([]discoveryItem{}, items...)
-	rotate := func(item discoveryItem) float64 {
-		sum := sha256.Sum256([]byte(session + placement + item.Provider + item.ID))
-		n := float64(uint64(sum[0])<<24 | uint64(sum[1])<<16 | uint64(sum[2])<<8 | uint64(sum[3]))
-		weight := 1.0
-		if placement == "promoted" {
-			switch item.Tier {
-			case "silver":
-				weight = 2
-			case "gold":
-				weight = 5
-			case "diamond":
-				weight = 3
-			}
-			weight *= float64(item.Priority)
-		}
-		return -math.Log((n+1)/4294967297) / weight
-	}
+	rotate := func(item discoveryItem) float64 { return discoveryRotation(item, placement, session) }
 	sort.SliceStable(picked, func(i, j int) bool {
 		if picked[i].Score != picked[j].Score {
 			return picked[i].Score > picked[j].Score
@@ -242,7 +256,9 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	}
 	viewer := c.Query("sponsored_viewer") == "1"
 	after := c.Query("sponsored_after", "00000000-0000-0000-0000-000000000000")
-	if viewer && (listingKind == "" || sourceID != "" || uuid.Validate(after) != nil) {
+	// The full-screen viewer may mix products and services (kind empty); older
+	// apps still request one kind. The UUID cursor spans both kinds.
+	if viewer && (sourceID != "" || uuid.Validate(after) != nil) {
 		return fiber.ErrBadRequest
 	}
 	categories := []string{}
@@ -326,6 +342,9 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 			candidates = candidates[:24]
 			next = candidates[23].ID
 		}
+		// Order within the page by relevance, then the same tier-weighted session
+		// rotation as the compact rails. The cursor still advances by UUID.
+		rankSponsoredPage(candidates, session)
 		cards := []fiber.Map{}
 		for _, item := range candidates {
 			item.Placement = "promoted"

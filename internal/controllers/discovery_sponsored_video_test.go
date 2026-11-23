@@ -93,5 +93,9 @@ func TestDiscoverySponsoredViewerSeekAndEligibility(t *testing.T) {
 		t.Fatal("expired subscription promoted", expired)
 	}
 	communityCall(t, app, "GET", prefix+"&sponsored_after=invalid", "", "", 400)
-	communityCall(t, app, "GET", "/discovery?country_code=NG&sponsored_viewer=1&session="+uuid.NewString(), "", "", 400)
+	// The viewer may mix products and services; expired plans still stay out.
+	mixed := communityCall(t, app, "GET", "/discovery?country_code=NG&sponsored_viewer=1&session="+uuid.NewString(), "", "", 200)
+	if len(mixed["promoted"].([]any)) != 0 {
+		t.Fatal("expired subscription promoted in mixed viewer", mixed)
+	}
 }
