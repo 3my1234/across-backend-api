@@ -23,7 +23,7 @@ import (
 func durableVideoDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	db := tierEntitlementDB(t, nil)
-	for _, name := range []string{"111_launch_video_allowances.sql", "112_durable_video_processing.sql"} {
+	for _, name := range []string{"111_launch_video_allowances.sql", "112_durable_video_processing.sql", "128_cloudflare_stream_videos.sql"} {
 		raw, err := os.ReadFile("../../migrations/" + name)
 		if err != nil {
 			t.Fatal(err)

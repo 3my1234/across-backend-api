@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -37,6 +38,9 @@ func (c Config) Validate(role string) error {
 	}
 	if role == "worker" && strings.ToLower(strings.TrimSpace(c.WorkerRoles)) == "media" && (c.DatabaseMaxConns > 2 || (!c.AsyncVideoProcessing && !c.AsyncImageProcessing)) {
 		add("media requires explicit async image/video processing and DB_MAX_CONNS<=2")
+	}
+	if c.StreamVideoEnabled && (!regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(c.CloudflareAccountID) || len(c.CloudflareStreamToken) < 20) {
+		add("CLOUDFLARE_STREAM_ENABLED requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_STREAM_API_TOKEN")
 	}
 	if role == "api" && (c.AsyncVideoProcessing || c.AsyncImageProcessing) && c.RunInlineWorkers {
 		add("ASYNC_VIDEO_PROCESSING requires a separate media worker")

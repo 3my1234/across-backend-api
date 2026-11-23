@@ -218,7 +218,18 @@ func runWebPushLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 func runMediaLoop(ctx context.Context, db *pgxpool.Pool, cfg config.Config) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var lastStreamCleanup time.Time
 	for {
+		// Stream storage is prepaid by the minute: release abandoned/unattached videos.
+		if cfg.StreamVideoEnabled && time.Since(lastStreamCleanup) >= 10*time.Minute {
+			lastStreamCleanup = time.Now()
+			if deleted, err := controllers.RunStreamVideoCleanup(ctx, db, cfg, nil); err != nil {
+				log.Printf("stream video cleanup failed; retry next cycle")
+			} else if deleted > 0 {
+				log.Printf("stream video cleanup: released %d unused videos", deleted)
+			}
+			heartbeat(ctx, "media")
+		}
 		if err := controllers.RunImageMediaJob(ctx, db, cfg, nil); err != nil {
 			log.Printf("image processing cycle failed; durable retry retained")
 		}

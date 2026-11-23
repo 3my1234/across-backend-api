@@ -48,6 +48,9 @@ type Config struct {
 	RedisMinIdleConns             int
 	AsyncImageProcessing          bool
 	AsyncVideoProcessing          bool
+	StreamVideoEnabled            bool
+	CloudflareAccountID           string
+	CloudflareStreamToken         string
 	AsyncMessageNotifications     bool
 	RunInlineWorkers              bool
 	RunMigrations                 bool
@@ -151,6 +154,9 @@ func Load() Config {
 		RedisMinIdleConns:             envInt("REDIS_MIN_IDLE_CONNS", 4),
 		AsyncImageProcessing:          envBool("ASYNC_IMAGE_PROCESSING", false),
 		AsyncVideoProcessing:          envBool("ASYNC_VIDEO_PROCESSING", false),
+		StreamVideoEnabled:            envBool("CLOUDFLARE_STREAM_ENABLED", false),
+		CloudflareAccountID:           env("CLOUDFLARE_ACCOUNT_ID", ""),
+		CloudflareStreamToken:         env("CLOUDFLARE_STREAM_API_TOKEN", ""),
 		AsyncMessageNotifications:     envBool("ASYNC_MESSAGE_NOTIFICATIONS", false),
 		RunInlineWorkers:              envBool("RUN_INLINE_WORKERS", true),
 		RunMigrations:                 envBool("RUN_MIGRATIONS", true),

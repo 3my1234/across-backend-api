@@ -18,6 +18,7 @@ import (
 	"across/backend/internal/config"
 	"across/backend/internal/services"
 	"across/backend/internal/storage"
+	"across/backend/internal/streamvideo"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -36,6 +37,7 @@ type ProviderMarketplaceController struct {
 	paymentProvider paymentProvider
 	videoClient     *http.Client
 	s3              *storage.S3
+	stream          *streamvideo.Client
 	gatewayMu       sync.Mutex
 	gatewayItems    []gatewaySubscription
 	gatewayExpiry   time.Time
@@ -43,7 +45,7 @@ type ProviderMarketplaceController struct {
 
 func NewProviderMarketplaceController(db *pgxpool.Pool, cfg config.Config) *ProviderMarketplaceController {
 	client := &http.Client{Timeout: 12 * time.Second}
-	return &ProviderMarketplaceController{db: db, cfg: cfg, paymentProvider: newFlutterwaveProvider(cfg.FlutterwaveSecretKey, client), s3: storage.NewS3(cfg)}
+	return &ProviderMarketplaceController{db: db, cfg: cfg, paymentProvider: newFlutterwaveProvider(cfg.FlutterwaveSecretKey, client), s3: storage.NewS3(cfg), stream: newStreamClient(cfg)}
 }
 
 func (m *ProviderMarketplaceController) subscriptionsRequired() bool {

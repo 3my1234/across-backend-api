@@ -85,9 +85,18 @@ func (m *ProviderMarketplaceController) ProviderPostPolicy(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(503, "Your plan usage could not be loaded. Please retry.")
 	}
+	stream := m.streamRequested(c)
+	if !stream {
+		// Older app builds upload through S3/FFmpeg, which keeps its 180s / 50 MiB limits.
+		policy.VideoSeconds = min(policy.VideoSeconds, maxPostVideoSeconds)
+		if policy.VideoBytes == 0 || policy.VideoBytes > maxPostVideoBytes {
+			policy.VideoBytes = maxPostVideoBytes
+		}
+	}
 	raw, _ := json.Marshal(policy)
 	var result fiber.Map
 	_ = json.Unmarshal(raw, &result)
+	result["video_upload_mode"] = map[bool]string{true: "stream", false: "storage"}[stream]
 	result["usage"] = usage
 	result["entitlements_version"] = 1
 	return c.JSON(result)

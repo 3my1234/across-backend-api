@@ -89,10 +89,15 @@ func (m *ProviderMarketplaceController) ProviderVideoStatus(c *fiber.Ctx) error 
 	return m.videoStatus(c, provider, c.Query("key"))
 }
 func (m *ProviderMarketplaceController) videoStatus(c *fiber.Ctx, provider, key string) error {
-	var state string
+	if strings.HasPrefix(key, "stream/") {
+		if err := m.refreshStreamVideo(c.UserContext(), provider, key); err != nil {
+			return fiber.ErrServiceUnavailable
+		}
+	}
+	var state, errorCode string
 	var url, thumbnail *string
 	var duration *float64
-	err := m.db.QueryRow(c.UserContext(), `SELECT state,url,thumbnail_url,duration_seconds FROM provider_video_uploads WHERE key=$1 AND provider_id=$2::uuid`, key, provider).Scan(&state, &url, &thumbnail, &duration)
+	err := m.db.QueryRow(c.UserContext(), `SELECT state,url,thumbnail_url,duration_seconds,COALESCE(error_code,'') FROM provider_video_uploads WHERE key=$1 AND provider_id=$2::uuid`, key, provider).Scan(&state, &url, &thumbnail, &duration, &errorCode)
 	if err == pgx.ErrNoRows {
 		return fiber.ErrNotFound
 	}
@@ -101,7 +106,7 @@ func (m *ProviderMarketplaceController) videoStatus(c *fiber.Ctx, provider, key 
 	}
 	c.Set("Cache-Control", "private, no-store")
 	if state == "failed" {
-		return c.Status(422).JSON(fiber.Map{"status": "failed", "message": "This video could not be processed. Please upload it again."})
+		return c.Status(422).JSON(fiber.Map{"status": "failed", "message": streamFailureMessage(errorCode, 0)})
 	}
 	result := fiber.Map{"status": state, "key": key}
 	if state == "complete" {
@@ -225,7 +230,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 		return errors.New("input size mismatch")
 	}
 	phase = "verification_and_encoding"
-	if err = processLaunchVideo(ctx, input, output, poster, policy.VideoSeconds); err != nil {
+	if err = processLaunchVideo(ctx, input, output, poster, min(policy.VideoSeconds, maxPostVideoSeconds)); err != nil {
 		return err
 	}
 	outputInfo, err := os.Stat(output)
@@ -233,7 +238,7 @@ func RunVideoMediaJob(parent context.Context, db *pgxpool.Pool, cfg config.Confi
 		return errors.New("processed video exceeds plan size")
 	}
 	outputDuration, err := probePostVideo(ctx, output)
-	if err != nil || outputDuration > float64(policy.VideoSeconds) {
+	if err != nil || outputDuration > float64(min(policy.VideoSeconds, maxPostVideoSeconds)) {
 		return errors.New("processed video exceeds plan duration")
 	}
 	videoKey := providerVerifiedVideoKey(job.provider, providerVideoTicket{assetID: job.token})
@@ -456,7 +461,8 @@ func (m *ProviderMarketplaceController) ListProviderVideos(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.ErrForbidden
 	}
-	rows, err := m.db.Query(c.UserContext(), `SELECT key,state,COALESCE(url,''),COALESCE(thumbnail_url,''),COALESCE(duration_seconds,0) FROM provider_video_uploads WHERE provider_id=$1::uuid AND created_at>=clock_timestamp()-interval '7 days' ORDER BY created_at DESC,key LIMIT 10`, provider)
+	m.refreshRecentStreamVideos(c.UserContext(), provider)
+	rows, err := m.db.Query(c.UserContext(), `SELECT key,state,COALESCE(url,''),COALESCE(thumbnail_url,''),COALESCE(duration_seconds,0) FROM provider_video_uploads WHERE provider_id=$1::uuid AND created_at>=clock_timestamp()-interval '7 days' AND stream_deleted_at IS NULL ORDER BY created_at DESC,key LIMIT 10`, provider)
 	if err != nil {
 		return fiber.ErrServiceUnavailable
 	}

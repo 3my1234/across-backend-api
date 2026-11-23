@@ -33,7 +33,7 @@ func (m *ProviderMarketplaceController) reserveProviderVideo(ctx context.Context
 	if allowed == 0 {
 		return fiber.NewError(403, "New video uploads require Gold.")
 	}
-	if size <= 0 || size > maxFile {
+	if size <= 0 || size > min(maxFile, maxPostVideoBytes) {
 		return fiber.NewError(422, "Supply a valid video file_size within your current upload allowance.")
 	}
 	var dailyUsed, pendingUsed int
