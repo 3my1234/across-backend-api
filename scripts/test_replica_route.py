@@ -53,6 +53,14 @@ class RouteSafety(unittest.TestCase):
         with self.assertRaises(ValueError):
             route.routing(LABELS, [arg for arg in ARGS if 'watch' not in arg])
 
+    def test_preserves_verified_gzip_sse_and_rejects_drift(self):
+        labels = dict(LABELS, **{PREFIX + '.middlewares': 'gzip-sse',
+                      'traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes': 'text/event-stream'})
+        router = route.routing(labels, ARGS)['http']['routers']['atlxpres-replicas']
+        self.assertEqual(router['middlewares'], ['gzip-sse@docker'])
+        labels['traefik.http.middlewares.gzip-sse.compress.excludedcontenttypes'] = 'text/plain'
+        with self.assertRaises(ValueError): route.routing(labels, ARGS)
+
     def test_rollback_removes_only_owned_matching_file(self):
         with tempfile.TemporaryDirectory() as directory:
             target, state = Path(directory) / 'route.yaml', Path(directory) / 'state.json'
