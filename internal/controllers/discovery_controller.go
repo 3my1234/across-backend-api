@@ -54,6 +54,9 @@ type discoveryItem struct {
 	Label          string    `json:"label,omitempty"`
 	Receipt        string    `json:"receipt"`
 	Score          int       `json:"-"`
+	// VideoAutoplay is false once the provider's monthly watch allowance is used;
+	// the app then shows the cover and plays only when tapped.
+	VideoAutoplay bool `json:"video_autoplay"`
 }
 
 func publicDiscoveryVideos(urls []string) []string {
@@ -336,6 +339,10 @@ func (d *DiscoveryController) Feed(c *fiber.Ctx) error {
 	rows.Close()
 	digest := sha256.Sum256([]byte(session))
 	sessionHash := hex.EncodeToString(digest[:])
+	overBudget := d.videoBudgetExceeded(ctx, candidates)
+	for i := range candidates {
+		candidates[i].VideoAutoplay = !overBudget[candidates[i].Provider]
+	}
 	if viewer {
 		next := ""
 		if len(candidates) > 24 {
@@ -443,12 +450,46 @@ const sponsoredViewerSQL = discoveryBaseSQL + `content AS MATERIALIZED (
  WHERE sc.id>$7::uuid AND COALESCE(ss.enabled,true) AND COALESCE(sp.enabled,true) ORDER BY sc.id LIMIT 25)
  )` + discoveryProjectionSQL + ` AND i.paid_active AND COALESCE(ls.enabled,true) AND COALESCE(ps.enabled,true) ORDER BY c.id LIMIT 25`
 
+// videoBudgetExceeded lists providers whose in-app video watch time this month has
+// reached their plan allowance (Diamond/Gold policy columns). Errors fail open:
+// a monitoring hiccup must not break the feed.
+func (d *DiscoveryController) videoBudgetExceeded(ctx context.Context, items []discoveryItem) map[string]bool {
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, item := range items {
+		if len(item.Videos) > 0 && !seen[item.Provider] {
+			seen[item.Provider] = true
+			ids = append(ids, item.Provider)
+		}
+	}
+	over := map[string]bool{}
+	if len(ids) == 0 {
+		return over
+	}
+	rows, err := d.db.Query(ctx, `SELECT w.provider_id::text FROM discovery_video_watch w
+ WHERE w.provider_id=ANY($1::uuid[]) AND w.day>=date_trunc('month',now())::date
+ GROUP BY w.provider_id
+ HAVING sum(w.watched_ms)>=COALESCE((provider_current_benefits(w.provider_id)->>'video_watch_minutes')::bigint,0)*60000`, ids)
+	if err != nil {
+		return over
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			over[id] = true
+		}
+	}
+	return over
+}
+
 func (d *DiscoveryController) Events(c *fiber.Ctx) error {
 	var body struct {
 		Events []struct {
 			Receipt   string `json:"receipt"`
 			Type      string `json:"type"`
 			VisibleMS int    `json:"visible_ms"`
+			WatchedMS int64  `json:"watched_ms"`
 		} `json:"events"`
 	}
 	if len(c.Body()) > 40000 || c.BodyParser(&body) != nil || len(body.Events) == 0 || len(body.Events) > 25 {
@@ -458,11 +499,24 @@ func (d *DiscoveryController) Events(c *fiber.Ctx) error {
 		r    discoveryReceipt
 		kind string
 	}
+	type watch struct {
+		r  discoveryReceipt
+		ms int64
+	}
 	events := []event{}
+	watches := []watch{}
 	for _, input := range body.Events {
 		r, err := d.readReceipt(input.Receipt)
 		if err != nil {
 			return err
+		}
+		// Cumulative watched time for one card in this session; the largest report wins.
+		if input.Type == "video_watch" {
+			if input.WatchedMS < 1000 {
+				continue
+			}
+			watches = append(watches, watch{r, min(input.WatchedMS, 30*60*1000)})
+			continue
 		}
 		if input.Type != "impression" && input.Type != "click" && input.Type != "detail_open" && input.Type != "contact_tap" {
 			return fiber.ErrBadRequest
@@ -479,6 +533,13 @@ func (d *DiscoveryController) Events(c *fiber.Ctx) error {
 		return fiber.ErrServiceUnavailable
 	}
 	defer tx.Rollback(ctx)
+	for _, w := range watches {
+		r := w.r
+		if _, err = tx.Exec(ctx, `INSERT INTO discovery_video_watch(session_hash,provider_id,kind,listing_id,day,watched_ms) VALUES($1,$2::uuid,$3,$4::uuid,$5::date,$6)
+ ON CONFLICT(session_hash,kind,listing_id,day) DO UPDATE SET watched_ms=GREATEST(discovery_video_watch.watched_ms,EXCLUDED.watched_ms)`, r.Session, r.Provider, r.Kind, r.ID, time.Unix(r.Issued, 0).UTC().Format("2006-01-02"), w.ms); err != nil {
+			return fiber.ErrServiceUnavailable
+		}
+	}
 	for _, e := range events {
 		r := e.r
 		key := sha256.Sum256([]byte(r.Session + r.Kind + r.ID + r.Placement + e.kind + time.Unix(r.Issued, 0).UTC().Format("2006-01-02")))
