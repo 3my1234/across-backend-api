@@ -1210,6 +1210,8 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 		StartsAt       *time.Time `json:"starts_at"`
 		EndsAt         *time.Time `json:"ends_at"`
 		PartySize      int        `json:"party_size"`
+		FlightRouteID  string     `json:"flight_route_id"`
+		TravelDate     string     `json:"travel_date"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request")
@@ -1243,6 +1245,22 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 		return err
 	}
 	wanted := strings.ToLower(strings.TrimSpace(req.RequestType))
+	var flight *flightRequest
+	if strings.TrimSpace(req.FlightRouteID) != "" {
+		if len([]rune(req.Message)) > 500 {
+			return fiber.NewError(422, "Write a shorter note")
+		}
+		built, flightErr := buildFlightRequest(c.Context(), tx, c.Params("listing_id"), userID, strings.TrimSpace(req.FlightRouteID), strings.TrimSpace(req.TravelDate), req.PartySize, time.Now())
+		if flightErr != nil {
+			return flightErr
+		}
+		flight = &built
+		req.Message = built.text(strings.TrimSpace(req.Message))
+		wanted = "enquiry"
+		if directBookingType(lt) {
+			wanted = "booking"
+		}
+	}
 	if directBookingType(lt) {
 		if wanted != "booking" && wanted != "appointment" {
 			return fiber.NewError(fiber.StatusUnprocessableEntity, "this service accepts booking or appointment requests")
@@ -1273,6 +1291,12 @@ func (m *ProviderMarketplaceController) CreateRequest(c *fiber.Ctx) error {
 	}
 	if err != nil {
 		return fiber.ErrInternalServerError
+	}
+	if flight != nil {
+		encoded, _ := json.Marshal(flight)
+		if _, err = tx.Exec(c.Context(), `UPDATE provider_requests SET flight=$2::jsonb WHERE id=$1::uuid`, requestID, encoded); err != nil {
+			return fiber.ErrInternalServerError
+		}
 	}
 	conversationID, err := linkRequestConversation(c.Context(), tx, requestID)
 	if err != nil {
@@ -1368,7 +1392,7 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 		}
 		requestID = raw
 	}
-	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,''),review.rating,review.review_text FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id LEFT JOIN provider_listing_reviews review ON review.request_id=r.id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) AND ($8::uuid IS NULL OR r.id=$8::uuid) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1, requestID)
+	rows, err := m.db.Query(c.Context(), `SELECT r.id::text,r.request_type,r.status,r.starts_at,r.ends_at,r.party_size,r.message,r.created_at,l.id::text,l.title,l.listing_type,p.business_name,u.full_name,u.email,COALESCE(u.phone,''),review.rating,review.review_text,to_jsonb(r)->'flight' FROM provider_requests r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=r.provider_id JOIN users u ON u.id=r.user_id LEFT JOIN provider_listing_reviews review ON review.request_id=r.id WHERE (($1='user' AND r.user_id=$2::uuid) OR ($1='provider' AND r.provider_id=$2::uuid)) AND ($3='' OR r.status=$3) AND ($4='' OR r.search_text ILIKE '%%'||$4||'%%') AND ($5::timestamptz IS NULL OR (r.created_at,r.id)<($5,$6::uuid)) AND ($8::uuid IS NULL OR r.id=$8::uuid) ORDER BY r.created_at DESC,r.id DESC LIMIT $7`, scope, ownerID, status, search, cursorTime, cursorID, limit+1, requestID)
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
@@ -1383,7 +1407,8 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 		var reviewRating *int
 		var reviewText *string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &requestType, &requestStatus, &startsAt, &endsAt, &partySize, &message, &createdAt, &listingID, &title, &listingType, &providerName, &buyerName, &buyerEmail, &buyerPhone, &reviewRating, &reviewText); err != nil {
+		var flight json.RawMessage
+		if err := rows.Scan(&id, &requestType, &requestStatus, &startsAt, &endsAt, &partySize, &message, &createdAt, &listingID, &title, &listingType, &providerName, &buyerName, &buyerEmail, &buyerPhone, &reviewRating, &reviewText, &flight); err != nil {
 			return fiber.ErrInternalServerError
 		}
 		if len(items) == limit {
@@ -1391,6 +1416,9 @@ func (m *ProviderMarketplaceController) listRequests(c *fiber.Ctx, scope, ownerI
 			break
 		}
 		item := fiber.Map{"id": id, "request_type": requestType, "status": requestStatus, "starts_at": startsAt, "ends_at": endsAt, "party_size": partySize, "message": message, "created_at": createdAt, "listing_id": listingID, "listing_title": title, "listing_type": listingType, "provider_name": providerName, "review_rating": reviewRating, "review_text": reviewText}
+		if len(flight) > 0 && string(flight) != "null" {
+			item["flight"] = flight
+		}
 		if scope == "provider" {
 			item["buyer"] = fiber.Map{"full_name": buyerName, "email": buyerEmail, "phone": buyerPhone}
 		}
@@ -1421,16 +1449,37 @@ func (m *ProviderMarketplaceController) UpdateProviderRequest(c *fiber.Ctx) erro
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "status must be accepted, rejected, or completed")
 	}
 	var buyerID, listingID string
-	err = m.db.QueryRow(c.Context(), `UPDATE provider_requests SET status=$1::text,updated_at=now() WHERE id=$2::uuid AND provider_id=$3::uuid AND (($1::text IN ('accepted','rejected') AND status='pending') OR ($1::text='completed' AND status='accepted')) RETURNING user_id::text,listing_id::text`, req.Status, c.Params("request_id"), providerID).Scan(&buyerID, &listingID)
+	tx, err := m.db.Begin(c.Context())
+	if err != nil {
+		return fiber.ErrInternalServerError
+	}
+	defer tx.Rollback(c.Context())
+	err = tx.QueryRow(c.Context(), `UPDATE provider_requests SET status=$1::text,updated_at=now() WHERE id=$2::uuid AND provider_id=$3::uuid AND (($1::text IN ('accepted','rejected') AND status='pending') OR ($1::text='completed' AND status='accepted')) RETURNING user_id::text,listing_id::text`, req.Status, c.Params("request_id"), providerID).Scan(&buyerID, &listingID)
 	if err == pgx.ErrNoRows {
 		return fiber.NewError(fiber.StatusConflict, "request status has changed; reload and try again")
 	}
 	if err != nil {
 		return fiber.ErrInternalServerError
 	}
+	var hasFlight bool
+	if err = tx.QueryRow(c.Context(), `SELECT COALESCE(jsonb_typeof(to_jsonb(r)->'flight')='object',false) FROM provider_requests r WHERE id=$1::uuid`, c.Params("request_id")).Scan(&hasFlight); err != nil {
+		return fiber.ErrInternalServerError
+	}
+	flightAnswer := ""
+	if hasFlight {
+		if flightAnswer, err = answerFlight(c.Context(), tx, c.Params("request_id"), userID, req.Status); err != nil {
+			return fiber.ErrInternalServerError
+		}
+	}
+	if err = tx.Commit(c.Context()); err != nil {
+		return fiber.ErrInternalServerError
+	}
 	var listingTitle string
 	_ = m.db.QueryRow(c.Context(), `SELECT title FROM provider_listings WHERE id=$1::uuid`, listingID).Scan(&listingTitle)
 	message := "Your request for " + listingTitle + " was " + req.Status + "."
+	if flightAnswer != "" {
+		message = flightAnswer
+	}
 	if req.Status == "completed" {
 		message += fmt.Sprintf(" Please rate the provider to help other customers. Your first review earns %d XP.", reviewRewardXP) + xpUsage
 	}

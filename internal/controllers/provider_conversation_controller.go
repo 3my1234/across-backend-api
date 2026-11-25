@@ -331,6 +331,7 @@ func (m *ProviderMarketplaceController) conversationMessages(c *fiber.Ctx, provi
 		cursor = encodeAdminCursor(last["created_at"].(time.Time), last["id"].(string))
 	}
 	rows.Close()
+	m.addFlightCards(ctx, items)
 	// Compatibility for earlier apps; new clients acknowledge after displaying.
 	if page.CursorTime == nil && c.QueryBool("mark_read", true) && len(items) > 0 {
 		column := "buyer_last_read_at"
