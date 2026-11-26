@@ -367,3 +367,43 @@ func answerFlight(ctx context.Context, tx pgx.Tx, request, actor, status string)
  UPDATE provider_conversations c SET last_message_at=GREATEST(c.last_message_at,sent.created_at),provider_last_read_at=now(),updated_at=now() FROM sent WHERE c.id=sent.conversation_id`, request, actor, answer)
 	return answer, err
 }
+
+// SearchFlights lists every eligible provider's offers for a route, cheapest first, so
+// customers can compare. Places are matched by name, ignoring case.
+func (m *ProviderMarketplaceController) SearchFlights(c *fiber.Ctx) error {
+	from, to := strings.Join(strings.Fields(c.Query("from")), " "), strings.Join(strings.Fields(c.Query("to")), " ")
+	kind := strings.ToLower(strings.TrimSpace(c.Query("type")))
+	if len([]rune(from)) > 60 || len([]rune(to)) > 60 || (kind != "" && kind != "local" && kind != "international") {
+		return fiber.ErrBadRequest
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
+	defer cancel()
+	like := func(v string) string {
+		return "%" + strings.NewReplacer(`\`, `\`, "%", `\%`, "_", `\_`).Replace(v) + "%"
+	}
+	rows, err := m.db.Query(ctx, `SELECT r.id::text,r.flight_type,r.from_city,r.to_city,r.price::float8,r.discount_price::float8,l.currency_code,l.id::text,l.title,l.provider_id::text
+ FROM provider_flight_routes r JOIN provider_listings l ON l.id=r.listing_id JOIN provider_organizations p ON p.id=l.provider_id
+ WHERE r.is_active AND l.status='approved' AND p.verification_status='approved' AND p.is_active AND `+flightListingSQL+`
+ AND ($1::boolean OR EXISTS(SELECT 1 FROM provider_subscriptions s WHERE s.provider_id=p.id AND s.status='active' AND s.current_period_end>now()))
+ AND ($2='' OR r.from_city ILIKE $2) AND ($3='' OR r.to_city ILIKE $3) AND ($4='' OR r.flight_type=$4)
+ ORDER BY COALESCE(r.discount_price,r.price),r.id LIMIT 60`, !m.subscriptionsRequired(), map[bool]string{true: "", false: like(from)}[from == ""], map[bool]string{true: "", false: like(to)}[to == ""], kind)
+	if err != nil {
+		return fiber.NewError(503, "Flights are temporarily unavailable")
+	}
+	defer rows.Close()
+	items := []fiber.Map{}
+	for rows.Next() {
+		var r flightRoute
+		var listing, title, provider string
+		if err = rows.Scan(&r.ID, &r.Type, &r.From, &r.To, &r.Price, &r.Discount, &r.Currency, &listing, &title, &provider); err != nil {
+			return fiber.NewError(503, "Flights are temporarily unavailable")
+		}
+		items = append(items, fiber.Map{"id": r.ID, "flight_type": r.Type, "from_city": r.From, "to_city": r.To, "price": r.Price, "discount_price": r.Discount, "currency_code": r.Currency, "listing_id": listing, "listing_title": title, "provider_id": provider})
+	}
+	if rows.Err() != nil {
+		return fiber.NewError(503, "Flights are temporarily unavailable")
+	}
+	c.Set("Cache-Control", "no-store")
+	c.Locals("public_provider_media", true)
+	return providerIdentityJSON(c, m.db, fiber.Map{"items": items}, m.s3)
+}

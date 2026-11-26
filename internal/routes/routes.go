@@ -174,6 +174,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	v1.Get("/marketplace/listings/:listing_id", marketplaceController.GetPublicListing)
 	v1.Get("/marketplace/listings/:listing_id/reviews", marketplaceController.ListListingReviews)
 	v1.Get("/marketplace/listings/:listing_id/availability", marketplaceController.ListAvailability)
+	v1.Get("/marketplace/flights", middleware.DistributedRateLimit(cache, "flight-search", 60, time.Minute), marketplaceController.SearchFlights)
 	v1.Get("/marketplace/listings/:listing_id/flights", marketplaceController.ListFlights)
 	v1.Get("/marketplace/subscription-plans", marketplaceController.ListPlans)
 	v1.Get("/public/images/view/*", uploads.PublicImageView)

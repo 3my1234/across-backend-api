@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestFlightRouteValidation(t *testing.T) {
@@ -113,6 +114,7 @@ func TestFlightCardsEndToEnd(t *testing.T) {
 	app.Get("/me/requests", m.ListProviderRequests)
 	app.Patch("/me/requests/:request_id", m.UpdateProviderRequest)
 	app.Get("/buyer/:conversation_id", m.BuyerConversationMessages)
+	app.Get("/search", m.SearchFlights)
 
 	// Before the migration everything that exists today keeps working.
 	plain := communityCall(t, app, "POST", "/l/"+plumbing+"/requests", buyer, `{"request_type":"booking","message":"Leak","idempotency_key":"old"}`, 201)
@@ -156,6 +158,32 @@ func TestFlightCardsEndToEnd(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT status FROM provider_listings WHERE id=$1`, flights).Scan(&status); err != nil || status != "approved" {
 		t.Fatal("changing a price sent the listing to review")
 	}
+
+	// Search across providers: cheapest first, matched by place, hidden routes and non-flight services left out.
+	communityCall(t, app, "POST", "/me/"+flights+"/flights", owner, `{"flight_type":"local","from_city":"Abuja","to_city":"Kano","price":90000}`, 200)
+	search := func(q string, want int) []any {
+		t.Helper()
+		items, _ := communityCall(t, app, "GET", "/search?"+q, "", "", want)["items"].([]any)
+		return items
+	}
+	offers := search("from=abuja&to=LAGOS", 200)
+	if len(offers) != 2 || offers[0].(map[string]any)["price"].(float64) != 140000 && offers[0].(map[string]any)["discount_price"].(float64) != 125000 {
+		t.Fatal("both providers' Abuja to Lagos offers, cheapest first", offers)
+	}
+	if first := offers[0].(map[string]any); first["listing_id"] == nil || first["listing_title"] == nil {
+		t.Fatal("each offer says which service it belongs to", first)
+	}
+	if len(search("from=Abuja", 200)) != 3 || len(search("to=Addis", 200)) != 0 || len(search("type=international", 200)) != 0 || len(search("from=%25", 200)) != 0 {
+		t.Fatal("place and type filters; a hidden route never shows; a % is a plain character")
+	}
+	search("type=space", 400)
+	search("from="+strings.Repeat("a", 61), 400)
+	must(`UPDATE provider_listings SET status='suspended' WHERE id=$1`, rivalFlights)
+	if len(search("to=Lagos", 200)) != 1 {
+		t.Fatal("a suspended service leaves the search")
+	}
+	must(`UPDATE provider_listings SET status='approved' WHERE id=$1`, rivalFlights)
+	communityCall(t, app, "DELETE", "/me/"+flights+"/flights/"+route_kano(t, db, flights), owner, "", 204)
 
 	// A request: the price always comes from the provider, never from the customer.
 	day := time.Now().UTC().AddDate(0, 0, 14).Format("2006-01-02")
@@ -276,4 +304,15 @@ func TestFlightCardsEndToEnd(t *testing.T) {
 	if list = communityCall(t, app, "GET", "/l/"+flights+"/flights", "", "", 200)["items"].([]any); len(list) != 0 {
 		t.Fatal("an unapproved listing shows flights")
 	}
+}
+
+func route_kano(t *testing.T, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, listing string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(context.Background(), `SELECT id::text FROM provider_flight_routes WHERE listing_id=$1 AND to_city='Kano'`, listing).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
