@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -137,8 +138,22 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 		ORDER BY o.created_at DESC
 		LIMIT 1
 	`, userID, productID).Scan(&orderID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusForbidden, "you can review this product after delivery")
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "review unavailable")
+	}
+	if orderID == "" {
+		// Most products are arranged in chat: a reply from the seller is enough.
+		allowed, checkErr := answeredInChat(ctx, rc.db, userID, productID, true)
+		if checkErr != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "review unavailable")
+		}
+		if !allowed {
+			return fiber.NewError(fiber.StatusForbidden, "You can review this product after the seller replies to you in chat")
+		}
+	}
+	var order any
+	if orderID != "" {
+		order = orderID
 	}
 
 	var reviewID string
@@ -158,7 +173,7 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 			INSERT INTO reviews(product_id, user_id, order_id, rating, review_text, media_urls)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id, created_at
-		`, productID, userID, orderID, req.Rating, req.ReviewText, req.MediaURLs).Scan(&reviewID, &savedAt)
+		`, productID, userID, order, req.Rating, req.ReviewText, req.MediaURLs).Scan(&reviewID, &savedAt)
 		if err != nil {
 			return fiber.NewError(fiber.StatusConflict, "review could not be created")
 		}
@@ -168,14 +183,23 @@ func (rc *ReviewController) UpsertProductReview(c *fiber.Ctx) error {
 			SET rating = $3, review_text = $4, media_urls = $5, order_id = COALESCE(order_id, $6)
 			WHERE id = $1 AND user_id = $2
 			RETURNING created_at
-		`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, orderID).Scan(&savedAt)
+		`, reviewID, userID, req.Rating, req.ReviewText, req.MediaURLs, order).Scan(&savedAt)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "review could not be updated")
 		}
 	}
 
 	rewardCtx, rewardCancel := context.WithTimeout(c.UserContext(), 2*time.Second)
-	rewardClaimed, rewardErr := creditReviewReward(rewardCtx, rc.db, userID, orderID)
+	rewardClaimed, rewardErr := false, error(nil)
+	if orderID != "" {
+		rewardClaimed, rewardErr = creditReviewReward(rewardCtx, rc.db, userID, orderID)
+	} else if created {
+		// First review of a product arranged in chat earns the same small reward, once.
+		var tag pgconn.CommandTag
+		if tag, rewardErr = rc.db.Exec(rewardCtx, `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,$3,'review_reward','review-chat-product-'||$2::text) ON CONFLICT DO NOTHING`, userID, productID, reviewRewardXP); rewardErr == nil {
+			rewardClaimed = tag.RowsAffected() > 0
+		}
+	}
 	rewardCancel()
 	if rewardErr != nil {
 		// The review is already durable. A secondary reward failure must never
@@ -273,5 +297,8 @@ func (rc *ReviewController) canReview(c *fiber.Ctx, userID, productID string) bo
 				AND o.order_status IN ('Delivered', 'Completed')
 		)
 	`, userID, productID).Scan(&ok)
+	if !ok {
+		ok, _ = answeredInChat(c.Context(), rc.db, userID, productID, true)
+	}
 	return ok
 }

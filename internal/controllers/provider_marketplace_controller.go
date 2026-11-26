@@ -1600,9 +1600,10 @@ func (m *ProviderMarketplaceController) UpsertListingReview(c *fiber.Ctx) error 
 		Rating     int    `json:"rating"`
 		ReviewText string `json:"review_text"`
 	}
-	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.RequestID) == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "request_id is required")
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid review")
 	}
+	req.RequestID = strings.TrimSpace(req.RequestID)
 	if req.Rating < 1 || req.Rating > 5 {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "rating must be between 1 and 5")
 	}
@@ -1610,42 +1611,70 @@ func (m *ProviderMarketplaceController) UpsertListingReview(c *fiber.Ctx) error 
 	if len([]rune(req.ReviewText)) > 1000 {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "review_text must be 1000 characters or fewer")
 	}
+	if uuid.Validate(c.Params("listing_id")) != nil || (req.RequestID != "" && uuid.Validate(req.RequestID) != nil) {
+		return fiber.ErrBadRequest
+	}
 	tx, err := m.db.Begin(c.Context())
 	if err != nil {
 		return fiber.ErrServiceUnavailable
 	}
 	defer tx.Rollback(c.Context())
-	var listingID string
-	err = tx.QueryRow(c.Context(), `SELECT listing_id::text FROM provider_requests WHERE id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid AND status='completed' AND NOT EXISTS(SELECT 1 FROM provider_members member WHERE member.provider_id=provider_requests.provider_id AND member.user_id=$3::uuid AND member.is_active=true) FOR UPDATE`, req.RequestID, c.Params("listing_id"), userID).Scan(&listingID)
-	if err == pgx.ErrNoRows {
-		return fiber.NewError(fiber.StatusForbidden, "a completed service request is required before reviewing")
-	}
-	if err != nil {
-		return fiber.ErrInternalServerError
-	}
-	tag, err := tx.Exec(c.Context(), `INSERT INTO provider_listing_reviews(request_id,listing_id,user_id,rating,review_text) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5) ON CONFLICT(request_id) DO NOTHING`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
-	if err != nil {
-		return fiber.ErrInternalServerError
-	}
-	created := tag.RowsAffected() > 0
-	if !created {
-		tag, err = tx.Exec(c.Context(), `UPDATE provider_listing_reviews SET rating=$4,review_text=$5,updated_at=now() WHERE request_id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
-		if err != nil || tag.RowsAffected() == 0 {
-			return fiber.ErrForbidden
+	listingID := c.Params("listing_id")
+	var created bool
+	reference := ""
+	if req.RequestID != "" {
+		// A completed booking, as before.
+		err = tx.QueryRow(c.Context(), `SELECT listing_id::text FROM provider_requests WHERE id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid AND status='completed' AND NOT EXISTS(SELECT 1 FROM provider_members member WHERE member.provider_id=provider_requests.provider_id AND member.user_id=$3::uuid AND member.is_active=true) FOR UPDATE`, req.RequestID, listingID, userID).Scan(&listingID)
+		if err == pgx.ErrNoRows {
+			return fiber.NewError(fiber.StatusForbidden, "a completed service request is required before reviewing")
 		}
-	} else if _, err = tx.Exec(c.Context(), `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,$3,'provider_review','provider-review-'||$2::text) ON CONFLICT DO NOTHING`, userID, req.RequestID, reviewRewardXP); err != nil {
-		return fiber.ErrInternalServerError
-	}
-	if created {
-		if err = insertNotification(c.Context(), tx, userID, "", nil, "xp_earned", "Service review reward earned", fmt.Sprintf("You earned %d XP for your first review of this completed service.", reviewRewardXP)+xpUsage, map[string]any{"xp": reviewRewardXP, "reason": "provider_review"}, "service-review-xp:"+req.RequestID); err != nil {
+		if err != nil {
 			return fiber.ErrInternalServerError
+		}
+		tag, err := tx.Exec(c.Context(), `INSERT INTO provider_listing_reviews(request_id,listing_id,user_id,rating,review_text) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5) ON CONFLICT(request_id) DO NOTHING`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
+		if err != nil {
+			return fiber.ErrInternalServerError
+		}
+		created = tag.RowsAffected() > 0
+		if !created {
+			tag, err = tx.Exec(c.Context(), `UPDATE provider_listing_reviews SET rating=$4,review_text=$5,updated_at=now() WHERE request_id=$1::uuid AND listing_id=$2::uuid AND user_id=$3::uuid`, req.RequestID, listingID, userID, req.Rating, req.ReviewText)
+			if err != nil || tag.RowsAffected() == 0 {
+				return fiber.ErrForbidden
+			}
+		}
+		reference = "provider-review-" + req.RequestID
+	} else {
+		// Answered in chat: one review per customer per service, which they can change.
+		allowed, checkErr := answeredInChat(c.Context(), tx, userID, listingID, false)
+		if checkErr != nil {
+			return fiber.ErrInternalServerError
+		}
+		if !allowed {
+			return fiber.NewError(fiber.StatusForbidden, "You can rate this provider after they reply to you in chat")
+		}
+		if err = tx.QueryRow(c.Context(), `INSERT INTO provider_listing_reviews(listing_id,user_id,rating,review_text) VALUES($1::uuid,$2::uuid,$3,$4)
+ ON CONFLICT(listing_id,user_id) WHERE request_id IS NULL DO UPDATE SET rating=EXCLUDED.rating,review_text=EXCLUDED.review_text,updated_at=now() RETURNING xmax=0`, listingID, userID, req.Rating, req.ReviewText).Scan(&created); err != nil {
+			return fiber.ErrInternalServerError
+		}
+		reference = "provider-review-chat-" + listingID
+	}
+	awarded := false
+	if created {
+		tag, err := tx.Exec(c.Context(), `INSERT INTO xp_transactions(user_id,amount,reason,reference_id) VALUES($1::uuid,$3,'provider_review',$2) ON CONFLICT DO NOTHING`, userID, reference, reviewRewardXP)
+		if err != nil {
+			return fiber.ErrInternalServerError
+		}
+		if awarded = tag.RowsAffected() > 0; awarded {
+			if err = insertNotification(c.Context(), tx, userID, "", nil, "xp_earned", "Service review reward earned", fmt.Sprintf("You earned %d XP for your first review of this service.", reviewRewardXP)+xpUsage, map[string]any{"xp": reviewRewardXP, "reason": "provider_review"}, "service-review-xp:"+reference); err != nil {
+				return fiber.ErrInternalServerError
+			}
 		}
 	}
 	if err = tx.Commit(c.Context()); err != nil {
 		return fiber.ErrInternalServerError
 	}
 	xpAwarded := 0
-	if created {
+	if awarded {
 		xpAwarded = reviewRewardXP
 	}
 	return c.JSON(fiber.Map{"rating": req.Rating, "review_text": req.ReviewText, "xp_awarded": xpAwarded})

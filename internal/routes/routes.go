@@ -434,6 +434,7 @@ func Register(app *fiber.App, db, readDB *pgxpool.Pool, cache *redis.Client, cfg
 	authed.Post("/marketplace/listings/:listing_id/contact", marketplaceController.RevealContact)
 	authed.Post("/marketplace/listings/:listing_id/requests", marketplaceController.CreateRequest)
 	authed.Put("/marketplace/listings/:listing_id/review", marketplaceController.UpsertListingReview)
+	authed.Get("/marketplace/listings/:listing_id/review/mine", marketplaceController.MyListingReview)
 	authed.Post("/marketplace/listings/:listing_id/reports", marketplaceController.ReportListing)
 	authed.Post("/marketplace/listings/:listing_id/conversations", marketplaceController.StartProviderConversation)
 	authed.Post("/marketplace/products/:product_id/conversations", marketplaceController.StartProductConversation)
